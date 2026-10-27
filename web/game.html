@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creature Lab | コイン運用</title>
+<style>
+:root{color-scheme:dark;--bg:#080f1a;--card:#12213a;--card2:#162846;--line:#314461;--white:#eaf2ff;--soft:#9fb1c9;--teal:#74ebd2;--rose:#ff98bf;--lav:#c7a6ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;color:var(--white);background:radial-gradient(circle at 16% 3%,#253556 0,transparent 45%),var(--bg);line-height:1.5}
+.wrap{max-width:1110px;padding:27px 20px 65px;margin:auto}
+.top{display:flex;gap:16px;align-items:center;justify-content:space-between}
+.logo{font-size:18px;font-weight:800;letter-spacing:.035em}
+small,.muted{color:var(--soft)}
+a{color:var(--teal)}
+nav a{border:1px solid #496075;text-decoration:none;border-radius:10px;padding:9px 13px;font-size:13px}
+h1{font-size:clamp(28px,4vw,42px);line-height:1.2;margin:35px 0 8px}
+h2{font-size:17px;margin:0 0 12px}h3{font-size:15px;margin:0 0 7px}
+p{margin:0 0 13px}.intro{color:var(--soft);max-width:850px}
+.card{background:linear-gradient(140deg,#182942,#101b2f);border:1px solid var(--line);border-radius:17px;padding:21px}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 22px}
+.pill{border:1px solid #4b6479;border-radius:22px;padding:4px 11px;font-size:11px;color:#c8d9ec}
+.pill.hot{border-color:#2d8a79;color:#9bf7dc}
+.cols{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
+.slots{display:grid;gap:12px}
+.slot{background:#0c1b2f;border:1px solid #344760;border-radius:13px;padding:15px}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:11px}
+.avatar{font-size:22px;line-height:1;display:grid;place-items:center;width:49px;height:49px;border-radius:13px;background:#344464}
+.avatar.mine{background:#274e5c}.avatar.owl{background:#393e73}.avatar.turtle{background:#345466}
+.title{font-weight:700}.desc{font-size:12px;color:var(--soft)}
+.slider-row{display:flex;align-items:center;gap:10px}
+input[type=range]{flex:1;min-width:0;accent-color:var(--teal)}
+.slider-row output{min-width:49px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums}
+.topstats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.stat{padding:13px;background:#0a1a2e;border:1px solid #2c445c;border-radius:12px}
+.stat span{display:block;color:var(--soft);font-size:11px}.stat strong{font-size:25px;font-variant-numeric:tabular-nums}
+.line{border-top:1px solid var(--line);margin:16px 0}
+.actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:12px}
+button{border:1px solid #517086;background:#27445a;color:var(--white);font:inherit;font-size:13px;border-radius:10px;padding:9px 13px;cursor:pointer}
+button:hover{border-color:#95e9dc}button:disabled{opacity:.45;cursor:default}
+button.main{background:var(--teal);color:#10202c;border:0;font-weight:800;padding:13px 20px}
+.input{background:#08162a;border:1px solid #425b73;border-radius:9px;color:var(--white);padding:10px 12px;font:inherit;min-width:0}
+#versionName{width:100%;max-width:270px}
+select{width:100%;max-width:100%;background:#0b192c;color:var(--white);border:1px solid #51657d;border-radius:9px;padding:10px}
+.section{margin-top:18px}
+.error{color:#ff9ea4;font-size:13px;min-height:23px;margin-top:9px}
+.ok{color:#aaf4c9;font-size:13px;min-height:23px;margin-top:9px}
+.result{display:none;margin-top:18px}
+.result.show{display:block}
+.results{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.results>div{background:#0d1b2e;border:1px solid #2f4358;border-radius:10px;padding:11px}
+.results span{display:block;font-size:11px;color:var(--soft)}
+.results strong{font-size:20px;font-variant-numeric:tabular-nums}
+#chart{width:100%;height:auto;display:block;background:#0a1729;border-radius:12px;border:1px solid #293d55;margin:12px 0 6px}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:11px;color:#9fb1c9}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.important{border-left:3px solid #81b2c9;color:#c4d4e4;background:#0e2439;padding:13px 15px;border-radius:0 10px 10px 0;font-size:12px}
+#versionList option{max-width:290px}
+footer{margin-top:25px;color:var(--soft);font-size:12px}
+@media(max-width:850px){.cols{grid-template-columns:1fr}.results{grid-template-columns:repeat(2,1fr)}}
+</style></head>
+<body><div class="wrap">
+<div class="top"><div class="logo">✦ Creature Lab <span style="font-size:12px;color:var(--soft);font-weight:400">/ GAME LAB</span></div><nav><a href="/">キャラクター編集に戻る</a></nav></div>
+<h1>育てた予測キャラに、コインを託そう。</h1>
+<p class="intro">手持ちの10,000コインを3体に自由配分。キャラは過去に観測した価格だけを見て、架空の12日間をロングか現金待機で行動します。もちろん本当のお金は動きません。</p>
+<div class="pills"><span class="pill hot">練習モード</span><span class="pill">架空の価格データ</span><span class="pill">取引所接続なし</span><span class="pill">無料・換金不可</span></div>
+<div class="cols">
+<section class="card">
+<h2>01 コインを配分する</h2>
+<div class="slots">
+<div class="slot" data-slot="mine"><div class="head"><span class="avatar mine">✨</span><div><div class="title">あなたのキャラ <span id="myType" style="color:#84d9e2;font-weight:400"></span></div><div class="desc" id="myDesc">キャラクター編集画面のモデルが使われます</div></div></div>
+<div class="slider-row"><input type="range" min="0" max="100" step="5" value="40" id="mine" aria-label="自分のキャラへの配分"><output id="mineOut">40%</output></div></div>
+<div class="slot" data-slot="owl"><div class="head"><span class="avatar owl">🌙</span><div><div class="title">ルナ</div><div class="desc">5日／12日の移動平均・運用リスク上限50%</div></div></div>
+<div class="slider-row"><input type="range" min="0" max="100" step="5" value="30" id="owl" aria-label="ルナへの配分"><output id="owlOut">30%</output></div></div>
+<div class="slot" data-slot="turtle"><div class="head"><span class="avatar turtle">🍀</span><div><div class="title">ミドリ</div><div class="desc">8日／20日の移動平均・運用リスク上限25%</div></div></div>
+<div class="slider-row"><input type="range" min="0" max="100" step="5" value="20" id="turtle" aria-label="ミドリへの配分"><output id="turtleOut">20%</output></div></div>
+</div>
+<div class="line"></div>
+<div class="topstats">
+<div class="stat"><span>合計配分</span><strong id="allocated">90%</strong></div>
+<div class="stat"><span>未配分の現金</span><strong id="idle">1,000</strong></div>
+</div>
+<div class="actions"><button id="simulate" class="main">▶ 12日間の練習を開始</button><small>何度でも検証できます</small></div>
+<div id="simError" class="error" role="alert"></div>
+<div class="important">配分先は別々のキャラクターですが、3体とも同じ架空資産を分析します。資産分散にはなりません。先読みや後出しランキングのない実運用テストでもありません。</div>
+</section>
+<section class="card">
+<h2>02 予測モデルを保存する</h2>
+<p class="muted" style="font-size:13px">今のキャラの分析設定をバージョンとして保存。後で復元すると、キャラ編集画面にも反映されます。</p>
+<div class="topstats">
+<div class="stat"><span>現在のモデル</span><strong style="font-size:17px" id="currentModel">取得中...</strong></div>
+<div class="stat"><span>リビジョン</span><strong id="currentRev">--</strong></div>
+</div>
+<div class="section"><label for="versionName" class="desc">保存するバージョン名</label>
+<div class="actions"><input id="versionName" class="input" placeholder="例：ニュース分析を追加する前" maxlength="40" value="最初の予測キャラ"><button id="saveVersion">保存</button></div></div>
+<div class="section"><label for="versionList" class="desc">保存したバージョン</label>
+<select id="versionList"><option value="">保存データなし</option></select>
+<div class="actions"><button id="restoreVersion">選択したモデルを復元</button></div>
+<div id="saveMessage" class="ok" role="status"></div></div>
+<div class="line"></div>
+<h3>このバージョン管理について</h3>
+<p class="muted" style="font-size:12px">保存データはLinuxのこのプロジェクト専用フォルダに保存。既存の株価予測V6やそのFrozen履歴には一切書き込みません。現在は1人用で、公開・同期・ログインは未対応です。</p>
+<a href="/" style="font-size:13px">キャラクターの外見・Python数値を編集する</a>
+</section>
+</div>
+<section id="result" class="card result" aria-live="polite">
+<h2>03 練習結果</h2>
+<div class="results">
+<div><span>最終資金</span><strong id="final">--</strong></div>
+<div><span>損益</span><strong id="profit">--</strong></div>
+<div><span>最大下落率</span><strong id="drawdown">--</strong></div>
+<div><span>同じ価格を買って保有</span><strong id="benchmark">--</strong></div>
+</div>
+<svg id="chart" viewBox="0 0 950 270" role="img" aria-label="練習ポートフォリオと買い持ちの資金推移"><g id="chartGrid"></g><polyline id="baseLine" fill="none" stroke="#9faec6" stroke-width="3" stroke-dasharray="7 5"/><polyline id="equityLine" fill="none" stroke="#78edd4" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/></svg>
+<div class="legend"><span><i class="dot" style="background:#78edd4"></i>あなたのポートフォリオ</span><span><i class="dot" style="background:#9faec6"></i>買い持ちの参考結果</span></div>
+<p id="resultDetails" class="muted" style="margin-top:15px"></p>
+<div class="important">結果は固定された12日分の架空価格を使った練習の数字。過去の結果であり将来の利益を示さず、Brier Scoreや実際の予測精度の検証でもありません。</div>
+</section>
+<footer>SPRINT 03 · Creature Lab / 開発用ローカルゲーム。実市場価格、現金決済、資金の換金、広告、ランキング、売買APIは一切ありません。</footer>
+</div>
+<script>
+const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
+let revision=-1;
+async function call(path,data){
+  const response=await fetch(path,data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  const body=await response.json();
+  if(!response.ok)throw Error(body.error||"通信エラー");
+  return body;
+}
+const fmt=n=>Number(n).toLocaleString("ja-JP",{maximumFractionDigits:2});
+const allocations=()=>Object.fromEntries(slots.map(k=>[k,Number($(k).value)]));
+function recalc(){
+  const a=allocations();const total=Object.values(a).reduce((x,y)=>x+y,0);
+  for(const k of slots)$(k+"Out").textContent=a[k]+"%";
+  $("allocated").textContent=total+"%";
+  $("allocated").style.color=total>100?"#ff9ea4":"#eaf2ff";
+  $("idle").textContent=fmt(Math.max(0,100-total)*100);
+  $("simulate").disabled=total>100 || total===0;
+  $("simError").textContent=total>100?"配分が100%を超えています。合計を減らしてください。":"";
+}
+slots.forEach(k=>$(k).addEventListener("input",recalc));
+function renderModel(s){
+  revision=s.revision;
+  $("currentRev").textContent="REV "+s.revision;
+  const labels={falcon:"アカリ / 短期",owl:"ルナ / 中期",turtle:"ミドリ / 長期",custom:"オリジナル"};
+  $("currentModel").textContent=labels[s.visual.eye]||"オリジナル";
+  $("myType").textContent="("+$("currentModel").textContent+")";
+  $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}%`;
+}
+async function refresh(){
+  const [state,stored]=await Promise.all([call("/api/state"),call("/api/versions")]);
+  renderModel(state);
+  const previous=$("versionList").value;
+  $("versionList").replaceChildren();
+  for(const v of stored.versions.slice().reverse()){
+    const o=document.createElement("option");
+    o.value=v.id;
+    o.textContent=v.name+" • "+v.model.fast_window+"/"+v.model.slow_window+" 日 • "+v.saved_at.slice(0,10);
+    $("versionList").append(o);
+  }
+  if(!stored.versions.length){const option=document.createElement("option");option.value="";option.textContent="保存データなし";$("versionList").append(option)}
+  if([...$("versionList").options].some(o=>o.value===previous))$("versionList").value=previous;
+}
+function plot(a,b){
+  const min=Math.min(...a,...b),max=Math.max(...a,...b),lo=min-(max-min)*.13-1,hi=max+(max-min)*.13+1;
+  const point=(v,i,amount)=>[(24+902*i/(amount-1)).toFixed(1),(245-220*(v-lo)/(hi-lo)).toFixed(1)].join(",");
+  $("equityLine").setAttribute("points",a.map((v,i)=>point(v,i,a.length)).join(" "));
+  $("baseLine").setAttribute("points",b.map((v,i)=>point(v,i,b.length)).join(" "));
+  $("chartGrid").replaceChildren();
+  for(let i=0;i<=4;i++){
+    const y=25+i*55,ns="http://www.w3.org/2000/svg";
+    const line=document.createElementNS(ns,"line");
+    line.setAttribute("x1","24");line.setAttribute("x2","926");line.setAttribute("y1",String(y));line.setAttribute("y2",String(y));line.setAttribute("stroke","#26394e");line.setAttribute("stroke-width","1");
+    $("chartGrid").append(line);
+  }
+}
+$("simulate").addEventListener("click",async()=>{
+  $("simulate").disabled=true;$("simError").textContent="";
+  try{
+    const r=await call("/api/practice",{allocations:allocations()});
+    $("result").classList.add("show");
+    $("final").textContent=fmt(r.final_coins)+" C";
+    $("profit").textContent=(r.profit_coins>=0?"+":"")+fmt(r.profit_coins)+" C";
+    $("profit").style.color=r.profit_coins>=0?"#80efc8":"#ff9ea4";
+    $("drawdown").textContent=r.max_drawdown_pct.toFixed(2)+"%";
+    $("benchmark").textContent=(r.benchmark_buy_hold_pct>=0?"+":"")+r.benchmark_buy_hold_pct.toFixed(2)+"%";
+    plot(r.equity_path,r.benchmark_path);
+    const ch=r.characters;
+    $("resultDetails").textContent=`12日間 / 仮想手数料0.1% / 自作キャラ枠: ${fmt(ch.mine.final)}コイン、ルナ: ${fmt(ch.owl.final)}コイン、ミドリ: ${fmt(ch.turtle.final)}コイン。未配分の現金: ${fmt(r.cash_unallocated)}コイン。`;
+    $("result").scrollIntoView({behavior:"smooth",block:"start"});
+  }catch(e){$("simError").textContent=e.message}
+  finally{recalc()}
+});
+$("saveVersion").addEventListener("click",async()=>{
+  $("saveMessage").textContent="";
+  try{
+    const result=await call("/api/version/save",{name:$("versionName").value,expected_revision:revision});
+    await refresh();$("versionList").value=result.saved.id;
+    $("saveMessage").textContent="保存しました。復元しても以前のデータは残ります。";
+  }catch(e){$("saveMessage").textContent="保存失敗: "+e.message}
+});
+$("restoreVersion").addEventListener("click",async()=>{
+  $("saveMessage").textContent="";
+  try{
+    const id=$("versionList").value;
+    if(!id)throw Error("保存したモデルを選択してください");
+    const state=await call("/api/version/load",{id,expected_revision:revision});
+    renderModel(state);$("saveMessage").textContent="復元しました。キャラクター編集画面にも反映されます。";
+  }catch(e){$("saveMessage").textContent="復元失敗: "+e.message}
+});
+recalc();refresh().catch(e=>$("simError").textContent=e.message);
+setInterval(async()=>{try{const s=await call("/api/state");if(s.revision!==revision)renderModel(s)}catch(e){}},2000);
+</script>
+</body></html>

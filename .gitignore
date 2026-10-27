@@ -1,0 +1,18 @@
+# Dependencies / caches
+mcp/node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+# Local credentials and future tunnel profiles (never commit)
+.env
+.env.*
+*.pem
+*.key
+.tunnel/
+tunnel-config/
+# Tool temporary UI traces
+.playwright-cli/
+
+# Local game snapshots (not shared source files)
+local_state/
