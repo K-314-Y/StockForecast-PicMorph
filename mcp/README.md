@@ -77,3 +77,6 @@ npm test
 ## Sprint 04
 - `list_analysis_plugins()`: 許可済み3種の分析モジュール一覧と説明。
 - `set_analysis_plugins(trend_pct, momentum_pct, volatility_pct, expected_revision)`: 重みの合計100%を必須として更新。実市場・任意コード実行・資金操作なし。
+
+## Sprint 05
+`configure_analysis_plugins(weights, expected_revision)` を追加。`weights` は現状 `{"trend":20,"momentum":20,"volatility":10,"reversion":50}` のように全登録プラグインIDを指定、合計100%。旧 `set_analysis_plugins` では `reversion_pct` 省略時に0%とみなす。任意コード実行なし、localhost限定。

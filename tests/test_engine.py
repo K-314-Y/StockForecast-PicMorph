@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine import (
+    sprint4_python_source,
     EYES, Model, SYNTHETIC_PRICES, model_from_python, multiclass_brier,
     prediction, python_source, view, with_visual_change, with_plugin_change, prediction_components,
 )
@@ -52,10 +53,10 @@ class RoundTripTests(unittest.TestCase):
             self.assertTrue(all(0 <= v <= 1 for v in result.values()))
 
     def test_weighted_plugin_results_are_real(self):
-        a=with_plugin_change(Model(),{"trend":100,"momentum":0,"volatility":0})
-        b=with_plugin_change(Model(),{"trend":0,"momentum":100,"volatility":0})
-        c=with_plugin_change(Model(),{"trend":0,"momentum":0,"volatility":100})
-        mixed=with_plugin_change(Model(),{"trend":50,"momentum":30,"volatility":20})
+        a=with_plugin_change(Model(),{"trend":100,"momentum":0,"volatility":0,"reversion":0})
+        b=with_plugin_change(Model(),{"trend":0,"momentum":100,"volatility":0,"reversion":0})
+        c=with_plugin_change(Model(),{"trend":0,"momentum":0,"volatility":100,"reversion":0})
+        mixed=with_plugin_change(Model(),{"trend":50,"momentum":30,"volatility":20,"reversion":0})
         probs=[prediction(m) for m in (a,b,c,mixed)]
         self.assertNotEqual(probs[0],probs[1])
         self.assertNotEqual(probs[0],probs[2])
@@ -63,17 +64,17 @@ class RoundTripTests(unittest.TestCase):
             self.assertAlmostEqual(probs[3][key],
                 .5*probs[0][key]+.3*probs[1][key]+.2*probs[2][key])
         self.assertEqual(view(mixed)["visual"]["dominant_plugin"],"trend")
-        self.assertEqual(len(view(mixed)["plugins"]),3)
+        self.assertEqual(len(view(mixed)["plugins"]),4)
         self.assertEqual(mixed,model_from_python(python_source(mixed)))
 
     def test_invalid_plugin_weights_and_ast_blocked(self):
         bad=[
-            {"trend":50,"momentum":50,"volatility":20},
-            {"trend":True,"momentum":0,"volatility":100},
-            {"trend":20.0,"momentum":30,"volatility":50},
+            {"trend":50,"momentum":50,"volatility":20,"reversion":0},
+            {"trend":True,"momentum":0,"volatility":100,"reversion":0},
+            {"trend":20.0,"momentum":30,"volatility":50,"reversion":0},
             {"trend":50,"momentum":50},
-            {"trend":70,"momentum":40,"volatility":-10},
-            {"trend":50,"momentum":50,"volatility":0,"evil":0},
+            {"trend":70,"momentum":40,"volatility":-10,"reversion":0},
+            {"trend":50,"momentum":50,"volatility":0,"reversion":0,"evil":0},
         ]
         for data in bad:
             with self.subTest(data=data):
@@ -93,9 +94,9 @@ class RoundTripTests(unittest.TestCase):
     def test_every_plugin_uses_past_prices_only(self):
         prices=list(SYNTHETIC_PRICES)
         models=[with_plugin_change(Model(),w) for w in (
-            {"trend":100,"momentum":0,"volatility":0},
-            {"trend":0,"momentum":100,"volatility":0},
-            {"trend":0,"momentum":0,"volatility":100},
+            {"trend":100,"momentum":0,"volatility":0,"reversion":0},
+            {"trend":0,"momentum":100,"volatility":0,"reversion":0},
+            {"trend":0,"momentum":0,"volatility":100,"reversion":0},
         )]
         for model in models:
             with self.subTest(weights=model.plugin_weights):
@@ -111,7 +112,7 @@ class RoundTripTests(unittest.TestCase):
         for eye in EYES:
             model = with_plugin_change(
                 with_visual_change(Model(), eye=eye),
-                {"trend":50,"momentum":30,"volatility":20}
+                {"trend":50,"momentum":30,"volatility":20,"reversion":0}
             )
             local_scope = {"__builtins__": {"sum": sum, "max": max, "min": min, "abs": abs, "range": range, "len": len}}
             exec(compile(python_source(model), "<trusted-generated-test>", "exec"),
