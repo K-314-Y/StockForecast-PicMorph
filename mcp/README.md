@@ -73,3 +73,7 @@ npm test
 
 ## Sprint 03 MCP tools
 ローカルMCP経由で `run_coin_practice(mine_pct, owl_pct, turtle_pct)`、`list_saved_models()`、`save_current_model(name, expected_revision)`、`load_saved_model(id, expected_revision)` が利用できます。現在はローカル認証なしの個人用。インターネットに公開しないでください。
+
+## Sprint 04
+- `list_analysis_plugins()`: 許可済み3種の分析モジュール一覧と説明。
+- `set_analysis_plugins(trend_pct, momentum_pct, volatility_pct, expected_revision)`: 重みの合計100%を必須として更新。実市場・任意コード実行・資金操作なし。

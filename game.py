@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import EYES, Model, SYNTHETIC_PRICES, prediction, python_source
+from engine import EYES, PLUGIN_IDS, Model, SYNTHETIC_PRICES, prediction, python_source, legacy_python_source
 
 ROOT = Path(__file__).resolve().parent
 SAVE_FILE = ROOT / "local_state" / "versions.json"
@@ -171,6 +171,7 @@ def save_version(name: object, model: Model) -> dict:
             "fast_window": model.fast_window,
             "slow_window": model.slow_window,
             "risk_fraction": model.risk_fraction,
+            "plugin_weights": dict(zip(PLUGIN_IDS, model.plugin_weights)),
         },
         "sha256": hashlib.sha256(python_source(model).encode()).hexdigest(),
     }
@@ -197,9 +198,20 @@ def load_version(version_id: object) -> Model:
     entry = next((v for v in read_versions() if v.get("id") == version_id), None)
     if not entry:
         raise ValueError("指定されたバージョンはありません")
-    m = entry["model"]
-    result = Model(**m)
-    digest = hashlib.sha256(python_source(result).encode()).hexdigest()
-    if digest != entry["sha256"]:
+    data = dict(entry["model"])
+    weights = data.pop("plugin_weights", None)
+    if weights is None:
+        # Sprint-3 versions lack plugin metadata; keep their old hash valid.
+        result = Model(**data)
+    elif isinstance(weights, dict) and set(weights) == set(PLUGIN_IDS):
+        result = Model(**data, plugin_weights=tuple(weights[k] for k in PLUGIN_IDS))
+    else:
+        raise ValueError("プラグイン設定の保存形式が不正です")
+    current_sha = hashlib.sha256(python_source(result).encode()).hexdigest()
+    old_sha = hashlib.sha256(legacy_python_source(result).encode()).hexdigest()
+    allowed_sha = {current_sha}
+    if weights is None:
+        allowed_sha.add(old_sha)
+    if entry["sha256"] not in allowed_sha:
         raise ValueError("保存データの改ざんまたは破損を検知しました")
     return result

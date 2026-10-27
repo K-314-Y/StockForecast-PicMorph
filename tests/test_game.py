@@ -66,6 +66,31 @@ class GameTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     game.run_practice(Model(),bad)
 
+    def test_nondefault_plugin_changes_paper_trading(self):
+        trend=game.run_practice(Model(),{"mine":100,"owl":0,"turtle":0})
+        mixed=game.run_practice(Model(
+            3,9,.35,(20,70,10)
+        ),{"mine":100,"owl":0,"turtle":0})
+        self.assertNotEqual(trend["model_sha256"],mixed["model_sha256"])
+        self.assertNotEqual(trend["equity_path"],mixed["equity_path"])
+
+    def test_restore_legacy_saved_version(self):
+        from engine import legacy_python_source
+        import hashlib
+        with TemporaryDirectory() as temp:
+            file=Path(temp)/"versions.json"
+            with patch.object(game,"SAVE_FILE",file):
+                legacy=Model(4,13,.65)
+                entry={
+                    "id":"a"*32,
+                    "name":"Sprint 3 legacy",
+                    "saved_at":"2026-10-27T12:00:00+00:00",
+                    "model":{"fast_window":4,"slow_window":13,"risk_fraction":.65},
+                    "sha256":hashlib.sha256(legacy_python_source(legacy).encode()).hexdigest(),
+                }
+                file.write_text(json.dumps({"schema":1,"versions":[entry]}))
+                self.assertEqual(game.load_version(entry["id"]),legacy)
+
     def test_snapshot_save_reopen_integrity(self):
         with TemporaryDirectory() as temp:
             file=Path(temp)/"versions.json"
