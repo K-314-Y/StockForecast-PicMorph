@@ -49,6 +49,17 @@ textarea{display:block;width:100%;min-height:325px;resize:vertical;background:#0
 textarea:focus{border-color:var(--cyan)}
 .notice{background:#203543;border:1px solid #365968;color:#d5f1ed;padding:10px 12px;border-radius:10px;font-size:12px;margin-top:14px}
 .err{color:#ffb5ae;min-height:21px;font-size:13px;margin-top:8px}
+/* Sprint 4 plugin composer */
+.plugin-edit{border:1px solid #35536b;background:#0c1a2c;border-radius:12px;padding:12px;margin-top:12px}
+.plugin-field{display:grid;grid-template-columns:1fr 70px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #24364b}
+.plugin-field:last-child{border:0}
+.plugin-label{font-size:13px;font-weight:700;display:block}
+.plugin-help{font-size:11px;color:var(--muted);display:block}
+.plugin-field input{background:#091524;border:1px solid #536f87;color:#dcf5fa;border-radius:8px;width:70px;padding:7px 4px;text-align:right;font:inherit}
+.plugin-auras{position:absolute;bottom:35px;right:10px;z-index:3;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.plugin-aura{background:#14233cce;border:1px solid #8dbed6a0;border-radius:17px;padding:4px 10px;font-size:11px;box-shadow:0 4px 10px #080e1b88}
+.plugin-summary{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:12px}
+#pluginMsg{min-height:18px;font-size:12px;color:#eabdbd}
 .section{margin-top:20px}.small-note{font-size:12px;color:var(--muted);margin-top:10px}
 footer{font-size:12px;color:#91a8b9;padding-top:20px}
 @media(max-width:810px){.grid{grid-template-columns:1fr}.panel{padding:17px}header{padding-top:15px}textarea{min-height:250px}}
@@ -64,6 +75,7 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <h2>01 キャラクター編集 <span class="tag">GIRL AVATAR</span></h2>
 <div class="creature-stage" id="portraitStage" aria-label="女の子の予測キャラクターのプレビュー">
 <div class="character-identity"><strong id="characterName">ルナ・アナリスト</strong><span id="characterRole">冷静な長短トレンド分析</span></div>
+<div class="plugin-auras" id="pluginAuras" aria-live="polite"></div>
 <svg id="creature" viewBox="0 0 360 390" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="装備によって髪色、ヘアアクセサリー、衣装、瞳の色が変わるかわいい女の子の予測キャラクター">
   <defs>
     <linearGradient id="hairGradient" x1="0" y1="0" x2="1" y2="1">
@@ -181,6 +193,18 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <p class="small-note" id="eyeDesc">モデルの短期・長期移動平均期間とつながっています。</p>
 </div>
 <div class="section">
+<div class="row"><h3>分析プラグインを組み合わせる</h3><span class="tag">3 INDICATORS</span></div>
+<p class="small-note">3つの分析結果を重み付きで合成。合計100%にして適用します。コードの重み定数とも双方向同期します。</p>
+<div class="plugin-edit">
+<label class="plugin-field"><span><span class="plugin-label">📡 トレンド</span><span class="plugin-help">短期・長期の移動平均</span></span><input id="weightTrend" type="number" min="0" max="100" step="5" value="100" aria-label="トレンドの比率"></label>
+<label class="plugin-field"><span><span class="plugin-label">⚡ モメンタム</span><span class="plugin-help">直近の値上がり・値下がりの勢い</span></span><input id="weightMomentum" type="number" min="0" max="100" step="5" value="0" aria-label="モメンタムの比率"></label>
+<label class="plugin-field"><span><span class="plugin-label">🌫️ ボラティリティ</span><span class="plugin-help">値動きの幅から横ばいを評価</span></span><input id="weightVolatility" type="number" min="0" max="100" step="5" value="0" aria-label="ボラティリティの比率"></label>
+<div class="plugin-summary"><strong id="pluginTotal">合計100%</strong><button id="pluginApply" type="button">重みを予測に反映</button></div>
+<div id="pluginMsg" role="status"></div>
+<div class="controls"><button type="button" data-weight-preset="100,0,0">トレンドのみ</button><button type="button" data-weight-preset="50,30,20">バランス型</button><button type="button" data-weight-preset="20,70,10">勢い重視</button></div>
+</div>
+</div>
+<div class="section">
 <div class="row"><h3>盾：仮想資金のリスク上限</h3><strong id="riskValue">35%</strong></div>
 <input id="risk" class="slider" type="range" min="5" max="100" step="5" value="35" aria-label="最大配分割合">
 <div class="mini">守護結界の大きさと仮想資金の参考配分枠が変わります。実売買は行いません。</div>
@@ -207,7 +231,7 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <p class="mini" id="sha"></p>
 </section>
 </div>
-<footer>SPRINT 01 · すべてローカルで実行。株価・暗号資産の実データ、取引所、APIキー、外部AIには接続しません。ChatGPTプラグインへの接続は次工程。</footer>
+<footer>SPRINT 04 · すべてローカルで実行。合成価格・許可済みの分析プラグインのみ。実市場・実売買・任意コード実行・外部APIとの接続なし。</footer>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -235,6 +259,20 @@ function paint(state, updateSource=true) {
   };
   const look = looks[v.eye] || looks.custom;
   $("portraitStage").dataset.style=v.eye;
+  const weights=m.plugin_weights || {trend:100,momentum:0,volatility:0};
+  for(const [id,key] of [["weightTrend","trend"],["weightMomentum","momentum"],["weightVolatility","volatility"]])
+    $(id).value=weights[key];
+  updatePluginTotal();
+  const symbols={trend:"📡",momentum:"⚡",volatility:"🌫️"};
+  const auras=$("pluginAuras");
+  auras.replaceChildren();
+  for(const info of state.plugins || []){
+    if(info.weight_pct<=0)continue;
+    const mark=document.createElement("span");
+    mark.className="plugin-aura";
+    mark.textContent=`${symbols[info.id]||"✦"} ${info.name} ${info.weight_pct}%`;
+    auras.appendChild(mark);
+  }
   $("characterName").textContent=look.name;
   $("characterRole").textContent=look.role;
   for (const [id,color] of [
@@ -268,6 +306,34 @@ function paint(state, updateSource=true) {
   $("status").textContent="同期しました。絵と予測計算は同じモデル設定を参照しています。";
   $("error").textContent="";
 }
+function readPluginWeights(){
+  const ids=[["weightTrend","trend"],["weightMomentum","momentum"],["weightVolatility","volatility"]];
+  const values=Object.fromEntries(ids.map(([id,key])=>[key,Number($(id).value)]));
+  const valid=ids.every(([id,key])=>$(id).value!=="" && Number.isInteger(values[key]) && values[key]>=0 && values[key]<=100);
+  return {values,valid,total:Object.values(values).reduce((a,b)=>a+b,0)};
+}
+function updatePluginTotal(){
+  const {valid,total}=readPluginWeights();
+  $("pluginTotal").textContent=`合計 ${total}%`;
+  $("pluginTotal").style.color=valid&&total===100?"#a5f8d5":"#ffb7a7";
+  $("pluginApply").disabled=!valid||total!==100;
+}
+for(const id of ["weightTrend","weightMomentum","weightVolatility"])
+  $(id).addEventListener("input",updatePluginTotal);
+document.querySelectorAll("[data-weight-preset]").forEach(b=>b.addEventListener("click",()=>{
+  const values=b.dataset.weightPreset.split(",").map(Number);
+  ["weightTrend","weightMomentum","weightVolatility"].forEach((id,i)=>$(id).value=values[i]);
+  updatePluginTotal();
+}));
+$("pluginApply").addEventListener("click",async()=>{
+  const {valid,total,values}=readPluginWeights();
+  if(!valid||total!==100){$("pluginMsg").textContent="比率を0〜100の整数で、合計100%にしてください";return}
+  try {
+    const changed=await api("/api/plugins",{weights:values,expected_revision:revision});
+    paint(changed);
+    $("pluginMsg").textContent="プラグインを反映しました。予測確率とPythonコードが更新されています。";
+  } catch(e){$("pluginMsg").textContent=e.message}
+});
 async function changeVisual(body){
   try { paint(await api("/api/visual",{...body,expected_revision:revision})); }
   catch(e) { $("error").textContent=e.message; }

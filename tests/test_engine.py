@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine import (
     EYES, Model, SYNTHETIC_PRICES, model_from_python, multiclass_brier,
-    prediction, python_source, view, with_visual_change,
+    prediction, python_source, view, with_visual_change, with_plugin_change, prediction_components,
 )
 
 
@@ -51,11 +51,69 @@ class RoundTripTests(unittest.TestCase):
             self.assertAlmostEqual(sum(result.values()), 1.0)
             self.assertTrue(all(0 <= v <= 1 for v in result.values()))
 
+    def test_weighted_plugin_results_are_real(self):
+        a=with_plugin_change(Model(),{"trend":100,"momentum":0,"volatility":0})
+        b=with_plugin_change(Model(),{"trend":0,"momentum":100,"volatility":0})
+        c=with_plugin_change(Model(),{"trend":0,"momentum":0,"volatility":100})
+        mixed=with_plugin_change(Model(),{"trend":50,"momentum":30,"volatility":20})
+        probs=[prediction(m) for m in (a,b,c,mixed)]
+        self.assertNotEqual(probs[0],probs[1])
+        self.assertNotEqual(probs[0],probs[2])
+        for key in ("UP","FLAT","DOWN"):
+            self.assertAlmostEqual(probs[3][key],
+                .5*probs[0][key]+.3*probs[1][key]+.2*probs[2][key])
+        self.assertEqual(view(mixed)["visual"]["dominant_plugin"],"trend")
+        self.assertEqual(len(view(mixed)["plugins"]),3)
+        self.assertEqual(mixed,model_from_python(python_source(mixed)))
+
+    def test_invalid_plugin_weights_and_ast_blocked(self):
+        bad=[
+            {"trend":50,"momentum":50,"volatility":20},
+            {"trend":True,"momentum":0,"volatility":100},
+            {"trend":20.0,"momentum":30,"volatility":50},
+            {"trend":50,"momentum":50},
+            {"trend":70,"momentum":40,"volatility":-10},
+            {"trend":50,"momentum":50,"volatility":0,"evil":0},
+        ]
+        for data in bad:
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError):
+                    with_plugin_change(Model(),data)
+        template=python_source(Model())
+        for malicious in (
+            template.replace("WEIGHT_TREND = 100", "WEIGHT_TREND = __import__('os')"),
+            template.replace("WEIGHT_TREND = 100", "WEIGHT_TREND = 99"),
+            template.replace("WEIGHT_TREND = 100", "WEIGHT_TREND = True"),
+            template.replace("WEIGHT_TREND = 100", "WEIGHT_TREND = 100\nimport os"),
+        ):
+            with self.subTest(malicious=malicious[:90]):
+                with self.assertRaises(ValueError):
+                    model_from_python(malicious)
+
+    def test_every_plugin_uses_past_prices_only(self):
+        prices=list(SYNTHETIC_PRICES)
+        models=[with_plugin_change(Model(),w) for w in (
+            {"trend":100,"momentum":0,"volatility":0},
+            {"trend":0,"momentum":100,"volatility":0},
+            {"trend":0,"momentum":0,"volatility":100},
+        )]
+        for model in models:
+            with self.subTest(weights=model.plugin_weights):
+                prediction_before=prediction(model,tuple(prices))
+                future=tuple(prices+[200,50,99])
+                # Passing the longer history changes the analysis, whereas
+                # a caller limited to the pre-event prefix sees the same output.
+                self.assertEqual(prediction(model,tuple(future[:-3])),prediction_before)
+                self.assertTrue(all(0<=v<=1 for v in prediction(model,future).values()))
+
     def test_source_function_matches_engine(self):
         # Only trusted, generated, unmodified template is executed in this test.
         for eye in EYES:
-            model = with_visual_change(Model(), eye=eye)
-            local_scope = {"__builtins__": {"sum": sum, "max": max, "min": min, "abs": abs}}
+            model = with_plugin_change(
+                with_visual_change(Model(), eye=eye),
+                {"trend":50,"momentum":30,"volatility":20}
+            )
+            local_scope = {"__builtins__": {"sum": sum, "max": max, "min": min, "abs": abs, "range": range, "len": len}}
             exec(compile(python_source(model), "<trusted-generated-test>", "exec"),
                  local_scope)
             sample = local_scope["forecast"](SYNTHETIC_PRICES)
@@ -68,7 +126,7 @@ class RoundTripTests(unittest.TestCase):
             src + "\nimport os\nos.system('id')",
             src.replace("FAST_WINDOW = 3", "FAST_WINDOW = __import__('os')"),
             src.replace("return {{", "return {{"),  # harmless duplicate is removed below
-            src.replace("momentum / 0.06", "momentum / 99"),
+            src.replace("delta / 0.06", "delta / 99"),
             src.replace("FAST_WINDOW = 3", "FAST_WINDOW = True"),
             src.replace("FAST_WINDOW = 3", "FAST_WINDOW = -1"),
         ]

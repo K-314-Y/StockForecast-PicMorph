@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import urlsplit
 
-from engine import Model, model_from_python, view, with_visual_change
+from engine import Model, PLUGIN_INFO, model_from_python, view, with_visual_change, with_plugin_change
 from game import read_versions, save_version, load_version, run_practice
 
 ROOT = Path(__file__).resolve().parent
@@ -53,6 +53,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/versions":
             with LOCK:
                 self._json(200, {"versions": read_versions()})
+        elif path == "/api/plugins":
+            self._json(200, {"plugins": list(PLUGIN_INFO), "mode": "allowlisted-synthetic-only"})
         else:
             self._json(404, {"error": "見つかりません"})
 
@@ -98,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
                     if set(payload) != {"python"}:
                         raise ValueError("Pythonソースが必要です")
                     new = model_from_python(payload["python"])
+                elif path == "/api/plugins":
+                    if set(payload) != {"weights"}:
+                        raise ValueError("weightsが必要です")
+                    new = with_plugin_change(STATE["model"], payload["weights"])
                 elif path == "/api/reset":
                     if payload:
                         raise ValueError("リセットには引数は不要です")

@@ -22,7 +22,7 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
   try {
     const tools=await client.listTools();
     const names=tools.tools.map(x=>x.name);
-    for(const name of ["get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model"]){
+    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins"]){
       assert.ok(names.includes(name),`missing tool: ${name}`);
     }
     const catalog=await call("list_creature_parts");
@@ -31,6 +31,8 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     assert.ok(!practice.isError);
     assert.equal(practice.structuredContent.result.initial_coins,10000);
     assert.equal(practice.structuredContent.result.steps,12);
+    const pluginCatalog=await call("list_analysis_plugins");
+    assert.equal(pluginCatalog.structuredContent.plugins.length,3);
     const savedModels=await call("list_saved_models");
     assert.ok(!savedModels.isError);
     assert.ok(Array.isArray(savedModels.structuredContent.versions));
@@ -65,6 +67,20 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     assert.ok(current.python.includes("SLOW_WINDOW = 13"));
     assert.deepEqual(current.prediction,(await state()).prediction);
 
+    const oldPredict=current.prediction;
+    edited=await call("set_analysis_plugins",{
+      trend_pct:50,momentum_pct:30,volatility_pct:20,expected_revision:current.revision
+    });
+    assert.ok(!edited.isError);
+    current=edited.structuredContent.state;
+    assert.deepEqual(current.model.plugin_weights,{trend:50,momentum:30,volatility:20});
+    assert.notDeepEqual(current.prediction,oldPredict);
+    const badWeights=await call("set_analysis_plugins",{
+      trend_pct:50,momentum_pct:50,volatility_pct:50,expected_revision:current.revision
+    });
+    assert.ok(badWeights.isError);
+    assert.equal((await state()).revision,current.revision);
+
     const stale=await call("set_eye",{eye:"owl",expected_revision:original.revision});
     assert.equal(stale.isError,true);
     assert.match(stale.content[0].text,/revision|409/);
@@ -89,6 +105,12 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
         expected_revision:fresh.revision,
       });
       assert.ok(!restore.isError,`cleanup failed: ${JSON.stringify(restore)}`);
+      const weights=original.model.plugin_weights;
+      const back=await call("set_analysis_plugins",{
+        trend_pct:weights.trend,momentum_pct:weights.momentum,volatility_pct:weights.volatility,
+        expected_revision:restore.structuredContent.state.revision,
+      });
+      assert.ok(!back.isError,`plugin restore failed: ${JSON.stringify(back)}`);
     }
     await client.close();
   }

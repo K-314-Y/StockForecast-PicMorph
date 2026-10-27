@@ -51,7 +51,7 @@ const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用
 
 function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.2.0"},
+    {name:"creature-lab",version:"0.4.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
   server.registerTool("get_creature_state",{
@@ -107,6 +107,38 @@ function makeMcpServer() {
       return responseFor(await requestCore("/api/code",{python:source,expected_revision}),"計算定数を変更");
     } catch(e){return toolError(e)}
   });
+  server.registerTool("list_analysis_plugins",{
+    title:"分析プラグインの一覧",
+    description:"安全な内蔵分析プラグイン（トレンド・モメンタム・ボラティリティ）の定義。任意コード実行なし。",
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try{
+      const result=await requestCore("/api/plugins");
+      return {content:[{type:"text",text:"利用できる分析プラグインは3種類です。重みの合計を100%にして設定します。"}],structuredContent:result};
+    }catch(e){return toolError(e)}
+  });
+
+  server.registerTool("set_analysis_plugins",{
+    title:"3種類の分析プラグインを組み合わせる",
+    description:"登録済み3種の予測結果を整数％で加重平均。モデルのPython定数・キャラ装飾・予測確率・練習ゲームに反映。合計100%必須。",
+    inputSchema:{
+      trend_pct:z.number().int().min(0).max(100),
+      momentum_pct:z.number().int().min(0).max(100),
+      volatility_pct:z.number().int().min(0).max(100),
+      expected_revision:expected,
+    },
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({trend_pct,momentum_pct,volatility_pct,expected_revision})=>{
+    try{
+      const state=await requestCore("/api/plugins",{
+        weights:{trend:trend_pct,momentum:momentum_pct,volatility:volatility_pct},
+        expected_revision,
+      });
+      return responseFor(state,"分析プラグインを変更");
+    }catch(e){return toolError(e)}
+  });
+
   server.registerTool("run_coin_practice",{
     title:"架空のコイン運用を練習する",
     description:"ユーザーのキャラ、ルナ、ミドリの3体へ無料コインを配分し、架空の12日分の価格で損益・最大下落率を計算。現金取引やランキングは行わない。",
