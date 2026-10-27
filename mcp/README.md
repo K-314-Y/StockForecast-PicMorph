@@ -80,3 +80,8 @@ npm test
 
 ## Sprint 05
 `configure_analysis_plugins(weights, expected_revision)` を追加。`weights` は現状 `{"trend":20,"momentum":20,"volatility":10,"reversion":50}` のように全登録プラグインIDを指定、合計100%。旧 `set_analysis_plugins` では `reversion_pct` 省略時に0%とみなす。任意コード実行なし、localhost限定。
+
+## Sprint 06 MCP
+`set_plugin_strengths(strengths, expected_revision)`: 登録済みすべてのプラグインIDに整数感度50..150を指定。
+`get_character_lineup()`: 保存済みモデルを使うルナとミドリの現行編成・revision。
+`assign_character_version(slot, version_id, expected_lineup_revision)`: owl/turtleに保存モデルIDを割当。version_id=nullは標準へ戻す。実売買なし。

@@ -8,8 +8,9 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import urlsplit
 
-from engine import Model, PLUGIN_INFO, model_from_python, view, with_visual_change, with_plugin_change
+from engine import Model, PLUGIN_INFO, model_from_python, view, with_visual_change, with_plugin_change, with_plugin_strength_change
 from game import read_versions, save_version, load_version, run_practice
+from lineup import lineup_snapshot, assign_model, effective_models
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -55,6 +56,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"versions": read_versions()})
         elif path == "/api/plugins":
             self._json(200, {"plugins": list(PLUGIN_INFO), "mode": "allowlisted-synthetic-only"})
+        elif path == "/api/lineup":
+            with LOCK:
+                self._json(200, lineup_snapshot())
         else:
             self._json(404, {"error": "見つかりません"})
 
@@ -104,6 +108,17 @@ class Handler(BaseHTTPRequestHandler):
                     if set(payload) != {"weights"}:
                         raise ValueError("weightsが必要です")
                     new = with_plugin_change(STATE["model"], payload["weights"])
+                elif path == "/api/plugin-settings":
+                    if set(payload) != {"strengths"}:
+                        raise ValueError("strengthsが必要です")
+                    new = with_plugin_strength_change(STATE["model"], payload["strengths"])
+                elif path == "/api/lineup":
+                    if set(payload) != {"slot","version_id","expected_lineup_revision"}:
+                        raise ValueError("キャラ枠・保存モデル・編成revisionが必要です")
+                    changed = assign_model(payload["slot"],payload["version_id"],
+                                           payload["expected_lineup_revision"])
+                    self._json(200, changed)
+                    return
                 elif path == "/api/reset":
                     if payload:
                         raise ValueError("リセットには引数は不要です")
@@ -111,7 +126,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/practice":
                     if set(payload) != {"allocations"}:
                         raise ValueError("allocationsだけ指定してください")
-                    result = run_practice(STATE["model"], payload["allocations"])
+                    result = run_practice(STATE["model"], payload["allocations"],
+                                          assigned=effective_models())
+                    result["lineup_revision"] = lineup_snapshot()["revision"]
                     result["source_revision"] = STATE["revision"]
                     self._json(200, result)
                     return
@@ -132,6 +149,8 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["revision"] += 1
                 result = view(new, STATE["revision"])
             self._json(200, result)
+        except LookupError as exc:
+            self._json(409, {"error": str(exc)})
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)})
 

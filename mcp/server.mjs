@@ -51,7 +51,7 @@ const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用
 
 function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.5.0"},
+    {name:"creature-lab",version:"0.6.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
   server.registerTool("get_creature_state",{
@@ -152,6 +152,41 @@ function makeMcpServer() {
     try{
       return responseFor(await requestCore("/api/plugins",{weights,expected_revision}),"分析プラグインを更新");
     }catch(e){return toolError(e)}
+  });
+
+  server.registerTool("set_plugin_strengths",{
+    title:"分析プラグイン固有の感度を設定",
+    description:"登録済み4つの分析それぞれの感度を50〜150の整数で設定する。モデル表示・予測とコード・保存データ・シミュレーションに連動。",
+    inputSchema:{strengths:z.record(z.number().int().min(50).max(150)),expected_revision:expected},
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({strengths,expected_revision})=>{
+    try {return responseFor(await requestCore("/api/plugin-settings",{strengths,expected_revision}),"プラグイン感度を更新")}
+    catch(e){return toolError(e)}
+  });
+
+  server.registerTool("get_character_lineup",{
+    title:"キャラ別の予測モデル編成を確認",
+    description:"ルナ・ミドリへ設定した保存済み予測モデルと編成revisionを返す。",
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {const lineup=await requestCore("/api/lineup");return {content:[{type:"text",text:"キャラ別の保存モデル割当と現在の編成を取得"}],structuredContent:{lineup}}}
+    catch(e){return toolError(e)}
+  });
+
+  server.registerTool("assign_character_version",{
+    title:"保存済みモデルをキャラへ装備する",
+    description:"ルナまたはミドリに名前付き保存モデルを割り当てる。version_id=nullで標準モデルに戻す。仮想相場のみ。",
+    inputSchema:{
+      slot:z.enum(["owl","turtle"]),
+      version_id:z.string().length(32).nullable(),
+      expected_lineup_revision:z.number().int().min(0),
+    },
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({slot,version_id,expected_lineup_revision})=>{
+    try {const lineup=await requestCore("/api/lineup",{slot,version_id,expected_lineup_revision});
+      return {content:[{type:"text",text:"キャラ編成を更新しました。"}],structuredContent:{lineup}}}
+    catch(e){return toolError(e)}
   });
 
   server.registerTool("run_coin_practice",{

@@ -10,7 +10,7 @@ import ast
 import hashlib
 import inspect
 import math
-from indicators import REGISTRY, IDS, registry_info
+from indicators import REGISTRY, IDS, registry_info, adjust_probability_strength
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +24,7 @@ EYES = {"falcon": (3, 9), "owl": (5, 12), "turtle": (8, 20)}
 PLUGIN_IDS = IDS
 PLUGIN_INFO = registry_info()
 DEFAULT_WEIGHTS = (100,) + (0,) * (len(REGISTRY) - 1)
+DEFAULT_STRENGTHS = (100,) * len(REGISTRY)
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class Model:
     slow_window: int = 9
     risk_fraction: float = 0.35
     plugin_weights: tuple[int, ...] = DEFAULT_WEIGHTS
+    plugin_strengths: tuple[int, ...] = DEFAULT_STRENGTHS
 
     def __post_init__(self) -> None:
         if type(self.fast_window) is not int or type(self.slow_window) is not int:
@@ -46,6 +48,10 @@ class Model:
             type(w) is not int or not 0 <= w <= 100 for w in self.plugin_weights
         ) or sum(self.plugin_weights) != 100:
             raise ValueError("プラグイン重みは0〜100の整数で合計100%にしてください")
+        if not isinstance(self.plugin_strengths, tuple) or len(self.plugin_strengths) != len(PLUGIN_IDS) or any(
+            type(value) is not int or not 50 <= value <= 150 for value in self.plugin_strengths
+        ):
+            raise ValueError("各分析プラグインの感度は50〜150の整数で指定してください")
 
 
 # Original source format is retained solely for validating Sprint-3 snapshots.
@@ -113,7 +119,7 @@ def sprint4_python_source(model: Model) -> str:
     return _format(SPRINT4_SOURCE_TEMPLATE, model)
 
 
-def python_source(model: Model) -> str:
+def sprint5_python_source(model: Model) -> str:
     """Generate displayable working Python using audited local indicators.
 
     Every built-in function is checked into indicators.py. User submissions
@@ -140,6 +146,28 @@ def python_source(model: Model) -> str:
     return "\n".join(header) + "\n\n\n" + "\n\n\n".join(functions) + "\n\n\n" + "\n".join(lines) + "\n"
 
 
+def python_source(model: Model) -> str:
+    """Full current executable-looking preview, but never execute submitted code."""
+    old = sprint5_python_source(model)
+    first = inspect.getsource(REGISTRY[0].evaluate).strip()
+    settings = "\n".join(
+        "STRENGTH_" + spec.id.upper() + " = " + str(model.plugin_strengths[i])
+        for i, spec in enumerate(REGISTRY)
+    )
+    source = old.replace(
+        "\n\n\n" + first,
+        "\n" + settings + "\n\n\n" +
+        inspect.getsource(adjust_probability_strength).strip() + "\n\n\n" + first, 1
+    )
+    for spec in REGISTRY:
+        call = "    p_" + spec.id + " = " + spec.evaluate.__name__ + "(prices, FAST_WINDOW, SLOW_WINDOW)\n"
+        tune = "    p_" + spec.id + " = adjust_probability_strength(p_" + spec.id + ", STRENGTH_" + spec.id.upper() + ")\n"
+        if call not in source:
+            raise RuntimeError("code template mismatch: " + spec.id)
+        source = source.replace(call, call + tune, 1)
+    return source
+
+
 def legacy_python_source(model: Model) -> str:
     return _format(LEGACY_SOURCE_TEMPLATE, model)
 
@@ -156,6 +184,10 @@ def model_from_python(source: str) -> Model:
     # Read old editor drafts without upgrading their function code unsafely.
     versions = (
         (ast.parse(python_source(Model())),
+         ("FAST_WINDOW", "SLOW_WINDOW", "RISK_FRACTION") +
+         tuple("WEIGHT_" + k.upper() for k in PLUGIN_IDS) +
+         tuple("STRENGTH_" + k.upper() for k in PLUGIN_IDS)),
+        (ast.parse(sprint5_python_source(Model())),
          ("FAST_WINDOW", "SLOW_WINDOW", "RISK_FRACTION") +
          tuple("WEIGHT_" + k.upper() for k in PLUGIN_IDS)),
         (ast.parse(sprint4_python_source(Model())),
@@ -182,7 +214,9 @@ def model_from_python(source: str) -> Model:
             ):
                 weights = tuple(values.get("WEIGHT_" + k.upper(), 0) for k in PLUGIN_IDS)
                 return Model(values["FAST_WINDOW"], values["SLOW_WINDOW"],
-                             values["RISK_FRACTION"], weights)
+                             values["RISK_FRACTION"], weights,
+                             tuple(values.get("STRENGTH_" + k.upper(), 100)
+                                   for k in PLUGIN_IDS))
     raise ValueError("数値定数のみ編集可能です。予測関数の変更や未知のプラグインは使えません")
 
 
@@ -193,14 +227,22 @@ def with_visual_change(current: Model, *, eye: str | None = None, risk: Any = No
         current.fast_window, current.slow_window
     )
     return Model(fast, slow, current.risk_fraction if risk is None else risk,
-                 current.plugin_weights)
+                 current.plugin_weights, current.plugin_strengths)
 
 
 def with_plugin_change(current: Model, weights: object) -> Model:
     if not isinstance(weights, dict) or set(weights) != set(PLUGIN_IDS):
         raise ValueError("登録済みプラグインの重みをすべて指定してください")
     return Model(current.fast_window, current.slow_window,
-                 current.risk_fraction, tuple(weights[k] for k in PLUGIN_IDS))
+                 current.risk_fraction, tuple(weights[k] for k in PLUGIN_IDS),
+                 current.plugin_strengths)
+
+
+def with_plugin_strength_change(current: Model, strengths: object) -> Model:
+    if not isinstance(strengths, dict) or set(strengths) != set(PLUGIN_IDS):
+        raise ValueError("登録済み分析すべての感度が必要です")
+    return Model(current.fast_window, current.slow_window, current.risk_fraction,
+                 current.plugin_weights, tuple(strengths[k] for k in PLUGIN_IDS))
 
 
 def prediction_components(model: Model, prices: tuple[int, ...] = SYNTHETIC_PRICES) -> dict[str, dict[str, float]]:
@@ -210,7 +252,10 @@ def prediction_components(model: Model, prices: tuple[int, ...] = SYNTHETIC_PRIC
         raise ValueError("利用できる合成データが不足しています")
     result = {}
     for spec in REGISTRY:
-        probs = spec.evaluate(prices, model.fast_window, model.slow_window)
+        probs = adjust_probability_strength(
+            spec.evaluate(prices, model.fast_window, model.slow_window),
+            model.plugin_strengths[PLUGIN_IDS.index(spec.id)]
+        )
         if set(probs) != {"UP", "FLAT", "DOWN"} or any(
             not isinstance(v, (int, float)) or not math.isfinite(v)
             or v < -1e-12 or v > 1+1e-12 for v in probs.values()
@@ -268,9 +313,11 @@ def view(model: Model, revision: int = 0) -> dict[str, Any]:
             "slow_window": model.slow_window,
             "risk_fraction": model.risk_fraction,
             "plugin_weights": dict(zip(PLUGIN_IDS, model.plugin_weights)),
+            "plugin_strengths": dict(zip(PLUGIN_IDS, model.plugin_strengths)),
         },
         "plugins": [
             {**info, "weight_pct": model.plugin_weights[i],
+             "strength_pct": model.plugin_strengths[i],
              "prediction": {key: round(value, 6) for key, value in components[info["id"]].items()}}
             for i, info in enumerate(PLUGIN_INFO)
         ],

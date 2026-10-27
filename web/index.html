@@ -51,7 +51,7 @@ textarea:focus{border-color:var(--cyan)}
 .err{color:#ffb5ae;min-height:21px;font-size:13px;margin-top:8px}
 /* Sprint 4 plugin composer */
 .plugin-edit{border:1px solid #35536b;background:#0c1a2c;border-radius:12px;padding:12px;margin-top:12px}
-.plugin-field{display:grid;grid-template-columns:1fr 70px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #24364b}
+.plugin-field{display:grid;grid-template-columns:1fr 70px 70px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #24364b}
 .plugin-field:last-child{border:0}
 .plugin-label{font-size:13px;font-weight:700;display:block}
 .plugin-help{font-size:11px;color:var(--muted);display:block}
@@ -199,6 +199,8 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <div id="pluginFields"></div>
 <div class="plugin-summary"><strong id="pluginTotal">合計100%</strong><button id="pluginApply" type="button">重みを予測に反映</button></div>
 <div id="pluginMsg" role="status"></div>
+<div class="plugin-summary"><span class="mini">右側の数値は各分析の感度（50〜150、標準100）</span><button type="button" id="strengthApply">感度を反映</button></div>
+<div id="strengthMsg" class="mini" role="status"></div>
 <div class="controls"><button type="button" data-weight-preset="100,0,0,0">トレンドのみ</button><button type="button" data-weight-preset="50,30,20,0">バランス型</button><button type="button" data-weight-preset="20,70,10,0">勢い重視</button><button type="button" data-weight-preset="20,20,10,50">平均回帰重視</button></div>
 </div>
 </div>
@@ -229,7 +231,7 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <p class="mini" id="sha"></p>
 </section>
 </div>
-<footer>SPRINT 05 · すべてローカルで実行。合成価格・許可済みの分析プラグインのみ。実市場・実売買・任意コード実行・外部APIとの接続なし。</footer>
+<footer>SPRINT 06 · すべてローカルで実行。合成価格・許可済みの分析プラグインのみ。実市場・実売買・任意コード実行・外部APIとの接続なし。</footer>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -262,6 +264,8 @@ function paint(state, updateSource=true) {
   for(const info of pluginSpecs) {
     const field=$("weight-"+info.id);
     if(field) field.value=info.weight_pct;
+    const tuning=$("strength-"+info.id);
+    if(tuning) tuning.value=info.strength_pct;
   }
   updatePluginTotal();
   const auras=$("pluginAuras");
@@ -323,7 +327,16 @@ function ensurePluginFields(specs){
     input.value=String(info.weight_pct);
     input.setAttribute("aria-label",info.name+"の比率");
     input.addEventListener("input",updatePluginTotal);
-    label.append(left,input); root.appendChild(label);
+    const tuning=document.createElement("input");
+    const param=info.parameters?.find(p=>p.id==="strength_pct");
+    tuning.id="strength-"+info.id;
+    tuning.type="number"; tuning.min=String(param?.min??50);
+    tuning.max=String(param?.max??150);
+    tuning.step="5"; tuning.value=String(info.strength_pct??100);
+    tuning.title="感度。100が標準。50は弱く、150は強くする";
+    tuning.setAttribute("aria-label",info.name+"の感度");
+    tuning.addEventListener("input",updateStrengthValid);
+    label.append(left,input,tuning); root.appendChild(label);
   }
   root.dataset.pluginIds=ids;
 }
@@ -345,7 +358,31 @@ function updatePluginTotal(){
   $("pluginTotal").textContent=`合計 ${total}%`;
   $("pluginTotal").style.color=valid&&total===100?"#a5f8d5":"#ffb7a7";
   $("pluginApply").disabled=!valid||total!==100;
+  updateStrengthValid();
 }
+function readStrengths(){
+  const values={};
+  let valid=(latest?.plugins||[]).length>0;
+  for(const info of latest?.plugins||[]){
+    const field=$("strength-"+info.id),value=Number(field?.value);
+    if(!field || field.value==="" || !Number.isInteger(value) || value<50 || value>150)
+      valid=false;
+    values[info.id]=value;
+  }
+  return {values,valid};
+}
+function updateStrengthValid(){
+  const {valid}=readStrengths();
+  $("strengthApply").disabled=!valid;
+}
+$("strengthApply").addEventListener("click",async()=>{
+  const {values,valid}=readStrengths();
+  if(!valid){$("strengthMsg").textContent="感度は50〜150の整数で設定してください";return;}
+  try{
+    const updated=await api("/api/plugin-settings",{strengths:values,expected_revision:revision});
+    paint(updated);$("strengthMsg").textContent="感度を適用しました。Pythonの感度定数にも反映されています。";
+  }catch(e){$("strengthMsg").textContent=e.message;}
+});
 document.querySelectorAll("[data-weight-preset]").forEach(b=>b.addEventListener("click",()=>{
   const values=b.dataset.weightPreset.split(",").map(Number);
   const specs=latest?.plugins||[];
