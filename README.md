@@ -94,3 +94,14 @@ python3 -B app.py --port 8765
 - MCPに `configure_analysis_plugins(weights, expected_revision)` を追加。ID→整数重みのマップで、プラグイン数が変わっても同じ操作名を使える。古い `set_analysis_plugins` も互換維持。
 - テスト: `python3 -B -m unittest discover -s tests -v`、`cd mcp && npm test`。
 - GitHubへのpushは行わず、ローカルGitで作業履歴を管理する。
+
+## Sprint 06: プラグイン別感度とキャラ別モデル編成
+
+- 各登録済みプラグインに独立した `strength_pct`（50〜150、標準100）を追加。100ならSprint 5と同じ計算。50では均等確率へ近づけ、150では各プラグインの偏りを強める。結果は正規化する。これは演習用感度で、モデル精度の保証ではない。
+- `Model.plugin_strengths` は定数のみを受け付け、`with_plugin_strength_change` と `POST /api/plugin-settings` から変更。UIの分析欄に感度入力を追加し、`STRENGTH_...` がPythonプレビューへ同期する。
+- `local_state/versions.json` ではモデル名、期間、リスク、各分析重み、各感度をバージョン保存。Sprint 3/4/5の旧ハッシュは当時の生成形式で照合し、読み込み時にファイルを書き換えない。
+- `local_state/lineup.json` にはルナ（owl）・ミドリ（turtle）の保存モデルIDだけを、revision付きで原子的に保存。各枠は「標準」または任意の保存済みバージョンを参照する。自作キャラ（mine）は常に現在編集しているモデルを使う。
+- 練習シミュレーションでは、この編成に基づいて3体それぞれ独立したモデルが行動する。架空価格のみ、実売買・他人とのランキングなし。
+- `GET /api/lineup`、`POST /api/lineup` を追加。モデル自体と編成のrevisionは別管理で、不正な保存ID・古い編成revisionを拒否。
+- MCP操作に `set_plugin_strengths`、`get_character_lineup`、`assign_character_version` を追加。ChatGPT本体へのプラグイン接続はまだ行っていない。
+- 運用ルール：LinuxのローカルGitでコミット/マージ、GitHubのpushはユーザーに委ねる。既存株価予測V6へ書き込みしない。

@@ -60,7 +60,20 @@ class IndicatorSpec:
         return {
             "id": self.id, "name": self.name, "description": self.description,
             "accessory": self.accessory, "icon": self.icon,
+            "parameters": [{"id":"strength_pct","label":"感度",
+                            "min":50,"max":150,"default":100}],
         }
+
+
+def adjust_probability_strength(probs, strength):
+    # At 100 the historical plugin output remains byte-for-byte equivalent.
+    if strength == 100:
+        return probs
+    factor = strength / 100.0
+    keys = ("UP", "FLAT", "DOWN")
+    values = [max(0.0, 1.0/3.0 + (probs[key] - 1.0/3.0) * factor) for key in keys]
+    total = sum(values)
+    return {key: values[i] / total for i, key in enumerate(keys)}
 
 
 REGISTRY = (

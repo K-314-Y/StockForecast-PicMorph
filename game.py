@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import EYES, PLUGIN_IDS, Model, SYNTHETIC_PRICES, prediction, python_source, legacy_python_source, sprint4_python_source
+from engine import EYES, PLUGIN_IDS, Model, SYNTHETIC_PRICES, prediction, python_source, legacy_python_source, sprint4_python_source, sprint5_python_source
 
 ROOT = Path(__file__).resolve().parent
 SAVE_FILE = ROOT / "local_state" / "versions.json"
@@ -39,10 +39,16 @@ def parse_allocations(data: object) -> dict[str, int]:
     return {k: data[k] for k in SLOTS}
 
 
-def run_practice(current: Model, proposed: object) -> dict:
+def run_practice(current: Model, proposed: object, *, assigned: dict[str,Model] | None = None) -> dict:
     """Each individual pocket is long/cash-only. Never executes submitted code."""
     allocations = parse_allocations(proposed)
     models = {"mine": current, **PRESETS}
+    if assigned:
+        if not isinstance(assigned, dict) or set(assigned) - set(PRESETS):
+            raise ValueError("カスタム可能なのはルナ・ミドリ枠だけです")
+        if any(not isinstance(m, Model) for m in assigned.values()):
+            raise ValueError("キャラの予測モデルが不正です")
+        models.update(assigned)
     pockets = {
         k: {"cash": INITIAL_COINS * allocations[k] / 100.0,
             "units": 0.0, "fees": 0.0, "trades": 0,
@@ -129,6 +135,8 @@ def run_practice(current: Model, proposed: object) -> dict:
                 "trades": p["trades"],
                 "long_steps": p["long_steps"],
                 "risk_fraction": models[k].risk_fraction,
+                "plugin_weights": dict(zip(PLUGIN_IDS, models[k].plugin_weights)),
+                "plugin_strengths": dict(zip(PLUGIN_IDS, models[k].plugin_strengths)),
             }
             for k, p in pockets.items()
         },
@@ -172,6 +180,7 @@ def save_version(name: object, model: Model) -> dict:
             "slow_window": model.slow_window,
             "risk_fraction": model.risk_fraction,
             "plugin_weights": dict(zip(PLUGIN_IDS, model.plugin_weights)),
+            "plugin_strengths": dict(zip(PLUGIN_IDS, model.plugin_strengths)),
         },
         "sha256": hashlib.sha256(python_source(model).encode()).hexdigest(),
     }
@@ -200,9 +209,13 @@ def load_version(version_id: object) -> Model:
         raise ValueError("指定されたバージョンはありません")
     data = dict(entry["model"])
     weights = data.pop("plugin_weights", None)
+    strengths = data.pop("plugin_strengths", None)
+    if strengths is not None and (not isinstance(strengths, dict) or set(strengths) != set(PLUGIN_IDS)):
+        raise ValueError("感度設定の保存形式が不正です")
+    strength_tuple = tuple(strengths[k] for k in PLUGIN_IDS) if strengths is not None else (100,) * len(PLUGIN_IDS)
     if weights is None:
         # Sprint-3 versions lack plugin metadata; keep their old hash valid.
-        result = Model(**data)
+        result = Model(**data, plugin_strengths=strength_tuple)
     elif isinstance(weights, dict):
         # Sprint-4 had three indicators. Missing *only* reversion means zero.
         prior_ids = tuple(k for k in PLUGIN_IDS if k != "reversion")
@@ -213,7 +226,7 @@ def load_version(version_id: object) -> Model:
             sprint4_model = False
         else:
             raise ValueError("プラグイン設定の保存形式が不正です")
-        result = Model(**data, plugin_weights=tuple(weights[k] for k in PLUGIN_IDS))
+        result = Model(**data, plugin_weights=tuple(weights[k] for k in PLUGIN_IDS), plugin_strengths=strength_tuple)
     else:
         raise ValueError("プラグイン設定の保存形式が不正です")
     current_sha = hashlib.sha256(python_source(result).encode()).hexdigest()
@@ -223,6 +236,8 @@ def load_version(version_id: object) -> Model:
         allowed_sha.add(old_sha)
     elif sprint4_model:
         allowed_sha.add(hashlib.sha256(sprint4_python_source(result).encode()).hexdigest())
+    if strengths is None:
+        allowed_sha.add(hashlib.sha256(sprint5_python_source(result).encode()).hexdigest())
     if entry["sha256"] not in allowed_sha:
         raise ValueError("保存データの改ざんまたは破損を検知しました")
     return result

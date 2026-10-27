@@ -70,9 +70,11 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <div class="slot" data-slot="mine"><div class="head"><span class="avatar mine">✨</span><div><div class="title">あなたのキャラ <span id="myType" style="color:#84d9e2;font-weight:400"></span></div><div class="desc" id="myDesc">キャラクター編集画面のモデルが使われます</div></div></div>
 <div class="slider-row"><input type="range" min="0" max="100" step="5" value="40" id="mine" aria-label="自分のキャラへの配分"><output id="mineOut">40%</output></div></div>
 <div class="slot" data-slot="owl"><div class="head"><span class="avatar owl">🌙</span><div><div class="title">ルナ</div><div class="desc">5日／12日の移動平均・運用リスク上限50%</div></div></div>
-<div class="slider-row"><input type="range" min="0" max="100" step="5" value="30" id="owl" aria-label="ルナへの配分"><output id="owlOut">30%</output></div></div>
+<div class="slider-row"><input type="range" min="0" max="100" step="5" value="30" id="owl" aria-label="ルナへの配分"><output id="owlOut">30%</output></div>
+<div class="actions"><select id="assignment-owl" aria-label="ルナに装備する保存モデル"><option value="">標準モデル</option></select><button type="button" data-assign-slot="owl">装備</button></div><small id="assignment-status-owl">標準モデル</small></div>
 <div class="slot" data-slot="turtle"><div class="head"><span class="avatar turtle">🍀</span><div><div class="title">ミドリ</div><div class="desc">8日／20日の移動平均・運用リスク上限25%</div></div></div>
-<div class="slider-row"><input type="range" min="0" max="100" step="5" value="20" id="turtle" aria-label="ミドリへの配分"><output id="turtleOut">20%</output></div></div>
+<div class="slider-row"><input type="range" min="0" max="100" step="5" value="20" id="turtle" aria-label="ミドリへの配分"><output id="turtleOut">20%</output></div>
+<div class="actions"><select id="assignment-turtle" aria-label="ミドリに装備する保存モデル"><option value="">標準モデル</option></select><button type="button" data-assign-slot="turtle">装備</button></div><small id="assignment-status-turtle">標準モデル</small></div>
 </div>
 <div class="line"></div>
 <div class="topstats">
@@ -115,11 +117,11 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <p id="resultDetails" class="muted" style="margin-top:15px"></p>
 <div class="important">結果は固定された12日分の架空価格を使った練習の数字。過去の結果であり将来の利益を示さず、Brier Scoreや実際の予測精度の検証でもありません。</div>
 </section>
-<footer>SPRINT 03 · Creature Lab / 開発用ローカルゲーム。実市場価格、現金決済、資金の換金、広告、ランキング、売買APIは一切ありません。</footer>
+<footer>SPRINT 06 · Creature Lab / 開発用ローカルゲーム。実市場価格、現金決済、資金の換金、広告、ランキング、売買APIは一切ありません。</footer>
 </div>
 <script>
 const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
-let revision=-1;
+let revision=-1,lineupRevision=-1;
 async function call(path,data){
   const response=await fetch(path,data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
   const body=await response.json();
@@ -148,7 +150,8 @@ function renderModel(s){
   $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}% / ${active}`;
 }
 async function refresh(){
-  const [state,stored]=await Promise.all([call("/api/state"),call("/api/versions")]);
+  const [state,stored,lineup]=await Promise.all([call("/api/state"),call("/api/versions"),call("/api/lineup")]);
+  lineupRevision=lineup.revision;
   renderModel(state);
   const previous=$("versionList").value;
   $("versionList").replaceChildren();
@@ -160,7 +163,34 @@ async function refresh(){
   }
   if(!stored.versions.length){const option=document.createElement("option");option.value="";option.textContent="保存データなし";$("versionList").append(option)}
   if([...$("versionList").options].some(o=>o.value===previous))$("versionList").value=previous;
+  for(const slot of ["owl","turtle"]){
+    const selector=$("assignment-"+slot);
+    selector.replaceChildren();
+    const standard=document.createElement("option");
+    standard.value="";standard.textContent="標準モデル";selector.append(standard);
+    for(const v of stored.versions){
+      const option=document.createElement("option");
+      option.value=v.id;option.textContent=v.name+" ("+v.model.fast_window+"/"+v.model.slow_window+"日)";
+      selector.append(option);
+    }
+    selector.value=lineup.assignments[slot]||"";
+    const modelInfo=lineup.slots.find(s=>s.slot===slot);
+    $("assignment-status-"+slot).textContent=modelInfo.name+" を使用中";
+  }
 }
+document.querySelectorAll("[data-assign-slot]").forEach(button=>button.addEventListener("click",async()=>{
+  const slot=button.dataset.assignSlot;
+  const label=$("assignment-status-"+slot);
+  try{
+    const changed=await call("/api/lineup",{
+      slot,version_id:$("assignment-"+slot).value||null,
+      expected_lineup_revision:lineupRevision
+    });
+    lineupRevision=changed.revision;
+    await refresh();
+    label.textContent+=" ✓";
+  }catch(e){label.textContent="装備失敗: "+e.message;}
+}));
 function plot(a,b){
   const min=Math.min(...a,...b),max=Math.max(...a,...b),lo=min-(max-min)*.13-1,hi=max+(max-min)*.13+1;
   const point=(v,i,amount)=>[(24+902*i/(amount-1)).toFixed(1),(245-220*(v-lo)/(hi-lo)).toFixed(1)].join(",");

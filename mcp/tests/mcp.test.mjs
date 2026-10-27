@@ -22,7 +22,7 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
   try {
     const tools=await client.listTools();
     const names=tools.tools.map(x=>x.name);
-    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins"]){
+    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins","set_plugin_strengths","get_character_lineup","assign_character_version"]){
       assert.ok(names.includes(name),`missing tool: ${name}`);
     }
     const catalog=await call("list_creature_parts");
@@ -33,6 +33,9 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     assert.equal(practice.structuredContent.result.steps,12);
     const pluginCatalog=await call("list_analysis_plugins");
     assert.equal(pluginCatalog.structuredContent.plugins.length,4);
+    const roster=await call("get_character_lineup");
+    assert.equal(roster.isError,undefined);
+    assert.equal(roster.structuredContent.lineup.slots.length,2);
     const savedModels=await call("list_saved_models");
     assert.ok(!savedModels.isError);
     assert.ok(Array.isArray(savedModels.structuredContent.versions));
@@ -95,6 +98,13 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     });
     assert.equal(missing.isError,true);
     assert.equal((await state()).revision,current.revision);
+    edited=await call("set_plugin_strengths",{
+      strengths:{trend:130,momentum:90,volatility:100,reversion:120},
+      expected_revision:current.revision,
+    });
+    assert.ok(!edited.isError);
+    current=edited.structuredContent.state;
+    assert.equal(current.model.plugin_strengths.trend,130);
     const stale=await call("set_eye",{eye:"owl",expected_revision:original.revision});
     assert.equal(stale.isError,true);
     assert.match(stale.content[0].text,/revision|409/);
@@ -124,6 +134,11 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
         weights,expected_revision:restore.structuredContent.state.revision,
       });
       assert.ok(!back.isError,`plugin restore failed: ${JSON.stringify(back)}`);
+      const oldStrengths=original.model.plugin_strengths;
+      const backSettings=await call("set_plugin_strengths",{
+        strengths:oldStrengths,expected_revision:back.structuredContent.state.revision
+      });
+      assert.ok(!backSettings.isError,`strength restore failed: ${JSON.stringify(backSettings)}`);
     }
     await client.close();
   }
