@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import EYES, PLUGIN_IDS, Model, SYNTHETIC_PRICES, prediction, python_source, legacy_python_source
+from engine import EYES, PLUGIN_IDS, Model, SYNTHETIC_PRICES, prediction, python_source, legacy_python_source, sprint4_python_source
 
 ROOT = Path(__file__).resolve().parent
 SAVE_FILE = ROOT / "local_state" / "versions.json"
@@ -203,7 +203,16 @@ def load_version(version_id: object) -> Model:
     if weights is None:
         # Sprint-3 versions lack plugin metadata; keep their old hash valid.
         result = Model(**data)
-    elif isinstance(weights, dict) and set(weights) == set(PLUGIN_IDS):
+    elif isinstance(weights, dict):
+        # Sprint-4 had three indicators. Missing *only* reversion means zero.
+        prior_ids = tuple(k for k in PLUGIN_IDS if k != "reversion")
+        if set(weights) == set(prior_ids):
+            weights = {**weights, "reversion": 0}
+            sprint4_model = True
+        elif set(weights) == set(PLUGIN_IDS):
+            sprint4_model = False
+        else:
+            raise ValueError("プラグイン設定の保存形式が不正です")
         result = Model(**data, plugin_weights=tuple(weights[k] for k in PLUGIN_IDS))
     else:
         raise ValueError("プラグイン設定の保存形式が不正です")
@@ -212,6 +221,8 @@ def load_version(version_id: object) -> Model:
     allowed_sha = {current_sha}
     if weights is None:
         allowed_sha.add(old_sha)
+    elif sprint4_model:
+        allowed_sha.add(hashlib.sha256(sprint4_python_source(result).encode()).hexdigest())
     if entry["sha256"] not in allowed_sha:
         raise ValueError("保存データの改ざんまたは破損を検知しました")
     return result

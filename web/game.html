@@ -144,7 +144,8 @@ function renderModel(s){
   const labels={falcon:"アカリ / 短期",owl:"ルナ / 中期",turtle:"ミドリ / 長期",custom:"オリジナル"};
   $("currentModel").textContent=labels[s.visual.eye]||"オリジナル";
   $("myType").textContent="("+$("currentModel").textContent+")";
-  $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}%`;
+  const active=(s.plugins||[]).filter(p=>p.weight_pct>0).map(p=>p.name+":"+p.weight_pct+"%").join(" / ");
+  $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}% / ${active}`;
 }
 async function refresh(){
   const [state,stored]=await Promise.all([call("/api/state"),call("/api/versions")]);

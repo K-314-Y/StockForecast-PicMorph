@@ -193,15 +193,13 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <p class="small-note" id="eyeDesc">モデルの短期・長期移動平均期間とつながっています。</p>
 </div>
 <div class="section">
-<div class="row"><h3>分析プラグインを組み合わせる</h3><span class="tag">3 INDICATORS</span></div>
-<p class="small-note">3つの分析結果を重み付きで合成。合計100%にして適用します。コードの重み定数とも双方向同期します。</p>
+<div class="row"><h3>分析プラグインを組み合わせる</h3><span class="tag">PLUGIN REGISTRY</span></div>
+<p class="small-note">登録済みの分析結果を重み付きで合成。合計100%にして適用します。コードの重み定数とも双方向同期します。</p>
 <div class="plugin-edit">
-<label class="plugin-field"><span><span class="plugin-label">📡 トレンド</span><span class="plugin-help">短期・長期の移動平均</span></span><input id="weightTrend" type="number" min="0" max="100" step="5" value="100" aria-label="トレンドの比率"></label>
-<label class="plugin-field"><span><span class="plugin-label">⚡ モメンタム</span><span class="plugin-help">直近の値上がり・値下がりの勢い</span></span><input id="weightMomentum" type="number" min="0" max="100" step="5" value="0" aria-label="モメンタムの比率"></label>
-<label class="plugin-field"><span><span class="plugin-label">🌫️ ボラティリティ</span><span class="plugin-help">値動きの幅から横ばいを評価</span></span><input id="weightVolatility" type="number" min="0" max="100" step="5" value="0" aria-label="ボラティリティの比率"></label>
+<div id="pluginFields"></div>
 <div class="plugin-summary"><strong id="pluginTotal">合計100%</strong><button id="pluginApply" type="button">重みを予測に反映</button></div>
 <div id="pluginMsg" role="status"></div>
-<div class="controls"><button type="button" data-weight-preset="100,0,0">トレンドのみ</button><button type="button" data-weight-preset="50,30,20">バランス型</button><button type="button" data-weight-preset="20,70,10">勢い重視</button></div>
+<div class="controls"><button type="button" data-weight-preset="100,0,0,0">トレンドのみ</button><button type="button" data-weight-preset="50,30,20,0">バランス型</button><button type="button" data-weight-preset="20,70,10,0">勢い重視</button><button type="button" data-weight-preset="20,20,10,50">平均回帰重視</button></div>
 </div>
 </div>
 <div class="section">
@@ -231,7 +229,7 @@ footer{font-size:12px;color:#91a8b9;padding-top:20px}
 <p class="mini" id="sha"></p>
 </section>
 </div>
-<footer>SPRINT 04 · すべてローカルで実行。合成価格・許可済みの分析プラグインのみ。実市場・実売買・任意コード実行・外部APIとの接続なし。</footer>
+<footer>SPRINT 05 · すべてローカルで実行。合成価格・許可済みの分析プラグインのみ。実市場・実売買・任意コード実行・外部APIとの接続なし。</footer>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -259,18 +257,20 @@ function paint(state, updateSource=true) {
   };
   const look = looks[v.eye] || looks.custom;
   $("portraitStage").dataset.style=v.eye;
-  const weights=m.plugin_weights || {trend:100,momentum:0,volatility:0};
-  for(const [id,key] of [["weightTrend","trend"],["weightMomentum","momentum"],["weightVolatility","volatility"]])
-    $(id).value=weights[key];
+  const pluginSpecs=state.plugins || [];
+  ensurePluginFields(pluginSpecs);
+  for(const info of pluginSpecs) {
+    const field=$("weight-"+info.id);
+    if(field) field.value=info.weight_pct;
+  }
   updatePluginTotal();
-  const symbols={trend:"📡",momentum:"⚡",volatility:"🌫️"};
   const auras=$("pluginAuras");
   auras.replaceChildren();
-  for(const info of state.plugins || []){
+  for(const info of pluginSpecs) {
     if(info.weight_pct<=0)continue;
     const mark=document.createElement("span");
     mark.className="plugin-aura";
-    mark.textContent=`${symbols[info.id]||"✦"} ${info.name} ${info.weight_pct}%`;
+    mark.textContent=`${info.icon||"✦"} ${info.name} ${info.weight_pct}%`;
     auras.appendChild(mark);
   }
   $("characterName").textContent=look.name;
@@ -306,11 +306,39 @@ function paint(state, updateSource=true) {
   $("status").textContent="同期しました。絵と予測計算は同じモデル設定を参照しています。";
   $("error").textContent="";
 }
+function ensurePluginFields(specs){
+  const root=$("pluginFields");
+  const ids=specs.map(x=>x.id).join(",");
+  if(root.dataset.pluginIds===ids) return;
+  root.replaceChildren();
+  for(const info of specs){
+    const label=document.createElement("label"); label.className="plugin-field";
+    const left=document.createElement("span"), title=document.createElement("span"), help=document.createElement("span");
+    title.className="plugin-label";
+    title.textContent=`${info.icon||"✦"} ${info.name}`;
+    help.className="plugin-help"; help.textContent=info.description;
+    left.append(title,help);
+    const input=document.createElement("input");
+    input.id="weight-"+info.id; input.type="number"; input.min="0"; input.max="100"; input.step="5";
+    input.value=String(info.weight_pct);
+    input.setAttribute("aria-label",info.name+"の比率");
+    input.addEventListener("input",updatePluginTotal);
+    label.append(left,input); root.appendChild(label);
+  }
+  root.dataset.pluginIds=ids;
+}
 function readPluginWeights(){
-  const ids=[["weightTrend","trend"],["weightMomentum","momentum"],["weightVolatility","volatility"]];
-  const values=Object.fromEntries(ids.map(([id,key])=>[key,Number($(id).value)]));
-  const valid=ids.every(([id,key])=>$(id).value!=="" && Number.isInteger(values[key]) && values[key]>=0 && values[key]<=100);
-  return {values,valid,total:Object.values(values).reduce((a,b)=>a+b,0)};
+  const specs=latest?.plugins || [];
+  const values={}, valid=specs.length>0;
+  let allValid=valid;
+  for(const info of specs) {
+    const field=$("weight-"+info.id);
+    const n=Number(field?.value);
+    if(!field || field.value==="" || !Number.isInteger(n) || n<0 || n>100)
+      allValid=false;
+    values[info.id]=n;
+  }
+  return {values,valid:allValid,total:Object.values(values).reduce((a,b)=>a+b,0)};
 }
 function updatePluginTotal(){
   const {valid,total}=readPluginWeights();
@@ -318,11 +346,11 @@ function updatePluginTotal(){
   $("pluginTotal").style.color=valid&&total===100?"#a5f8d5":"#ffb7a7";
   $("pluginApply").disabled=!valid||total!==100;
 }
-for(const id of ["weightTrend","weightMomentum","weightVolatility"])
-  $(id).addEventListener("input",updatePluginTotal);
 document.querySelectorAll("[data-weight-preset]").forEach(b=>b.addEventListener("click",()=>{
   const values=b.dataset.weightPreset.split(",").map(Number);
-  ["weightTrend","weightMomentum","weightVolatility"].forEach((id,i)=>$(id).value=values[i]);
+  const specs=latest?.plugins||[];
+  if(values.length!==specs.length)return;
+  specs.forEach((info,i)=>$("weight-"+info.id).value=values[i]);
   updatePluginTotal();
 }));
 $("pluginApply").addEventListener("click",async()=>{

@@ -69,7 +69,7 @@ class GameTests(unittest.TestCase):
     def test_nondefault_plugin_changes_paper_trading(self):
         trend=game.run_practice(Model(),{"mine":100,"owl":0,"turtle":0})
         mixed=game.run_practice(Model(
-            3,9,.35,(20,70,10)
+            3,9,.35,(20,70,10,0)
         ),{"mine":100,"owl":0,"turtle":0})
         self.assertNotEqual(trend["model_sha256"],mixed["model_sha256"])
         self.assertNotEqual(trend["equity_path"],mixed["equity_path"])

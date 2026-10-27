@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import math
+from indicators import REGISTRY, IDS, registry_info
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,13 +21,9 @@ SYNTHETIC_PRICES = (
     96, 98, 99, 101, 103, 102, 104, 107, 106, 109,
 )
 EYES = {"falcon": (3, 9), "owl": (5, 12), "turtle": (8, 20)}
-PLUGIN_IDS = ("trend", "momentum", "volatility")
-PLUGIN_INFO = (
-    {"id": "trend", "name": "トレンド", "description": "2本の移動平均で方向を判定", "accessory": "lens"},
-    {"id": "momentum", "name": "モメンタム", "description": "直近の価格変化で方向を判定", "accessory": "spark"},
-    {"id": "volatility", "name": "ボラティリティ", "description": "直近の変動幅から横ばい確率を推定", "accessory": "halo"},
-)
-DEFAULT_WEIGHTS = (100, 0, 0)
+PLUGIN_IDS = IDS
+PLUGIN_INFO = registry_info()
+DEFAULT_WEIGHTS = (100,) + (0,) * (len(REGISTRY) - 1)
 
 
 @dataclass(frozen=True)
@@ -33,7 +31,7 @@ class Model:
     fast_window: int = 3
     slow_window: int = 9
     risk_fraction: float = 0.35
-    plugin_weights: tuple[int, int, int] = DEFAULT_WEIGHTS
+    plugin_weights: tuple[int, ...] = DEFAULT_WEIGHTS
 
     def __post_init__(self) -> None:
         if type(self.fast_window) is not int or type(self.slow_window) is not int:
@@ -44,7 +42,7 @@ class Model:
             raise ValueError("リスク比率は有限の数値で指定してください")
         if not (0.05 <= self.risk_fraction <= 1.0):
             raise ValueError("リスク比率は 0.05〜1.0 にしてください")
-        if not isinstance(self.plugin_weights, tuple) or len(self.plugin_weights) != 3 or any(
+        if not isinstance(self.plugin_weights, tuple) or len(self.plugin_weights) != len(PLUGIN_IDS) or any(
             type(w) is not int or not 0 <= w <= 100 for w in self.plugin_weights
         ) or sum(self.plugin_weights) != 100:
             raise ValueError("プラグイン重みは0〜100の整数で合計100%にしてください")
@@ -68,7 +66,7 @@ def forecast(prices):
     return {{"UP": up, "FLAT": flat, "DOWN": down}}
 '''
 
-SOURCE_TEMPLATE = '''# Declarative indicator composition. Only numeric constants are editable.
+SPRINT4_SOURCE_TEMPLATE = '''# Declarative indicator composition. Only numeric constants are editable.
 # All three indicators use the same past prices, not future candles.
 FAST_WINDOW = {fast}
 SLOW_WINDOW = {slow}
@@ -110,8 +108,36 @@ def _format(source_template: str, model: Model) -> str:
     )
 
 
+def sprint4_python_source(model: Model) -> str:
+    """Bit-for-bit historical preview for archived Sprint-4 SHA checks."""
+    return _format(SPRINT4_SOURCE_TEMPLATE, model)
+
+
 def python_source(model: Model) -> str:
-    return _format(SOURCE_TEMPLATE, model)
+    """Generate displayable working Python using audited local indicators.
+
+    Every built-in function is checked into indicators.py. User submissions
+    are parsed and compared against its AST, never executed.
+    """
+    header = [
+        "# Creature Lab model preview. Edit numeric constants only.",
+        "FAST_WINDOW = " + str(model.fast_window),
+        "SLOW_WINDOW = " + str(model.slow_window),
+        "RISK_FRACTION = " + format(model.risk_fraction, ".4g"),
+    ]
+    header += ["WEIGHT_" + spec.id.upper() + " = " + str(model.plugin_weights[i])
+               for i, spec in enumerate(REGISTRY)]
+    functions = [inspect.getsource(spec.evaluate).strip() for spec in REGISTRY]
+    lines = ["def forecast(prices):"]
+    for spec in REGISTRY:
+        lines.append("    p_" + spec.id + " = " + spec.evaluate.__name__
+                     + "(prices, FAST_WINDOW, SLOW_WINDOW)")
+    for cls in ("UP", "FLAT"):
+        terms = ["WEIGHT_" + spec.id.upper() + " * p_" + spec.id + '["' + cls + '"]'
+                 for spec in REGISTRY]
+        lines.append("    " + cls.lower() + " = (" + " + ".join(terms) + ") / 100")
+    lines.append('    return {"UP": up, "FLAT": flat, "DOWN": max(0.0, 1.0 - up - flat)}')
+    return "\n".join(header) + "\n\n\n" + "\n\n\n".join(functions) + "\n\n\n" + "\n".join(lines) + "\n"
 
 
 def legacy_python_source(model: Model) -> str:
@@ -119,43 +145,45 @@ def legacy_python_source(model: Model) -> str:
 
 
 def model_from_python(source: str) -> Model:
-    """Accept only numeric constants and an AST-identical known forecast function.
-
-    Never eval, compile, exec, or import the user's submitted source.
-    """
-    if not isinstance(source, str) or len(source) > 6000:
+    """AST-only parsing: model values can change, function bodies cannot."""
+    if not isinstance(source, str) or len(source) > 14000:
         raise ValueError("ソースコードのサイズが不正です")
     try:
         parsed = ast.parse(source)
     except SyntaxError as exc:
         raise ValueError("Pythonの構文を確認してください") from exc
-    expected = ast.parse(python_source(Model()))
-    names = (
-        "FAST_WINDOW", "SLOW_WINDOW", "RISK_FRACTION",
-        "WEIGHT_TREND", "WEIGHT_MOMENTUM", "WEIGHT_VOLATILITY",
+
+    # Read old editor drafts without upgrading their function code unsafely.
+    versions = (
+        (ast.parse(python_source(Model())),
+         ("FAST_WINDOW", "SLOW_WINDOW", "RISK_FRACTION") +
+         tuple("WEIGHT_" + k.upper() for k in PLUGIN_IDS)),
+        (ast.parse(sprint4_python_source(Model())),
+         ("FAST_WINDOW", "SLOW_WINDOW", "RISK_FRACTION",
+          "WEIGHT_TREND", "WEIGHT_MOMENTUM", "WEIGHT_VOLATILITY")),
     )
-    if len(parsed.body) != len(expected.body):
-        raise ValueError("試作版では数値定数の編集のみ対応しています")
-    assignments = {}
-    for index, name in enumerate(names):
-        node = parsed.body[index]
-        if (not isinstance(node, ast.Assign) or len(node.targets) != 1
-            or not isinstance(node.targets[0], ast.Name) or node.targets[0].id != name
-            or not isinstance(node.value, ast.Constant)
-            or type(node.value.value) not in (int, float)):
-            raise ValueError("定数の名前と数値だけ変更できます")
-        assignments[name] = node.value.value
-    for index in range(len(names), len(parsed.body)):
-        if ast.dump(parsed.body[index], include_attributes=False) != ast.dump(
-            expected.body[index], include_attributes=False
-        ):
-            raise ValueError("予測関数本体の変更はこの試作版ではできません")
-    return Model(
-        fast_window=assignments["FAST_WINDOW"],
-        slow_window=assignments["SLOW_WINDOW"],
-        risk_fraction=assignments["RISK_FRACTION"],
-        plugin_weights=tuple(assignments["WEIGHT_" + key.upper()] for key in PLUGIN_IDS),
-    )
+    for expected, names in versions:
+        if len(parsed.body) != len(expected.body):
+            continue
+        values = {}
+        for index, name in enumerate(names):
+            node = parsed.body[index]
+            if (not isinstance(node, ast.Assign) or len(node.targets) != 1
+                or not isinstance(node.targets[0], ast.Name) or node.targets[0].id != name
+                or not isinstance(node.value, ast.Constant)
+                or type(node.value.value) not in (int, float)):
+                break
+            values[name] = node.value.value
+        else:
+            if all(
+                ast.dump(parsed.body[i], include_attributes=False) ==
+                ast.dump(expected.body[i], include_attributes=False)
+                for i in range(len(names), len(parsed.body))
+            ):
+                weights = tuple(values.get("WEIGHT_" + k.upper(), 0) for k in PLUGIN_IDS)
+                return Model(values["FAST_WINDOW"], values["SLOW_WINDOW"],
+                             values["RISK_FRACTION"], weights)
+    raise ValueError("数値定数のみ編集可能です。予測関数の変更や未知のプラグインは使えません")
 
 
 def with_visual_change(current: Model, *, eye: str | None = None, risk: Any = None) -> Model:
@@ -170,7 +198,7 @@ def with_visual_change(current: Model, *, eye: str | None = None, risk: Any = No
 
 def with_plugin_change(current: Model, weights: object) -> Model:
     if not isinstance(weights, dict) or set(weights) != set(PLUGIN_IDS):
-        raise ValueError("登録済みの3つのプラグイン重みを指定してください")
+        raise ValueError("登録済みプラグインの重みをすべて指定してください")
     return Model(current.fast_window, current.slow_window,
                  current.risk_fraction, tuple(weights[k] for k in PLUGIN_IDS))
 
@@ -180,28 +208,16 @@ def prediction_components(model: Model, prices: tuple[int, ...] = SYNTHETIC_PRIC
         type(v) in (int, float) and math.isfinite(v) and v > 0 for v in prices
     ):
         raise ValueError("利用できる合成データが不足しています")
-    fast = sum(prices[-model.fast_window:]) / model.fast_window
-    slow = sum(prices[-model.slow_window:]) / model.slow_window
-    delta = fast / slow - 1.0
-    strength = max(-1.0, min(1.0, delta / .06))
-    flat_t = .20 + .20 * (1.0 - abs(strength))
-    up_t = (1.0 - flat_t) * (strength + 1.0) / 2.0
-
-    roc = prices[-1] / prices[-model.fast_window - 1] - 1.0
-    mom = max(-1.0, min(1.0, roc / .08))
-    flat_m = .15 + .25 * (1.0 - abs(mom))
-    up_m = (1.0 - flat_m) * (mom + 1.0) / 2.0
-
-    recent = prices[-model.slow_window:]
-    vol = sum(abs(recent[i] / recent[i-1] - 1.0)
-              for i in range(1, len(recent))) / (len(recent) - 1)
-    flat_v = max(.15, min(.60, .60 - 10.0 * vol))
-    up_v = (1.0 - flat_v) / 2.0
-    return {
-        "trend": {"UP": up_t, "FLAT": flat_t, "DOWN": max(0.0, 1.0 - up_t - flat_t)},
-        "momentum": {"UP": up_m, "FLAT": flat_m, "DOWN": max(0.0, 1.0 - up_m - flat_m)},
-        "volatility": {"UP": up_v, "FLAT": flat_v, "DOWN": max(0.0, 1.0 - up_v - flat_v)},
-    }
+    result = {}
+    for spec in REGISTRY:
+        probs = spec.evaluate(prices, model.fast_window, model.slow_window)
+        if set(probs) != {"UP", "FLAT", "DOWN"} or any(
+            not isinstance(v, (int, float)) or not math.isfinite(v)
+            or v < -1e-12 or v > 1+1e-12 for v in probs.values()
+        ) or not math.isclose(sum(probs.values()), 1, abs_tol=1e-9):
+            raise ValueError("分析プラグインの出力確率が不正です: " + spec.id)
+        result[spec.id] = probs
+    return result
 
 
 def prediction(model: Model, prices: tuple[int, ...] = SYNTHETIC_PRICES) -> dict[str, float]:
