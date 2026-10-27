@@ -13,6 +13,7 @@ from game import read_versions, save_version, load_version, run_practice
 from lineup import lineup_snapshot, assign_model, effective_models
 from game import PRESETS
 from growth import public_growth, complete_training, equip, equipped_models
+from challenge import public_scenarios, run_challenge
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -64,6 +65,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/growth":
             with LOCK:
                 self._json(200, public_growth())
+        elif path == "/api/challenge/scenarios":
+            self._json(200, {"scenarios": public_scenarios()})
         else:
             self._json(404, {"error": "見つかりません"})
 
@@ -123,6 +126,18 @@ class Handler(BaseHTTPRequestHandler):
                     changed = assign_model(payload["slot"],payload["version_id"],
                                            payload["expected_lineup_revision"])
                     self._json(200, changed)
+                    return
+                elif path == "/api/challenge/run":
+                    if set(payload) != {"scenario_id"}:
+                        raise ValueError("scenario_idだけ指定してください")
+                    models = equipped_models({
+                        "mine": STATE["model"], **PRESETS, **effective_models()
+                    })
+                    outcome = run_challenge(payload["scenario_id"], models)
+                    outcome["source_revision"] = STATE["revision"]
+                    outcome["lineup_revision"] = lineup_snapshot()["revision"]
+                    outcome["growth_revision"] = public_growth()["revision"]
+                    self._json(200, outcome)
                     return
                 elif path == "/api/training/complete":
                     if set(payload) != {"allocations","expected_growth_revision"}:
