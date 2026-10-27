@@ -105,3 +105,12 @@ python3 -B app.py --port 8765
 - `GET /api/lineup`、`POST /api/lineup` を追加。モデル自体と編成のrevisionは別管理で、不正な保存ID・古い編成revisionを拒否。
 - MCP操作に `set_plugin_strengths`、`get_character_lineup`、`assign_character_version` を追加。ChatGPT本体へのプラグイン接続はまだ行っていない。
 - 運用ルール：LinuxのローカルGitでコミット/マージ、GitHubのpushはユーザーに委ねる。既存株価予測V6へ書き込みしない。
+
+## Sprint 07：チュートリアル育成・キャラ装備
+
+- `growth.py` でローカルの育成進捗と装備を管理。保存場所はGit管理対象外の `local_state/growth.json`。保存済みモデルやV6のファイルには触れない。
+- 初参加20XP、2体以上へ配分10XP、配分合計100%で10XP。**各実績は各キャラ一度きり**で最大40XP。XPは運用損益・的中率・相場に連動しない。Lv1→Lv2(20XP)→Lv3(40XP)はゲーム表示用。
+- 装備なし、集中レンズ(20XP、トレンド感度+10)、ひらめきの飾り(30XP、モメンタム感度+15)、静寂の輪(40XP、ボラティリティ感度+15)。上限150で補正。装備効果は**架空相場の練習実行時のみ**に反映し、元の予測モデル・保存モデルを変更しない。精度向上を意味しない。
+- `GET /api/growth` で育成状態を確認。`POST /api/training/complete` はサーバー側で練習計算し、明示的操作のときにのみ実績を登録。`POST /api/growth/equip` で装備を選ぶ。すべてローカル、revision競合保護・原子的ファイル保存あり。
+- `POST /api/practice` は従来通り読み取り専用。編成モデルに装備補正を適用したシミュレーションを実行。`characters.*.effective_sha256` で使用した一時モデルを区別。
+- `/game` で経験値・レベル・装備の選択、練習後にXP取得。MCPの `get_creature_growth`、`complete_creature_training`、`equip_creature_gear` も利用できる（ChatGPTアプリ登録は未実施）。

@@ -82,6 +82,8 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <div class="stat"><span>未配分の現金</span><strong id="idle">1,000</strong></div>
 </div>
 <div class="actions"><button id="simulate" class="main">▶ 12日間の練習を開始</button><small>何度でも検証できます</small></div>
+<div class="actions"><button id="claimTraining" type="button" disabled>★ この配分で育成課題を達成</button><small>参加実績にのみXP。利益や的中率では増えません。</small></div>
+<p class="muted" id="trainingMessage" role="status" style="font-size:12px"></p>
 <div id="simError" class="error" role="alert"></div>
 <div class="important">配分先は別々のキャラクターですが、3体とも同じ架空資産を分析します。資産分散にはなりません。先読みや後出しランキングのない実運用テストでもありません。</div>
 </section>
@@ -104,8 +106,14 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <a href="/" style="font-size:13px">キャラクターの外見・Python数値を編集する</a>
 </section>
 </div>
+<section class="card" style="margin-top:22px" id="growthSection">
+<h2>03 キャラ育成と装備</h2>
+<p class="muted" style="font-size:13px">練習課題の達成ごとに一度だけ経験値を獲得。装備は次の架空シミュレーションの分析感度を変えます。現実の予測能力が上がるわけではありません。</p>
+<div id="growthCards" class="slots" aria-live="polite"></div>
+<p id="gearMessage" class="muted" role="status" style="font-size:12px"></p>
+</section>
 <section id="result" class="card result" aria-live="polite">
-<h2>03 練習結果</h2>
+<h2>04 練習結果</h2>
 <div class="results">
 <div><span>最終資金</span><strong id="final">--</strong></div>
 <div><span>損益</span><strong id="profit">--</strong></div>
@@ -117,11 +125,11 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <p id="resultDetails" class="muted" style="margin-top:15px"></p>
 <div class="important">結果は固定された12日分の架空価格を使った練習の数字。過去の結果であり将来の利益を示さず、Brier Scoreや実際の予測精度の検証でもありません。</div>
 </section>
-<footer>SPRINT 06 · Creature Lab / 開発用ローカルゲーム。実市場価格、現金決済、資金の換金、広告、ランキング、売買APIは一切ありません。</footer>
+<footer>SPRINT 07 · Creature Lab / 開発用ローカルゲーム。実市場価格、現金決済、資金の換金、広告、ランキング、売買APIは一切ありません。</footer>
 </div>
 <script>
 const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
-let revision=-1,lineupRevision=-1;
+let revision=-1,lineupRevision=-1,growthRevision=-1,lastPractice=null;
 async function call(path,data){
   const response=await fetch(path,data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
   const body=await response.json();
@@ -140,6 +148,49 @@ function recalc(){
   $("simError").textContent=total>100?"配分が100%を超えています。合計を減らしてください。":"";
 }
 slots.forEach(k=>$(k).addEventListener("input",recalc));
+function renderGrowth(data){
+  growthRevision=data.revision;
+  const container=$("growthCards");
+  container.replaceChildren();
+  const symbols={mine:"✨",owl:"🌙",turtle:"🍀"};
+  const names={mine:"あなたのキャラ",owl:"ルナ",turtle:"ミドリ"};
+  for(const entry of data.slots){
+    const item=document.createElement("div");
+    item.className="slot";
+    item.dataset.growthSlot=entry.slot;
+    const heading=document.createElement("div");heading.className="title";
+    heading.textContent=symbols[entry.slot]+" "+names[entry.slot]+" ・ Lv."+entry.level+" ・ "+entry.xp+" XP";
+    const note=document.createElement("div");note.className="desc";
+    note.textContent="取得した育成課題 "+entry.achievements.length+"/3 ・ 装備による補正は架空の予測にのみ使用";
+    const control=document.createElement("div");control.className="actions";
+    const selector=document.createElement("select");
+    selector.setAttribute("aria-label",names[entry.slot]+"の育成装備");
+    selector.id="growth-gear-"+entry.slot;
+    for(const gear of entry.gear_options){
+      const option=document.createElement("option");
+      option.value=gear.id;
+      option.disabled=!gear.unlocked;
+      option.textContent=gear.icon+" "+gear.name+(gear.unlocked?"":" (解放 "+gear.unlock_xp+"XP)");
+      selector.append(option);
+    }
+    selector.value=entry.gear;
+    const button=document.createElement("button");
+    button.type="button";button.textContent="装備を適用";
+    button.dataset.equipGrowth=entry.slot;
+    button.addEventListener("click",async()=>{
+      try{
+        const updated=await call("/api/growth/equip",{
+          slot:entry.slot,gear_id:selector.value,expected_growth_revision:growthRevision
+        });
+        renderGrowth(updated);
+        $("gearMessage").textContent=names[entry.slot]+"の装備を変更。次の練習から分析感度に反映します。";
+      }catch(e){$("gearMessage").textContent="装備失敗: "+e.message}
+    });
+    control.append(selector,button);
+    item.append(heading,note,control);
+    container.append(item);
+  }
+}
 function renderModel(s){
   revision=s.revision;
   $("currentRev").textContent="REV "+s.revision;
@@ -150,7 +201,10 @@ function renderModel(s){
   $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}% / ${active}`;
 }
 async function refresh(){
-  const [state,stored,lineup]=await Promise.all([call("/api/state"),call("/api/versions"),call("/api/lineup")]);
+  const [state,stored,lineup,growth]=await Promise.all([
+    call("/api/state"),call("/api/versions"),call("/api/lineup"),call("/api/growth")
+  ]);
+  renderGrowth(growth);
   lineupRevision=lineup.revision;
   renderModel(state);
   const previous=$("versionList").value;
@@ -207,7 +261,11 @@ function plot(a,b){
 $("simulate").addEventListener("click",async()=>{
   $("simulate").disabled=true;$("simError").textContent="";
   try{
-    const r=await call("/api/practice",{allocations:allocations()});
+    const chosen=allocations();
+    const r=await call("/api/practice",{allocations:chosen});
+    lastPractice=chosen;
+    $("claimTraining").disabled=false;
+    $("trainingMessage").textContent="育成課題のXP取得は別のボタンから。利益には依存しません。";
     $("result").classList.add("show");
     $("final").textContent=fmt(r.final_coins)+" C";
     $("profit").textContent=(r.profit_coins>=0?"+":"")+fmt(r.profit_coins)+" C";
@@ -220,6 +278,20 @@ $("simulate").addEventListener("click",async()=>{
     $("result").scrollIntoView({behavior:"smooth",block:"start"});
   }catch(e){$("simError").textContent=e.message}
   finally{recalc()}
+});
+$("claimTraining").addEventListener("click",async()=>{
+  if(!lastPractice)return;
+  const button=$("claimTraining");
+  button.disabled=true;
+  try{
+    const earned=await call("/api/training/complete",{
+      allocations:lastPractice,expected_growth_revision:growthRevision
+    });
+    renderGrowth(earned.growth);
+    const summary=Object.entries(earned.earned_xp).map(([key,value])=>key+": +"+value+" XP").join(" / ");
+    $("trainingMessage").textContent="育成記録を反映: "+summary+"（同じ課題の重複報酬なし）";
+  }catch(e){$("trainingMessage").textContent="育成記録の反映に失敗: "+e.message;}
+  finally{button.disabled=false;}
 });
 $("saveVersion").addEventListener("click",async()=>{
   $("saveMessage").textContent="";
