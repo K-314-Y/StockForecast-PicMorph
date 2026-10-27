@@ -51,7 +51,7 @@ const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用
 
 function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.6.0"},
+    {name:"creature-lab",version:"0.7.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
   server.registerTool("get_creature_state",{
@@ -187,6 +187,54 @@ function makeMcpServer() {
     try {const lineup=await requestCore("/api/lineup",{slot,version_id,expected_lineup_revision});
       return {content:[{type:"text",text:"キャラ編成を更新しました。"}],structuredContent:{lineup}}}
     catch(e){return toolError(e)}
+  });
+
+  server.registerTool("get_creature_growth",{
+    title:"キャラ育成のレベル・経験値・装備を見る",
+    description:"ローカルのチュートリアル実績を読み取る。経験値は仮想コインの利益で増えない。",
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const growth=await requestCore("/api/growth");
+      return {content:[{type:"text",text:"3体の育成課題・XP・装備を取得しました。"}],structuredContent:{growth}};
+    }catch(e){return toolError(e)}
+  });
+
+  server.registerTool("complete_creature_training",{
+    title:"完了したチュートリアル課題のXPを記録する",
+    description:"指定配分の架空練習を検証し、各課題を各キャラ一度だけXP付与する。利益・的中率に連動せず、保存済みモデルも編集しない。",
+    inputSchema:{
+      mine_pct:z.number().int().min(0).max(100),
+      owl_pct:z.number().int().min(0).max(100),
+      turtle_pct:z.number().int().min(0).max(100),
+      expected_growth_revision:expected,
+    },
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({mine_pct,owl_pct,turtle_pct,expected_growth_revision})=>{
+    try {
+      const result=await requestCore("/api/training/complete",{
+        allocations:{mine:mine_pct,owl:owl_pct,turtle:turtle_pct},
+        expected_growth_revision
+      });
+      return {content:[{type:"text",text:"チュートリアル課題の達成を記録しました。繰り返しても重複XPは得られません。"}],structuredContent:result};
+    }catch(e){return toolError(e)}
+  });
+
+  server.registerTool("equip_creature_gear",{
+    title:"育成で解放した装備をキャラへ付ける",
+    description:"キャラごとの育成XPで解放した装備を選ぶ。次回の架空シミュレーションで予測パラメータの感度が変化する。",
+    inputSchema:{
+      slot:z.enum(["mine","owl","turtle"]),
+      gear_id:z.enum(["none","focus_lens","spark_charm","calm_halo"]),
+      expected_growth_revision:expected,
+    },
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({slot,gear_id,expected_growth_revision})=>{
+    try {
+      const growth=await requestCore("/api/growth/equip",{slot,gear_id,expected_growth_revision});
+      return {content:[{type:"text",text:"ゲーム内の装備を更新しました。"}],structuredContent:{growth}};
+    }catch(e){return toolError(e)}
   });
 
   server.registerTool("run_coin_practice",{

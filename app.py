@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 from engine import Model, PLUGIN_INFO, model_from_python, view, with_visual_change, with_plugin_change, with_plugin_strength_change
 from game import read_versions, save_version, load_version, run_practice
 from lineup import lineup_snapshot, assign_model, effective_models
+from game import PRESETS
+from growth import public_growth, complete_training, equip, equipped_models
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -59,6 +61,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/lineup":
             with LOCK:
                 self._json(200, lineup_snapshot())
+        elif path == "/api/growth":
+            with LOCK:
+                self._json(200, public_growth())
         else:
             self._json(404, {"error": "見つかりません"})
 
@@ -119,6 +124,20 @@ class Handler(BaseHTTPRequestHandler):
                                            payload["expected_lineup_revision"])
                     self._json(200, changed)
                     return
+                elif path == "/api/training/complete":
+                    if set(payload) != {"allocations","expected_growth_revision"}:
+                        raise ValueError("練習配分と育成revisionを指定してください")
+                    assigned_models=equipped_models({"mine":STATE["model"],**PRESETS,**effective_models()})
+                    result=run_practice(STATE["model"],payload["allocations"],assigned=assigned_models)
+                    training=complete_training(payload["allocations"],payload["expected_growth_revision"])
+                    self._json(200, {"result":result,**training})
+                    return
+                elif path == "/api/growth/equip":
+                    if set(payload) != {"slot","gear_id","expected_growth_revision"}:
+                        raise ValueError("装備・キャラ枠・育成revisionを指定してください")
+                    growth=equip(payload["slot"],payload["gear_id"],payload["expected_growth_revision"])
+                    self._json(200,growth)
+                    return
                 elif path == "/api/reset":
                     if payload:
                         raise ValueError("リセットには引数は不要です")
@@ -126,8 +145,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/practice":
                     if set(payload) != {"allocations"}:
                         raise ValueError("allocationsだけ指定してください")
+                    assigned_models=equipped_models({"mine":STATE["model"],**PRESETS,**effective_models()})
                     result = run_practice(STATE["model"], payload["allocations"],
-                                          assigned=effective_models())
+                                          assigned=assigned_models)
+                    result["growth_revision"] = public_growth()["revision"]
                     result["lineup_revision"] = lineup_snapshot()["revision"]
                     result["source_revision"] = STATE["revision"]
                     self._json(200, result)

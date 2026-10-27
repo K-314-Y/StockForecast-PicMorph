@@ -22,7 +22,7 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
   try {
     const tools=await client.listTools();
     const names=tools.tools.map(x=>x.name);
-    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins","set_plugin_strengths","get_character_lineup","assign_character_version"]){
+    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins","set_plugin_strengths","get_character_lineup","assign_character_version","get_creature_growth","complete_creature_training","equip_creature_gear"]){
       assert.ok(names.includes(name),`missing tool: ${name}`);
     }
     const catalog=await call("list_creature_parts");
@@ -36,6 +36,10 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     const roster=await call("get_character_lineup");
     assert.equal(roster.isError,undefined);
     assert.equal(roster.structuredContent.lineup.slots.length,2);
+    const growth=await call("get_creature_growth");
+    assert.ok(!growth.isError);
+    assert.equal(growth.structuredContent.growth.slots.length,3);
+    assert.equal(growth.structuredContent.growth.notice.includes("予測精度"),true);
     const savedModels=await call("list_saved_models");
     assert.ok(!savedModels.isError);
     assert.ok(Array.isArray(savedModels.structuredContent.versions));

@@ -85,3 +85,6 @@ npm test
 `set_plugin_strengths(strengths, expected_revision)`: 登録済みすべてのプラグインIDに整数感度50..150を指定。
 `get_character_lineup()`: 保存済みモデルを使うルナとミドリの現行編成・revision。
 `assign_character_version(slot, version_id, expected_lineup_revision)`: owl/turtleに保存モデルIDを割当。version_id=nullは標準へ戻す。実売買なし。
+
+## Sprint 07
+`get_creature_growth()` は読み取り専用。`complete_creature_training(mine_pct, owl_pct, turtle_pct, expected_growth_revision)` は明示的に練習実績を記録し、同じ課題へのXPは一度きり。`equip_creature_gear(slot, gear_id, expected_growth_revision)` は各キャラの解放済み装備のみ選択可能。練習シミュレーション結果は実際の運用成績ではありません。

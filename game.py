@@ -44,8 +44,8 @@ def run_practice(current: Model, proposed: object, *, assigned: dict[str,Model] 
     allocations = parse_allocations(proposed)
     models = {"mine": current, **PRESETS}
     if assigned:
-        if not isinstance(assigned, dict) or set(assigned) - set(PRESETS):
-            raise ValueError("カスタム可能なのはルナ・ミドリ枠だけです")
+        if not isinstance(assigned, dict) or set(assigned) - set(SLOTS):
+            raise ValueError("未知のキャラ枠です")
         if any(not isinstance(m, Model) for m in assigned.values()):
             raise ValueError("キャラの予測モデルが不正です")
         models.update(assigned)
@@ -137,6 +137,7 @@ def run_practice(current: Model, proposed: object, *, assigned: dict[str,Model] 
                 "risk_fraction": models[k].risk_fraction,
                 "plugin_weights": dict(zip(PLUGIN_IDS, models[k].plugin_weights)),
                 "plugin_strengths": dict(zip(PLUGIN_IDS, models[k].plugin_strengths)),
+                "effective_sha256": hashlib.sha256(python_source(models[k]).encode()).hexdigest(),
             }
             for k, p in pockets.items()
         },
