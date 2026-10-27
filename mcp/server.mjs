@@ -51,7 +51,7 @@ const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用
 
 function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.7.0"},
+    {name:"creature-lab",version:"0.8.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
   server.registerTool("get_creature_state",{
@@ -187,6 +187,36 @@ function makeMcpServer() {
     try {const lineup=await requestCore("/api/lineup",{slot,version_id,expected_lineup_revision});
       return {content:[{type:"text",text:"キャラ編成を更新しました。"}],structuredContent:{lineup}}}
     catch(e){return toolError(e)}
+  });
+
+  server.registerTool("list_challenge_scenarios",{
+    title:"架空対戦チャレンジのシナリオ一覧",
+    description:"ローカルの固定架空シナリオ3種の名前・説明・ステップ数を取得。モデルや育成データは変更しない。",
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const result=await requestCore("/api/challenge/scenarios");
+      return {content:[{type:"text",text:"架空対戦チャレンジ一覧を取得しました。"}],structuredContent:result};
+    }catch(e){return toolError(e)}
+  });
+
+  server.registerTool("run_challenge_comparison",{
+    title:"3体の架空予測チャレンジを比較",
+    description:"同一の固定合成シナリオで確率予測のBrier Score、架空コイン損益、最大下落率を別々に順位付け。報酬や保存状態を変更しない。市場データではない。",
+    inputSchema:{scenario_id:z.enum(["rising","falling","sideways"])},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async({scenario_id})=>{
+    try {
+      const result=await requestCore("/api/challenge/run",{scenario_id});
+      const summary=Object.entries(result.contestants).map(([slot,item])=>
+        slot+": Brier="+item.brier_mean+", "+item.profit_coins+" C, MaxDD="+item.max_drawdown_pct+"%"
+      ).join("; ");
+      return {
+        content:[{type:"text",text:result.scenario_name+"。"+summary+"。すべて固定架空データであり実力評価ではありません。"}],
+        structuredContent:{result},
+      };
+    }catch(e){return toolError(e)}
   });
 
   server.registerTool("get_creature_growth",{

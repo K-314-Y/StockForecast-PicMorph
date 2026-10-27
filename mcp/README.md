@@ -88,3 +88,6 @@ npm test
 
 ## Sprint 07
 `get_creature_growth()` は読み取り専用。`complete_creature_training(mine_pct, owl_pct, turtle_pct, expected_growth_revision)` は明示的に練習実績を記録し、同じ課題へのXPは一度きり。`equip_creature_gear(slot, gear_id, expected_growth_revision)` は各キャラの解放済み装備のみ選択可能。練習シミュレーション結果は実際の運用成績ではありません。
+
+## Sprint 08
+`list_challenge_scenarios()` で架空チャレンジ3種を列挙。`run_challenge_comparison(scenario_id)` で同一の固定架空経路を3キャラに走らせ、3クラスBrier（低いほどよい）、ゲーム内利益（高いほどよい）、最大下落率（低いほどよい）の独立順位を返す。モデル・XP・キャラ編成・保存データは変更しない。実市場精度の検証ではない。
