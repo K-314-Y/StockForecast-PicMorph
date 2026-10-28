@@ -16,3 +16,6 @@ tunnel-config/
 
 # Local game snapshots (not shared source files)
 local_state/
+
+# Sites checkout has its own Git history and hosting source repository
+sites/creature-lab-20261029/
