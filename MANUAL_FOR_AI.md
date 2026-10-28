@@ -59,3 +59,10 @@ Creature LabはLinuxのローカル環境で動く**架空相場の教育用ゲ�
 
 ## 7. データ源
 `GET /api/meta` で本マニュアル・現在の分析プラグイン一覧・固定シナリオを取得。MCPからは `get_creature_manual` を使う。詳細な引数の型・必須条件は各MCPツールの `inputSchema` を優先する。
+
+## 8. Gemini MCP SuperAssistant接続
+
+GeminiのMCP SuperAssistantはLinuxローカルのstdioクライアントとして利用。
+`mcp/stdio.mjs` は**既存の同じMCPツールを登録**し、Python `app.py` (127.0.0.1:8765) に接続します。追加のMCP用TCPポートやインターネット公開は不要です。
+構成例: `"creature-lab": {"command":"/usr/bin/node","args":["/home/yugo314/ドキュメント/14_予測クリーチャー/mcp/stdio.mjs"]}`。
+Node版HTTPサーバー `127.0.0.1:8766/mcp` は既存の接続用に維持し、このGeminiの接続に必須ではありません。

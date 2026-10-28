@@ -97,3 +97,9 @@ npm test
 `get_creature_manual()` で `MANUAL_FOR_AI.md` と動的な分析プラグイン・シナリオ一覧を取得。
 従来ツールはすべて維持。MCPツールの `inputSchema` は説明書では置換できない。
 外部向けにMCPポートを無認証で開かない。
+
+## Sprint 10: ローカルGemini向けstdio接続
+
+`node stdio.mjs` は `server.mjs` と**同一のツールレジストリ**を使用。MCP SuperAssistantにはこのスクリプトをstdioサーバーとして1件登録する。Web版Geminiブラウザ拡張のローカル橋渡しとしてのみ使用する。API本体は `127.0.0.1:8765` が稼働必須。ブラウザやnodeの外部公開は不要。
+
+MCP SuperAssistantの公式手順では、**Geminiの新規チャットでMCPのInstructionsを挿入**してからツール実行を依頼する。新しいツールが拡張の接続一覧に表示されても、挿入用Instructionsが古いままのことがあるため、実際のArgon呼び出しが完了するまで接続完了と断定しない。

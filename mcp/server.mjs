@@ -49,9 +49,9 @@ function toolError(error) {
 const expected = z.number().int().min(0).describe("get_creature_stateで取得した現在のrevision。競合防止のため必須");
 const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用の参考配分比率。実売買なし");
 
-function makeMcpServer() {
+export function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.9.0"},
+    {name:"creature-lab",version:"0.10.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
   server.registerTool("get_creature_manual",{
@@ -373,6 +373,9 @@ const server = createServer(async(req,res)=>{
   }
 });
 
-server.listen(PORT,"127.0.0.1",()=>{
-  console.log(`Creature Lab MCP ready: http://127.0.0.1:${PORT}/mcp (LOCAL ONLY)`);
-});
+// Importing this module for the stdio transport must never open a TCP port.
+if (process.env.CREATURE_LAB_STDIO !== "1") {
+  server.listen(PORT,"127.0.0.1",()=>{
+    console.log(`Creature Lab MCP ready: http://127.0.0.1:${PORT}/mcp (LOCAL ONLY)`);
+  });
+}
