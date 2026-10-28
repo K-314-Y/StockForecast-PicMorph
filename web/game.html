@@ -320,6 +320,21 @@ function renderChallengeDetails(data){
     const note=document.createElement("p");
     note.textContent="予測評価：Brierは0〜2、低いほど良い。3方向の確率と正解(1/0)の二乗誤差の合計。的中は最大確率の方向で判定（同率はUP→FLAT→DOWN順）。横ばいは±"+data.flat_threshold_pct+"%以内。損益・最大下落率は上の一覧で独立に評価します。";
     panel.appendChild(note);
+    const baselines=Object.entries(data.baselines || {});
+    for(const [id,baseline] of baselines){
+      const comparison=item.baseline_comparison[id];
+      const explanation=document.createElement("p");
+      explanation.textContent=baseline.name+" 平均Brier "+baseline.brier_mean.toFixed(6)+
+        " ／ キャラ平均 "+item.brier_mean.toFixed(6)+
+        " ／ 差（キャラ−基準） "+comparison.mean_difference.toFixed(6)+
+        " ／ 勝ったステップ "+comparison.won_steps+"/12。"+
+        (comparison.mean_difference < -1e-12 ? "このシナリオでは基準より誤差が小さい。" :
+         comparison.mean_difference > 1e-12 ? "このシナリオでは基準より誤差が大きい。" : "基準と同等。");
+      panel.appendChild(explanation);
+    }
+    const legend=document.createElement("p");
+    legend.textContent="Brierは小さいほど良い。差が負なら基準を上回ります。緑実線：キャラ／黄破線：均等予測／紫点線：過去頻度。12ステップだけでは統計的優位性を証明できません。";
+    panel.appendChild(legend);
     const ns="http://www.w3.org/2000/svg";
     const chart=document.createElementNS(ns,"svg");
     chart.setAttribute("viewBox","0 0 720 220");
@@ -339,6 +354,13 @@ function renderChallengeDetails(data){
     curve.setAttribute("points",item.history.map((r,i)=>(40+i*650/11)+","+(180-r.brier*75)).join(" "));
     curve.setAttribute("fill","none");curve.setAttribute("stroke","#78edd4");curve.setAttribute("stroke-width","3");
     chart.appendChild(curve);
+    baselines.forEach(([id,baseline],index)=>{
+      const line=document.createElementNS(ns,"polyline");
+      line.setAttribute("points",baseline.history.map((r,i)=>(40+i*650/11)+","+(180-r.brier*75)).join(" "));
+      line.setAttribute("fill","none");line.setAttribute("stroke",index===0?"#ffd166":"#c5a3ff");
+      line.setAttribute("stroke-width","2");line.setAttribute("stroke-dasharray",index===0?"8 5":"2 4");
+      chart.appendChild(line);
+    });
     for(const r of item.history){
       const label=document.createElementNS(ns,"text");
       label.setAttribute("x",40+(r.step-1)*650/11);label.setAttribute("y",207);
@@ -367,6 +389,27 @@ function renderChallengeDetails(data){
       body.appendChild(tr);
     }
     table.appendChild(body);wrap.appendChild(table);panel.appendChild(wrap);
+    for(const [id,baseline] of baselines){
+      const details=document.createElement("details");
+      const summary=document.createElement("summary");summary.textContent=baseline.name+"：ステップ別確率とBrier";details.appendChild(summary);
+      const scroll=document.createElement("div");scroll.style.overflowX="auto";
+      const bt=document.createElement("table");bt.style.cssText="width:100%;min-width:650px;text-align:right";
+      const cap=document.createElement("caption");cap.textContent=baseline.name+"（差＝キャラ−基準）";bt.appendChild(cap);
+      const bh=document.createElement("thead"),br=document.createElement("tr");
+      for(const text of ["ステップ","UP","FLAT","DOWN","実際","Brier","差"]){
+        const th=document.createElement("th");th.scope="col";th.textContent=text;br.appendChild(th);
+      }
+      bh.appendChild(br);bt.appendChild(bh);
+      const bb=document.createElement("tbody");
+      baseline.history.forEach((r,i)=>{
+        const tr=document.createElement("tr");
+        [r.step,...["UP","FLAT","DOWN"].map(k=>(r.prediction[k]*100).toFixed(2)+"%"),r.actual,r.brier.toFixed(6),(item.history[i].brier-r.brier).toFixed(6)].forEach((v,j)=>{
+          const td=document.createElement(j===0?"th":"td");if(j===0)td.scope="row";
+          td.textContent=v;td.style.padding="8px";tr.appendChild(td);
+        });bb.appendChild(tr);
+      });
+      bt.appendChild(bb);scroll.appendChild(bt);details.appendChild(scroll);panel.appendChild(details);
+    }
     const rounding=document.createElement("p");
     rounding.textContent="確率・Brierは表示時に丸めています。予測は各ステップ時点までの履歴だけを使用。";
     panel.appendChild(rounding);container.appendChild(panel);

@@ -53,7 +53,7 @@ def actual_direction(start: float, end: float) -> str:
     return "FLAT" if flat else "UP" if r > 0 else "DOWN"
 
 
-def _simulate(model: Model, future: tuple[float, ...]) -> dict:
+def _simulate(model: Model, future: tuple[float, ...], *, scores=None) -> dict:
     if not isinstance(model, Model):
         raise ValueError("キャラのモデルが不正です")
     history = list(SYNTHETIC_PRICES)
@@ -95,6 +95,8 @@ def _simulate(model: Model, future: tuple[float, ...]) -> dict:
             raise RuntimeError("架空資金の計算が不正です")
         brier = multiclass_brier(direction, pred)
         briers.append(brier)
+        if scores is not None:
+            scores.append(brier)
         correct += predicted_class == direction
         history.append(observed_next)
         equity_path.append(cash + units * observed_next)
@@ -126,6 +128,27 @@ def _simulate(model: Model, future: tuple[float, ...]) -> dict:
     }
 
 
+def baseline_predictions(labels: list[str]) -> dict:
+    """Predict before observing each challenge label; no warm-up labels."""
+    counts = dict.fromkeys(KEYS, 1)
+    result = {key: {"name": name, "history": []} for key, name in
+              (("uniform", "均等予測"), ("past_frequency", "過去頻度"))}
+    for step, actual in enumerate(labels, 1):
+        probabilities = {
+            "uniform": dict.fromkeys(KEYS, 1 / 3),
+            "past_frequency": {k: counts[k] / sum(counts.values()) for k in KEYS},
+        }
+        for key, pred in probabilities.items():
+            result[key]["history"].append({
+                "step": step, "prediction": pred, "actual": actual,
+                "brier": multiclass_brier(actual, pred),
+            })
+        counts[actual] += 1
+    for item in result.values():
+        item["brier_mean"] = sum(r["brier"] for r in item["history"]) / len(labels)
+    return result
+
+
 def _rank(players: dict, key: str, *, ascending: bool) -> dict[str, int]:
     """Competition ranking. Identical reported values receive the same rank."""
     names = sorted(SLOTS, key=lambda k: players[k][key], reverse=not ascending)
@@ -150,7 +173,8 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
         raise ValueError("3体分の予測モデルを指定してください")
     scenario = SCENARIOS[scenario_id]
     path = scenario["prices"]
-    contestants = {name: _simulate(models[name], path) for name in SLOTS}
+    exact_scores = {name: [] for name in SLOTS}
+    contestants = {name: _simulate(models[name], path, scores=exact_scores[name]) for name in SLOTS}
     ranks = {
         "brier": _rank(contestants, "brier_mean", ascending=True),
         "profit": _rank(contestants, "profit_coins", ascending=False),
@@ -164,6 +188,16 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
     labels = [actual_direction(old, new) for old, new in zip(
         (SYNTHETIC_PRICES[-1],) + path[:-1], path
     )]
+    baselines = baseline_predictions(labels)
+    for name in SLOTS:
+        exact = exact_scores[name]
+        contestants[name]["baseline_comparison"] = {
+            key: {
+                "mean_difference": sum(exact) / len(exact) - baseline["brier_mean"],
+                "won_steps": sum(score < row["brier"] - 1e-12
+                                 for score, row in zip(exact, baseline["history"])),
+            } for key, baseline in baselines.items()
+        }
     baseline_brier = sum(multiclass_brier(x, dict.fromkeys(KEYS, 1 / 3)) for x in labels) / len(labels)
     return {
         "mode": "FIXED_SYNTHETIC_CHALLENGE_NOT_VALIDATION",
@@ -174,6 +208,7 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
         "steps": len(path),
         "flat_threshold_pct": FLAT_BAND * 100,
         "initial_coins_each": INITIAL_COINS,
+        "baselines": baselines,
         "uniform_baseline_brier": round(baseline_brier, 6),
         "actual_labels": labels,
         "contestants": contestants,
