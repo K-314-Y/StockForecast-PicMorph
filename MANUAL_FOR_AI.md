@@ -66,3 +66,10 @@ GeminiのMCP SuperAssistantはLinuxローカルのstdioクライアントとし�
 `mcp/stdio.mjs` は**既存の同じMCPツールを登録**し、Python `app.py` (127.0.0.1:8765) に接続します。追加のMCP用TCPポートやインターネット公開は不要です。
 構成例: `"creature-lab": {"command":"/usr/bin/node","args":["/home/yugo314/ドキュメント/14_予測クリーチャー/mcp/stdio.mjs"]}`。
 Node版HTTPサーバー `127.0.0.1:8766/mcp` は既存の接続用に維持し、このGeminiの接続に必須ではありません。
+
+## Sprint 11：チャレンジ詳細
+/game の「05 チャレンジ」で結果を表示後、各キャラの「12ステップ詳細」を開閉できます。
+既存の contestants.*.history の prediction、predicted、actual、brier、observed_price を表示します。
+Brier推移は縦軸0〜2、横軸1〜12。表は横スクロールできます。
+確率とBrierは丸め値です。的中率と確率予測誤差、架空損益、最大下落率は別の指標です。
+API・MCP21ツール・予測アルゴリズムに変更はありません。
