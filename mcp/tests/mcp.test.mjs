@@ -53,6 +53,12 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
     assert.equal(challenge.structuredContent.result.mode,"FIXED_SYNTHETIC_CHALLENGE_NOT_VALIDATION");
     assert.equal(challenge.structuredContent.result.steps,12);
     assert.equal(challenge.structuredContent.result.has_overall_winner,false);
+    assert.equal(names.length,21);
+    for(const base of Object.values(challenge.structuredContent.result.baselines)){
+      assert.equal(base.history.length,12);
+      assert.ok(Math.abs(Object.values(base.history[0].prediction).reduce((a,b)=>a+b,0)-1)<1e-12);
+    }
+    assert.equal(typeof challenge.structuredContent.result.contestants.mine.baseline_comparison.uniform.won_steps,"number");
     const savedModels=await call("list_saved_models");
     assert.ok(!savedModels.isError);
     assert.ok(Array.isArray(savedModels.structuredContent.versions));
