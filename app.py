@@ -54,6 +54,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, body, "text/html; charset=utf-8")
         elif path == "/api/state":
             self._json(200, snapshot())
+        elif path == "/api/meta":
+            self._json(200, {
+                "version": "0.9.0", "mode": "synthetic-local-only",
+                "plugins": list(PLUGIN_INFO), "scenarios": public_scenarios(),
+                "manual": (ROOT / "MANUAL_FOR_AI.md").read_text(encoding="utf-8"),
+            })
         elif path == "/api/versions":
             with LOCK:
                 self._json(200, {"versions": read_versions()})

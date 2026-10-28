@@ -51,9 +51,23 @@ const risk = z.number().min(.05).max(1).finite().describe("仮想コイン運用
 
 function makeMcpServer() {
   const server = new McpServer(
-    {name:"creature-lab",version:"0.8.0"},
+    {name:"creature-lab",version:"0.9.0"},
     {instructions:"Creature Labは架空データで動く開発用ゲーム。装備変更前にget_creature_stateでrevisionを取得し、set_eye等に渡す。予測を実際の投資助言として扱わない。勝手な実取引やV6ファイル操作はできない。"}
   );
+  server.registerTool("get_creature_manual",{
+    title:"Creature Labの操作説明書と最新の内蔵分析一覧を取得",
+    description:"まず呼ぶ。AI操作手順、安全ルール、登録済み分析プラグインと固定チャレンジをPython側の現行設定から取得する。読み取り専用。",
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const meta=await requestCore("/api/meta");
+      return {
+        content:[{type:"text",text:meta.manual}],
+        structuredContent:{meta}
+      };
+    }catch(e){return toolError(e)}
+  });
   server.registerTool("get_creature_state",{
     title:"予測クリーチャーの状態を見る",
     description:"現在のキャラクター装備、Python定数、合成価格による予測確率、revisionを読む。設定変更前に呼ぶ。",
