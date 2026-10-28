@@ -135,3 +135,13 @@ MCPの `get_creature_manual` を最初に呼べば、操作方法と利用可能
 個別ツールの機械可読な入力スキーマはそのまま残し、無差別な汎用API実行ツールは作らない。
 Node/Pythonの統合とインターネット公開は実施していない。Geminiの既存ローカルMCP SuperAssistantと、
 Web版ChatGPTからの外部接続要件は区別する。
+
+## Sprint 10：Gemini MCP SuperAssistantとのローカル接続
+
+既存の `mcp/server.mjs` から `makeMcpServer()` を共有して `mcp/stdio.mjs` を追加。
+MCP SuperAssistantにはこのstdioを1件登録し、**同じ21ツール**を利用する。
+追加の公開HTTPポートは作らず、PythonのゲームAPI `127.0.0.1:8765` を内部で利用。
+ローカルの `~/.config/mcp-superassistant/config.json` は既存設定をバックアップのうえ更新。
+ブラウザ拡張では読み取り専用10ツールのみ有効化、書き込み系11ツールは無効のまま。
+MCPサーバーのツール一覧認識とstdio統合テストは成功。
+**Gemini Argonでの実際のツール呼び出しは未検証**：公式手順に従い新規会話でMCP用Instructionsを挿入する必要があり、実験時は操作指示が旧ツール一覧のまま残った。
