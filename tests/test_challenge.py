@@ -87,6 +87,23 @@ class ChallengeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             actual_direction(100,0)
 
+    def test_detail_ledger_matches_probability_scores_and_prices(self):
+        for scenario, spec in SCENARIOS.items():
+            result = run_challenge(scenario, MODELS)
+            for contestant in result["contestants"].values():
+                for index, row in enumerate(contestant["history"]):
+                    previous = SYNTHETIC_PRICES[-1] if index == 0 else spec["prices"][index-1]
+                    self.assertEqual(row["observed_price"], previous)
+                    self.assertEqual(row["actual"], actual_direction(previous, spec["prices"][index]))
+                    self.assertAlmostEqual(row["brier"], sum((row["prediction"][k] - int(row["actual"] == k)) ** 2 for k in KEYS), places=5)
+
+    def test_detail_tie_break_and_extreme_brier(self):
+        with patch("challenge.prediction", return_value={"UP": 1, "FLAT": 0, "DOWN": 0}):
+            rows = _simulate(Model(), (200, 100))["history"]
+            self.assertEqual([r["brier"] for r in rows], [0, 2])
+        with patch("challenge.prediction", return_value=dict.fromkeys(KEYS, 1/3)):
+            self.assertEqual(_simulate(Model(), (100,))["history"][0]["predicted"], "UP")
+
     def test_metric_rank_independent_and_ties(self):
         synthetic={
             "mine":{"brier_mean":.3,"profit_coins":12,"max_drawdown_pct":3},

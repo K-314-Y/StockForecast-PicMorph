@@ -145,6 +145,7 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <thead><tr><th scope="col" style="text-align:left">キャラ</th><th scope="col">Brier ↓</th><th scope="col">損益 ↑</th><th scope="col">最大下落率 ↓</th><th scope="col">的中率</th></tr></thead>
 <tbody id="challengeRows"></tbody></table>
 </div>
+<div id="challengeDetails"></div>
 <p id="challengeRanks" class="muted" style="font-size:12px;margin-top:12px"></p>
 <p id="challengeAudit" class="muted" style="font-size:11px;margin-top:6px;overflow-wrap:anywhere"></p>
 <div class="important">※固定の架空価格を使った教材です。何度も挑戦して数値を最適化すると、そのシナリオへの過剰適合が起こります。Brierが低くても実市場への予測力を証明しません。チャレンジはXPを付与しません。</div>
@@ -304,6 +305,74 @@ $("simulate").addEventListener("click",async()=>{
   }catch(e){$("simError").textContent=e.message}
   finally{recalc()}
 });
+// Details use only the existing evaluation ledger; no new forecast is computed.
+function renderChallengeDetails(data){
+  const container=$("challengeDetails");
+  container.replaceChildren();
+  for(const key of ["mine","owl","turtle"]){
+    const item=data.contestants[key];
+    const panel=document.createElement("details");
+    const title=document.createElement("summary");
+    title.textContent=item.name+"：12ステップ詳細を開く／閉じる";
+    title.style.cursor="pointer";
+    title.style.padding="14px 0";
+    panel.appendChild(title);
+    const note=document.createElement("p");
+    note.textContent="予測評価：Brierは0〜2、低いほど良い。3方向の確率と正解(1/0)の二乗誤差の合計。的中は最大確率の方向で判定（同率はUP→FLAT→DOWN順）。横ばいは±"+data.flat_threshold_pct+"%以内。損益・最大下落率は上の一覧で独立に評価します。";
+    panel.appendChild(note);
+    const ns="http://www.w3.org/2000/svg";
+    const chart=document.createElementNS(ns,"svg");
+    chart.setAttribute("viewBox","0 0 720 220");
+    chart.setAttribute("role","img");
+    chart.setAttribute("aria-label",item.name+"のステップ別Brier推移。縦軸0〜2、横軸1〜12。数値は下表にも表示");
+    chart.style.width="100%";
+    for(const value of [0,1,2]){
+      const y=180-value*75;
+      const line=document.createElementNS(ns,"line");
+      for(const [k,v] of Object.entries({x1:40,x2:690,y1:y,y2:y,stroke:"#536379"}))line.setAttribute(k,v);
+      chart.appendChild(line);
+      const label=document.createElementNS(ns,"text");
+      label.setAttribute("x",8);label.setAttribute("y",y+5);label.setAttribute("fill","currentColor");
+      label.textContent=value;chart.appendChild(label);
+    }
+    const curve=document.createElementNS(ns,"polyline");
+    curve.setAttribute("points",item.history.map((r,i)=>(40+i*650/11)+","+(180-r.brier*75)).join(" "));
+    curve.setAttribute("fill","none");curve.setAttribute("stroke","#78edd4");curve.setAttribute("stroke-width","3");
+    chart.appendChild(curve);
+    for(const r of item.history){
+      const label=document.createElementNS(ns,"text");
+      label.setAttribute("x",40+(r.step-1)*650/11);label.setAttribute("y",207);
+      label.setAttribute("text-anchor","middle");label.setAttribute("fill","currentColor");
+      label.textContent=r.step;chart.appendChild(label);
+    }
+    panel.appendChild(chart);
+    const wrap=document.createElement("div");wrap.style.overflowX="auto";
+    const table=document.createElement("table");table.style.cssText="width:100%;min-width:850px;text-align:right;border-collapse:collapse";
+    const caption=document.createElement("caption");caption.textContent=item.name+"：確率予測と実際の架空変動";table.appendChild(caption);
+    const head=document.createElement("thead"), hr=document.createElement("tr");
+    for(const label of ["ステップ","予測時の価格","UP","FLAT","DOWN","予測","実際","的中","Brier"]){
+      const th=document.createElement("th");th.scope="col";th.textContent=label;hr.appendChild(th);
+    }
+    head.appendChild(hr);table.appendChild(head);
+    const body=document.createElement("tbody");
+    for(const r of item.history){
+      const tr=document.createElement("tr");
+      const values=[r.step,r.observed_price,...["UP","FLAT","DOWN"].map(k=>(r.prediction[k]*100).toFixed(2)+"%"),r.predicted,r.actual,r.predicted===r.actual?"○":"×",r.brier.toFixed(6)];
+      values.forEach((v,i)=>{
+        const cell=document.createElement(i===0?"th":"td");
+        if(i===0)cell.scope="row";
+        cell.textContent=v;cell.style.cssText="padding:9px 6px;border-bottom:1px solid #30445b";
+        tr.appendChild(cell);
+      });
+      body.appendChild(tr);
+    }
+    table.appendChild(body);wrap.appendChild(table);panel.appendChild(wrap);
+    const rounding=document.createElement("p");
+    rounding.textContent="確率・Brierは表示時に丸めています。予測は各ステップ時点までの履歴だけを使用。";
+    panel.appendChild(rounding);container.appendChild(panel);
+  }
+}
+
 async function loadChallengeScenarios(){
   try{
     const data=await call("/api/challenge/scenarios");
@@ -323,9 +392,11 @@ async function loadChallengeScenarios(){
 $("runChallenge").addEventListener("click",async()=>{
   const button=$("runChallenge");
   button.disabled=true;
+  $("challengeResult").hidden=true;
   $("challengeStatus").textContent="架空のチャレンジ結果を計算しています";
   try{
     const data=await call("/api/challenge/run",{scenario_id:$("scenario").value});
+    renderChallengeDetails(data);
     $("challengeCoins").textContent=fmt(data.initial_coins_each)+" C";
     $("challengeBaseline").textContent=data.uniform_baseline_brier.toFixed(4);
     const rows=$("challengeRows");
