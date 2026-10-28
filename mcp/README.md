@@ -91,3 +91,9 @@ npm test
 
 ## Sprint 08
 `list_challenge_scenarios()` で架空チャレンジ3種を列挙。`run_challenge_comparison(scenario_id)` で同一の固定架空経路を3キャラに走らせ、3クラスBrier（低いほどよい）、ゲーム内利益（高いほどよい）、最大下落率（低いほどよい）の独立順位を返す。モデル・XP・キャラ編成・保存データは変更しない。実市場精度の検証ではない。
+
+## Sprint 09：共通説明書
+
+`get_creature_manual()` で `MANUAL_FOR_AI.md` と動的な分析プラグイン・シナリオ一覧を取得。
+従来ツールはすべて維持。MCPツールの `inputSchema` は説明書では置換できない。
+外部向けにMCPポートを無認証で開かない。

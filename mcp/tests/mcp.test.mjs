@@ -22,9 +22,14 @@ test("MCP handshake, safe edits, bidirectional reflection and revision rejection
   try {
     const tools=await client.listTools();
     const names=tools.tools.map(x=>x.name);
-    for(const name of [ "get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins","set_plugin_strengths","get_character_lineup","assign_character_version","get_creature_growth","complete_creature_training","equip_creature_gear","list_challenge_scenarios","run_challenge_comparison"]){
+    for(const name of [ "get_creature_manual","get_creature_state","list_creature_parts","set_eye","set_shield","set_model_parameters","run_coin_practice","list_saved_models","save_current_model","load_saved_model","list_analysis_plugins","set_analysis_plugins","configure_analysis_plugins","set_plugin_strengths","get_character_lineup","assign_character_version","get_creature_growth","complete_creature_training","equip_creature_gear","list_challenge_scenarios","run_challenge_comparison"]){
       assert.ok(names.includes(name),`missing tool: ${name}`);
     }
+    const meta=await call("get_creature_manual");
+    assert.ok(!meta.isError);
+    assert.ok(meta.structuredContent.meta.manual.includes("revision"));
+    assert.equal(meta.structuredContent.meta.plugins.length,4);
+    assert.equal(meta.structuredContent.meta.scenarios.length,3);
     const catalog=await call("list_creature_parts");
     assert.equal(catalog.structuredContent.parts.length,2);
     const practice=await call("run_coin_practice",{mine_pct:40,owl_pct:30,turtle_pct:20});
