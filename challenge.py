@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
 
 from engine import Model, SYNTHETIC_PRICES, multiclass_brier, prediction, python_source
 from game import FEE_RATE, INITIAL_COINS, SLOTS
@@ -53,10 +52,18 @@ def actual_direction(start: float, end: float) -> str:
     return "FLAT" if flat else "UP" if r > 0 else "DOWN"
 
 
-def _simulate(model: Model, future: tuple[float, ...], *, scores=None) -> dict:
+def _simulate(model: Model, future: tuple[float, ...], *,
+              price_history=SYNTHETIC_PRICES, scores=None) -> dict:
     if not isinstance(model, Model):
         raise ValueError("キャラのモデルが不正です")
-    history = list(SYNTHETIC_PRICES)
+    # The caller supplies an independent observed prefix. Never concatenate the
+    # hidden path before invoking prediction; synthetic callers retain defaults.
+    if not price_history or not future or not all(
+        type(x) in (int, float) and math.isfinite(x) and x > 0
+        for x in (*price_history, *future)
+    ):
+        raise ValueError("価格履歴が不正です")
+    history = list(price_history)
     cash = float(INITIAL_COINS)
     units = 0.0
     fees = 0.0
@@ -164,17 +171,16 @@ def _rank(players: dict, key: str, *, ascending: bool) -> dict[str, int]:
     return ranks
 
 
-def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
-    if type(scenario_id) is not str or scenario_id not in SCENARIOS:
-        raise ValueError("対応していない架空チャレンジです")
+def compare_prices(price_history: tuple[float, ...], path: tuple[float, ...],
+                   models: dict[str, Model]) -> dict:
+    """Shared scoring/coin rules; forecasts receive only the observed prefix."""
     if not isinstance(models, dict) or set(models) != set(SLOTS) or any(
         not isinstance(models[k], Model) for k in SLOTS
     ):
         raise ValueError("3体分の予測モデルを指定してください")
-    scenario = SCENARIOS[scenario_id]
-    path = scenario["prices"]
     exact_scores = {name: [] for name in SLOTS}
-    contestants = {name: _simulate(models[name], path, scores=exact_scores[name]) for name in SLOTS}
+    contestants = {name: _simulate(models[name], path, price_history=price_history,
+                                   scores=exact_scores[name]) for name in SLOTS}
     ranks = {
         "brier": _rank(contestants, "brier_mean", ascending=True),
         "profit": _rank(contestants, "profit_coins", ascending=False),
@@ -186,7 +192,7 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
 
     # Same labels for every contestant, irrespective of strategies or actions.
     labels = [actual_direction(old, new) for old, new in zip(
-        (SYNTHETIC_PRICES[-1],) + path[:-1], path
+        (price_history[-1],) + path[:-1], path
     )]
     baselines = baseline_predictions(labels)
     for name in SLOTS:
@@ -200,11 +206,6 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
         }
     baseline_brier = sum(multiclass_brier(x, dict.fromkeys(KEYS, 1 / 3)) for x in labels) / len(labels)
     return {
-        "mode": "FIXED_SYNTHETIC_CHALLENGE_NOT_VALIDATION",
-        "scenario_id": scenario_id,
-        "scenario_name": scenario["name"],
-        "description": scenario["description"],
-        "scenario_sha256": hashlib.sha256(json.dumps(path).encode()).hexdigest(),
         "steps": len(path),
         "flat_threshold_pct": FLAT_BAND * 100,
         "initial_coins_each": INITIAL_COINS,
@@ -218,6 +219,21 @@ def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
             "drawdown": "低いほど良い。架空資金の最大ピーク比下落率",
         },
         "has_overall_winner": False,
+    }
+
+
+def run_challenge(scenario_id: object, models: dict[str, Model]) -> dict:
+    if type(scenario_id) is not str or scenario_id not in SCENARIOS:
+        raise ValueError("対応していない架空チャレンジです")
+    scenario = SCENARIOS[scenario_id]
+    path = scenario["prices"]
+    return {
+        **compare_prices(SYNTHETIC_PRICES, path, models),
+        "mode": "FIXED_SYNTHETIC_CHALLENGE_NOT_VALIDATION",
+        "scenario_id": scenario_id,
+        "scenario_name": scenario["name"],
+        "description": scenario["description"],
+        "scenario_sha256": hashlib.sha256(json.dumps(path).encode()).hexdigest(),
         "warning": "架空の固定12ステップのみ。繰り返し調整で容易に過剰適合するため、現実の予測性能や投資判断には使用できません。",
     }
 

@@ -5,7 +5,7 @@
 <title>Creature Lab | コイン運用</title>
 <style>
 :root{color-scheme:dark;--bg:#080f1a;--card:#12213a;--card2:#162846;--line:#314461;--white:#eaf2ff;--soft:#9fb1c9;--teal:#74ebd2;--rose:#ff98bf;--lav:#c7a6ff}
-*{box-sizing:border-box}
+*{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;color:var(--white);background:radial-gradient(circle at 16% 3%,#253556 0,transparent 45%),var(--bg);line-height:1.5}
 .wrap{max-width:1110px;padding:27px 20px 65px;margin:auto}
 .top{display:flex;gap:16px;align-items:center;justify-content:space-between}
@@ -60,10 +60,51 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 </style></head>
 <body><div class="wrap">
 <div class="top"><div class="logo">✦ Creature Lab <span style="font-size:12px;color:var(--soft);font-weight:400">/ GAME LAB</span></div><nav><a href="/">キャラクター編集に戻る</a></nav></div>
-<h1>育てた予測キャラに、コインを託そう。</h1>
-<p class="intro">手持ちの10,000コインを3体に自由配分。キャラは過去に観測した価格だけを見て、架空の12日間をロングか現金待機で行動します。もちろん本当のお金は動きません。</p>
-<div class="pills"><span class="pill hot">練習モード</span><span class="pill">架空の価格データ</span><span class="pill">取引所接続なし</span><span class="pill">無料・換金不可</span></div>
-<div class="cols">
+<h1>予測キャラと、あの日の相場に挑もう。</h1>
+<p class="intro">実在の日本株の過去12営業日を、あなたのキャラ・ルナ・ミドリがリプレイ。各10,000の仮想コインで挑みます。本当のお金は動きません。</p>
+<div class="pills"><span class="pill hot">実相場リプレイ</span><span class="pill">個人・ローカル専用</span><span class="pill">実際の発注なし</span><span class="pill">無料・換金不可</span></div>
+<section class="card" style="margin-top:22px" id="challengeSection">
+<h2>⚔ チャレンジ・対戦モード</h2>
+<p class="muted" style="font-size:13px">3体が同じ12営業日に挑戦。現在のモデル・保存した編成・育成装備を使います。過去のリプレイは今後の予測能力や利益を保証しません。</p>
+<label for="challengeMode" class="desc">挑戦する相場</label>
+<select id="challengeMode"><option value="market" selected>実相場リプレイ · 日本株 / J-Quants</option><option value="synthetic">架空の固定12ステップ · 練習シナリオ</option></select>
+<div id="marketControls" class="section">
+<div class="actions">
+<label for="marketCode">銘柄コード <input class="input" id="marketCode" type="text" inputmode="numeric" pattern="[0-9]{4,5}" minlength="4" maxlength="5" placeholder="例：7203" autocomplete="off"></label>
+<label for="marketEndDate">過去の終了日 <input class="input" id="marketEndDate" type="date" required></label>
+</div>
+<p class="muted" style="font-size:12px;margin-top:10px">終了日以前の直近12営業日で対戦、その直前40営業日で準備します。休場日なら直前の営業日まで。契約で取得できる過去の期間を選んでください。</p>
+<p id="marketStatus" class="muted" role="status">ローカルの設定状態を確認中…</p>
+<details><summary>設定方法・データの扱い</summary><p class="muted" style="font-size:12px">起動する端末で環境変数 JQUANTS_API_KEY を設定し、アプリを再起動してください。キーを画面・チャット・Gitに貼り付けないでください。J-Quantsの個人向け利用規約に従い、取得データや結果を公開Sites・GitHub・外部AIへ配信しないでください。</p><p class="muted" style="font-size:12px">原終値Cのみ使用。取引カレンダーと照合し、欠損・重複・株式分割等を含む期間は中止します。保存や価格補完は行いません。設定・通信エラーでも架空相場へ切り替わりません。</p></details>
+</div>
+<div class="actions" id="syntheticControls" hidden>
+<label for="scenario" class="desc">対戦する架空シナリオ</label>
+<select id="scenario" aria-label="架空対戦シナリオ"><option value="">シナリオ読込中</option></select>
+</div>
+<div class="actions"><button type="button" class="main" id="runChallenge" disabled>⚔ 実相場で12営業日に挑戦</button></div>
+<p class="muted" id="challengeStatus" role="status" style="font-size:12px">実相場データを取得して、3体のヒストリカル結果を比較します。XPは増えません。</p>
+<div id="challengeResult" hidden>
+<p id="challengeMarket" class="important" style="overflow-wrap:anywhere" hidden></p>
+<div id="challengeCards" class="topstats" style="margin:15px 0"></div>
+<details id="challengeAnalysis"><summary>分析・Brier・価格履歴の詳細を開く</summary>
+<div class="topstats">
+<div class="stat"><span>公平な初期コイン（各キャラ）</span><strong id="challengeCoins">--</strong></div>
+<div class="stat"><span>均等予測の参考Brier</span><strong id="challengeBaseline">--</strong></div>
+</div>
+<p class="muted" style="font-size:12px;margin-top:12px">予測誤差はBrier Scoreで評価。低いほど良い。利益・最大下落率もそれぞれ別順位とし、総合優勝は決めません。</p>
+<div style="overflow-x:auto;margin-top:12px">
+<table id="challengeTable" style="border-collapse:collapse;width:100%;min-width:600px;text-align:right">
+<thead><tr><th scope="col" style="text-align:left">キャラ</th><th scope="col">Brier ↓</th><th scope="col">損益 ↑</th><th scope="col">最大下落率 ↓</th><th scope="col">的中率</th></tr></thead>
+<tbody id="challengeRows"></tbody></table>
+</div>
+<div id="challengeDetails"></div>
+<p id="challengeRanks" class="muted" style="font-size:12px;margin-top:12px"></p>
+<p id="challengeAudit" class="muted" style="font-size:11px;margin-top:6px;overflow-wrap:anywhere"></p>
+</details>
+<div class="important" id="challengeWarning">過去リプレイの結果は今後の予測能力や利益を保証しません。チャレンジはXPを付与しません。</div>
+</div>
+</section>
+<div class="cols section">
 <section class="card">
 <h2>01 コインを配分する</h2>
 <div class="slots">
@@ -108,7 +149,7 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 </div>
 <section class="card" style="margin-top:22px" id="growthSection">
 <h2>03 キャラ育成と装備</h2>
-<p class="muted" style="font-size:13px">練習課題の達成ごとに一度だけ経験値を獲得。装備は次の架空シミュレーションの分析感度を変えます。現実の予測能力が上がるわけではありません。</p>
+<p class="muted" style="font-size:13px">練習課題の達成ごとに一度だけ経験値を獲得。装備は次の練習・リプレイの分析感度を変えます。現実の予測能力が上がるわけではありません。</p>
 <div id="growthCards" class="slots" aria-live="polite"></div>
 <p id="gearMessage" class="muted" role="status" style="font-size:12px"></p>
 </section>
@@ -125,33 +166,8 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <p id="resultDetails" class="muted" style="margin-top:15px"></p>
 <div class="important">結果は固定された12日分の架空価格を使った練習の数字。過去の結果であり将来の利益を示さず、Brier Scoreや実際の予測精度の検証でもありません。</div>
 </section>
-<section class="card" style="margin-top:22px" id="challengeSection">
-<h2>05 チャレンジ・対戦モード</h2>
-<p class="muted" style="font-size:13px">3体が同じ架空の12日間を、それぞれ初期10,000コインで挑戦します。保存モデルや育成装備も反映。実市場との接続はありません。</p>
-<div class="actions">
-<label for="scenario" class="desc">対戦する架空シナリオ</label>
-<select id="scenario" aria-label="架空対戦シナリオ"><option value="">シナリオ読込中</option></select>
-<button type="button" class="main" id="runChallenge">⚔ 対戦結果を見る</button>
-</div>
-<p class="muted" id="challengeStatus" role="status" style="font-size:12px">同じ固定シナリオを繰り返し試すため、現実の予測実力の評価にはなりません。</p>
-<div id="challengeResult" hidden>
-<div class="topstats">
-<div class="stat"><span>公平な初期コイン（各キャラ）</span><strong id="challengeCoins">--</strong></div>
-<div class="stat"><span>均等予測の参考Brier</span><strong id="challengeBaseline">--</strong></div>
-</div>
-<p class="muted" style="font-size:12px;margin-top:12px">予測誤差はBrier Scoreで評価。低いほど良い。利益・最大下落率もそれぞれ別順位とし、総合優勝は決めません。</p>
-<div style="overflow-x:auto;margin-top:12px">
-<table id="challengeTable" style="border-collapse:collapse;width:100%;min-width:600px;text-align:right">
-<thead><tr><th scope="col" style="text-align:left">キャラ</th><th scope="col">Brier ↓</th><th scope="col">損益 ↑</th><th scope="col">最大下落率 ↓</th><th scope="col">的中率</th></tr></thead>
-<tbody id="challengeRows"></tbody></table>
-</div>
-<div id="challengeDetails"></div>
-<p id="challengeRanks" class="muted" style="font-size:12px;margin-top:12px"></p>
-<p id="challengeAudit" class="muted" style="font-size:11px;margin-top:6px;overflow-wrap:anywhere"></p>
-<div class="important">※固定の架空価格を使った教材です。何度も挑戦して数値を最適化すると、そのシナリオへの過剰適合が起こります。Brierが低くても実市場への予測力を証明しません。チャレンジはXPを付与しません。</div>
-</div>
-</section>
-<footer>SPRINT 08 · Creature Lab / ローカルで架空シナリオを比較する教材。実市場価格、現金決済、広告、オンラインランキング、売買APIはありません。</footer>
+
+<footer>SPRINT 13 · Creature Lab / 個人のローカル専用。実相場リプレイと架空相場練習。仮想コインは換金不可。口座接続・現金送金・発注なし。</footer>
 </div>
 <script>
 const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
@@ -187,7 +203,7 @@ function renderGrowth(data){
     const heading=document.createElement("div");heading.className="title";
     heading.textContent=symbols[entry.slot]+" "+names[entry.slot]+" ・ Lv."+entry.level+" ・ "+entry.xp+" XP";
     const note=document.createElement("div");note.className="desc";
-    note.textContent="取得した育成課題 "+entry.achievements.length+"/3 ・ 装備による補正は架空の予測にのみ使用";
+    note.textContent="取得した育成課題 "+entry.achievements.length+"/3 ・ 装備による補正は練習・リプレイの予測に使用";
     const control=document.createElement("div");control.className="actions";
     const selector=document.createElement("select");
     selector.setAttribute("aria-label",names[entry.slot]+"の育成装備");
@@ -370,16 +386,16 @@ function renderChallengeDetails(data){
     panel.appendChild(chart);
     const wrap=document.createElement("div");wrap.style.overflowX="auto";
     const table=document.createElement("table");table.style.cssText="width:100%;min-width:850px;text-align:right;border-collapse:collapse";
-    const caption=document.createElement("caption");caption.textContent=item.name+"：確率予測と実際の架空変動";table.appendChild(caption);
+    const caption=document.createElement("caption");caption.textContent=item.name+"：確率予測と"+(data.market?"過去の実相場変動":"架空変動");table.appendChild(caption);
     const head=document.createElement("thead"), hr=document.createElement("tr");
-    for(const label of ["ステップ","予測時の価格","UP","FLAT","DOWN","予測","実際","的中","Brier"]){
+    for(const label of ["ステップ",...(data.market?["予測開始日","対象営業日","実終値"]:[]),"予測時の価格","UP","FLAT","DOWN","予測","実際","的中","Brier"]){
       const th=document.createElement("th");th.scope="col";th.textContent=label;hr.appendChild(th);
     }
     head.appendChild(hr);table.appendChild(head);
     const body=document.createElement("tbody");
     for(const r of item.history){
       const tr=document.createElement("tr");
-      const values=[r.step,r.observed_price,...["UP","FLAT","DOWN"].map(k=>(r.prediction[k]*100).toFixed(2)+"%"),r.predicted,r.actual,r.predicted===r.actual?"○":"×",r.brier.toFixed(6)];
+      const values=[r.step,...(data.market?[r.decision_date,r.target_date,r.actual_price]:[]),r.observed_price,...["UP","FLAT","DOWN"].map(k=>(r.prediction[k]*100).toFixed(2)+"%"),r.predicted,r.actual,r.predicted===r.actual?"○":"×",r.brier.toFixed(6)];
       values.forEach((v,i)=>{
         const cell=document.createElement(i===0?"th":"td");
         if(i===0)cell.scope="row";
@@ -427,18 +443,13 @@ async function loadChallengeScenarios(){
       opt.textContent=scenario.name+" ・ "+scenario.description;
       select.appendChild(opt);
     }
+    scenarioAvailable=true;updateChallengeMode();
   }catch(e){
     $("challengeStatus").textContent="シナリオ一覧を取得できません: "+e.message;
-    $("runChallenge").disabled=true;
+    scenarioAvailable=false;updateChallengeMode();
   }
 }
-$("runChallenge").addEventListener("click",async()=>{
-  const button=$("runChallenge");
-  button.disabled=true;
-  $("challengeResult").hidden=true;
-  $("challengeStatus").textContent="架空のチャレンジ結果を計算しています";
-  try{
-    const data=await call("/api/challenge/run",{scenario_id:$("scenario").value});
+function renderChallengeResult(data){
     renderChallengeDetails(data);
     $("challengeCoins").textContent=fmt(data.initial_coins_each)+" C";
     $("challengeBaseline").textContent=data.uniform_baseline_brier.toFixed(4);
@@ -469,15 +480,75 @@ $("runChallenge").addEventListener("click",async()=>{
                                   .map(k=>data.contestants[k].name).join("・");
     $("challengeRanks").textContent="予測誤差1位："+byMetric("brier")+" ／ 損益1位："+byMetric("profit")+" ／ 最大下落率1位："+byMetric("drawdown");
     $("challengeAudit").textContent="監査: "+data.steps+"ステップ・横ばい判定 ±"+data.flat_threshold_pct+
-      "%・価格シナリオSHA256 "+data.scenario_sha256.slice(0,20)+
-      "… / source REV "+data.source_revision+
+      "%・価格シナリオSHA256 "+(data.market?data.market.price_series_sha256:data.scenario_sha256)+
+      " / source REV "+data.source_revision+
       " / 編成 REV "+data.lineup_revision+" / 育成 REV "+data.growth_revision;
+    const cards=$("challengeCards");cards.replaceChildren();
+    for(const [i,key] of ["mine","owl","turtle"].entries()){
+      const player=data.contestants[key];
+      const card=document.createElement("div");card.className="slot";
+      const name=document.createElement("h3");name.textContent=["✨ ","🌙 ","🍀 "][i]+player.name;
+      const coins=document.createElement("p");coins.textContent=fmt(data.initial_coins_each+player.profit_coins)+" C";
+      const profit=document.createElement("p");profit.textContent="仮想コイン損益 "+(player.profit_coins>=0?"+":"")+fmt(player.profit_coins)+" C ・ 第"+player.ranks.profit+"位";
+      card.appendChild(name);card.appendChild(coins);card.appendChild(profit);cards.appendChild(card);
+    }
+    const audit=$("challengeMarket");audit.hidden=!data.market;
+    if(data.market){
+      const m=data.market;
+      audit.textContent="日本株 "+m.code+" / "+m.provider+" / 取得日時 "+m.fetched_at+
+        " / 予測開始日（最初の判断） "+m.prediction_start_date+" / 判定対象 "+m.first_target_date+" 〜 "+m.final_date+
+        " / 終了日指定 "+m.requested_end_date+" / 準備 "+m.warmup_start_date+" 〜 "+m.warmup_end_date+
+        "（"+m.warmup_sessions+"営業日） / 原終値 C / 価格系列SHA256 "+m.price_series_sha256;
+    }else{audit.textContent="";}
+    $("challengeAnalysis").open=false;
+    $("challengeWarning").textContent=data.warning;
     $("challengeResult").hidden=false;
-    $("challengeStatus").textContent=data.scenario_name+" の比較完了。"+data.warning;
+}
+let marketConfigured=false,scenarioAvailable=false,challengeBusy=false;
+function updateChallengeMode(){
+  const real=$("challengeMode").value==="market";
+  $("marketControls").hidden=!real;
+  $("syntheticControls").hidden=real;
+  $("runChallenge").disabled=challengeBusy || (real?!marketConfigured:!scenarioAvailable);
+  $("runChallenge").textContent=real?"⚔ 実相場で12営業日に挑戦":"⚔ 架空シナリオで対戦";
+  $("challengeResult").hidden=true;
+  $("challengeStatus").textContent=real?"過去の実相場で3体が挑戦。今後の予測能力を保証しません。":"固定された架空シナリオの練習です。";
+}
+async function loadMarketStatus(){
+  try{
+    const status=await call("/api/market/status");
+    marketConfigured=status.configured;
+    $("marketStatus").textContent=status.message;
+    $("marketEndDate").max=status.max_end_date;
+  }catch(e){marketConfigured=false;$("marketStatus").textContent="設定状態を確認できません: "+e.message;}
+  updateChallengeMode();
+}
+$("challengeMode").addEventListener("change",updateChallengeMode);
+$("runChallenge").addEventListener("click",async()=>{
+  const real=$("challengeMode").value==="market";
+  const button=$("runChallenge");
+  challengeBusy=true;button.disabled=true;$("challengeMode").disabled=true;
+  $("challengeResult").hidden=true;
+  $("challengeStatus").textContent=real?"J-Quantsの営業日・原終値を確認し、リプレイしています…":"架空のチャレンジ結果を計算しています";
+  try{
+    let data;
+    if(real){
+      if(!/^[0-9]{4,5}$/.test($("marketCode").value))throw Error("銘柄コードは半角数字4桁または5桁で入力してください。");
+      if(!$("marketEndDate").value)throw Error("過去の終了日を選んでください。");
+      data=await call("/api/market/replay",{code:$("marketCode").value,end_date:$("marketEndDate").value});
+    }else{
+      data=await call("/api/challenge/run",{scenario_id:$("scenario").value});
+    }
+    renderChallengeResult(data);
+    $("challengeStatus").textContent=data.scenario_name+" のヒストリカル比較完了。"+data.warning;
   }catch(e){
-    $("challengeStatus").textContent="対戦の計算に失敗: "+e.message;
-  }finally{button.disabled=false;}
+    $("challengeStatus").textContent="対戦を開始できません: "+e.message;
+  }finally{
+    challengeBusy=false;$("challengeMode").disabled=false;
+    button.disabled=real?!marketConfigured:!scenarioAvailable;
+  }
 });
+loadMarketStatus();
 loadChallengeScenarios();
 $("claimTraining").addEventListener("click",async()=>{
   if(!lastPractice)return;
