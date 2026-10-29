@@ -193,3 +193,7 @@ API: `GET /create`, `GET /api/blueprints`, `POST /api/blueprints/preview`, `POST
 外見は独立したschema 1の `local_state/looks2d.json` と `looks2d_assets/` に保存します（最大50件、合計20 MiB、PNG/JPEG/WebP各1 MiBまで）。`layers` は配列ですが現在は1枚のみ。画像未指定の保存は既存アクセサリーを維持し、表示OFFで隠せます。位置は中心から±100%、サイズはフレームの10〜200%。枠外は切り取ります。署名検証は完全な画像デコードではないため、破損画像はブラウザで表示できない場合があります。保存データ破損時は上書きせず停止します。既存DRAFT・練習版・ゲーム保存・予測重み・スコアは変更しません。
 
 同一端末限定API: `GET /api/looks2d?draft_id=bp_…`、`POST /api/looks2d/save`（JSON上限1.5 MiB）、`GET /api/looks2d/{draft_id}/accessory`。保存JSONは `draft_id, accessory_data_uri, position_x_pct, position_y_pct, scale_pct, visible` のみ。ローカルHost/Origin検証は制作APIと共通です。
+
+### Sprint 18 パーツ工房
+
+`/assemble` で期間・仮想配分コアと2〜4個の分析パーツを選び、相対配分を合計100%に正規化して試せます。固定架空データのプレビュー後に不変のDRAFTを保存し、`/create` のギャラリーで確認・学習できます。手動DRAFTの学習は当初0%の指標を再有効化しません。実相場の精度を示す機能ではありません。設計と検証上の制限は `docs/SPRINT18_PARTS_DESIGN.md` を参照してください。

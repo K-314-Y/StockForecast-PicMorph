@@ -19,6 +19,7 @@ from market import MarketError, market_status, run_market_replay
 import blueprints
 import training_lab
 import looks2d
+import parts_builder
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -140,8 +141,55 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._json(500, {'error': '外見データを読み書きできません'})
 
+    def _parts(self, path, post=False):
+        if not self._blueprint_access():
+            return
+        try:
+            if urlsplit(self.path).query:
+                raise blueprints.BlueprintError('クエリは指定できません。')
+            if not post and path == '/assemble':
+                self._send(200, (ROOT / 'web' / 'assemble.html').read_bytes(), 'text/html; charset=utf-8')
+            elif not post and path == '/api/parts/catalog':
+                self._json(200, parts_builder.catalog())
+            elif post and path in ('/api/parts/preview', '/api/parts/draft'):
+                types = self.headers.get_all('Content-Type', [])
+                if len(types) != 1 or types[0].lower().strip() not in ('application/json', 'application/json; charset=utf-8'):
+                    raise blueprints.BlueprintError('JSONのみ受け付けます', 415)
+                lengths = self.headers.get_all('Content-Length', [])
+                if self.headers.get_all('Transfer-Encoding') or len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit():
+                    raise blueprints.BlueprintError('Content-Lengthを1つ指定してください')
+                size = int(lengths[0])
+                if not 0 < size <= parts_builder.MAX_REQUEST_BYTES:
+                    raise blueprints.BlueprintError('入力サイズが上限を超えています', 413)
+                raw = self.rfile.read(size)
+                if len(raw) != size:
+                    raise blueprints.BlueprintError('入力が途中で切れています')
+                def pairs(items):
+                    result = {}
+                    for key, value in items:
+                        if key in result:
+                            raise ValueError('duplicate key')
+                        result[key] = value
+                    return result
+                def invalid_constant(value):
+                    raise ValueError('nonfinite')
+                payload = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=invalid_constant)
+                save = path.endswith('/draft')
+                self._json(201 if save else 200, parts_builder.create_draft(payload) if save else parts_builder.preview(payload))
+            else:
+                self._json(404, {'error': '見つかりません'})
+        except blueprints.BlueprintError as exc:
+            self._json(exc.status, {'error': str(exc)})
+        except (ValueError, TypeError, RecursionError):
+            self._json(400, {'error': 'JSON入力が不正です'})
+        except OSError:
+            self._json(500, {'error': '制作データを読み書きできません'})
+
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == '/assemble' or path == '/api/parts' or path.startswith('/api/parts/'):
+            self._parts(path, post=False)
+            return
         if path == "/api/looks2d" or path.startswith("/api/looks2d/"):
             self._looks2d(path)
             return
@@ -195,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == '/assemble' or path == '/api/parts' or path.startswith('/api/parts/'):
+            self._parts(path, post=True)
+            return
         if path == "/api/looks2d" or path.startswith("/api/looks2d/"):
             self._looks2d(path, post=True)
             return

@@ -82,8 +82,8 @@ def grid():
             for b in range(0, 101-a, 20) for c in range(0, 101-a-b, 20)]
 
 
-def select_weights(model, training):
-    return min(grid(), key=lambda weights: (
+def select_weights(model, training, candidates=None):
+    return min(grid() if candidates is None else candidates, key=lambda weights: (
         score(weights, training),
         sum(abs(a-b) for a, b in zip(weights, model.plugin_weights)), weights))
 
@@ -99,7 +99,11 @@ def _preview(payload):
             raise ValueError()
         model = model_from_parameters(blueprint['engine_parameters'])
         training = samples(model, SYNTHETIC_PRICES, TRAIN_INDICES)
-        weights = select_weights(model, training)
+        candidates = grid()
+        if draft.get('generator', {}).get('kind') == 'manual_parts_v1':
+            candidates = [w for w in candidates if all(
+                initial > 0 or fitted == 0 for initial, fitted in zip(model.plugin_weights, w))]
+        weights = select_weights(model, training, candidates)
         selected = Model(model.fast_window, model.slow_window, model.risk_fraction,
                          weights, model.plugin_strengths)
         # Validation is constructed only after the chosen weights are fixed.
@@ -115,7 +119,7 @@ def _preview(payload):
                       dataset=dataset, trained_until=32, last_training_decision_index=31,
                       competition_eligible=False, notice=NOTICE,
                       training_job=dict(method='constrained_grid_v1', objective='mean_multiclass_brier',
-                                        candidate_count=56, weight_step=20,
+                                        candidate_count=len(candidates), weight_step=20,
                                         tie_break='exact objective, L1 distance to draft, lexicographic registry order',
                                         indicator_order=list(PLUGIN_IDS), validation_used_for_selection=False),
                       scores=dict(training_count=len(training), validation_count=len(validation),
