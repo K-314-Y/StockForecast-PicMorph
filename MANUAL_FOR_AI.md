@@ -130,3 +130,7 @@ Blueprint JSON has its own bounded reader (~1.34 MiB); legacy limit stays 8192 b
   Validation can worsen; repeated human choices can also overfit this tiny dataset.
 
 Sprint 16 の外見は2Dが基本。`/create` の保存DRAFT →「2D 着せ替え」で1枚のアクセサリーを重ねる。`looks2d.py` / `local_state/looks2d.json` は独立した外見専用schema。外見だけの変更。予測性能は変わりません。重み・スコア・既存DRAFT・保存モデルを書き換えない。3D、実際のvision、画像からのPythonコード実行、AI画像生成は未実装。絵なしはCSSフレーム。画像検証は既存のコンテナ署名検証であり完全なデコードではない。
+
+## Sprint 18: パーツ組み立て
+
+`/assemble` は独立した手動制作画面です。localhost限定の `GET /api/parts/catalog`、`POST /api/parts/preview`、`POST /api/parts/draft` を使います。POSTはJSON・8192バイト以内。入力は name、任意concept、window_part_id、risk_part_id、analysis（part_id/share/strength）のみ。プレビューは架空観測値だけを利用し、保存は既存blueprintsストアの不変DRAFTです。既存の3候補制作・現行ゲームモデルは変更しません。manual_parts_v1の学習は元の0%指標を保持し、画像・任意コードは予測入力にしません。既存MCPツールは増減していません。

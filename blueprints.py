@@ -241,6 +241,12 @@ def create_draft(payload):
     draft = {"schema": 1, "id": draft_id, "created_at": datetime.now(timezone.utc).isoformat(),
              **common, **selected, "visual_asset": asset, "status": "draft",
              "training_job": None, "deployed_model_version": None, "competition_eligible": False}
+    return _persist_draft(draft, image)
+
+
+def _persist_draft(draft, image=None):
+    """Shared immutable append: one lock, quota and atomic write for all generators."""
+    draft_id = draft["id"]
     with LOCK:
         drafts = _read()
         if len(drafts) >= MAX_DRAFTS:
