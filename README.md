@@ -166,3 +166,22 @@ API: `GET /create`, `GET /api/blueprints`, `POST /api/blueprints/preview`, `POST
 専用本文上限は約1.34 MiB（旧APIは8192 Bのまま）。画像はPNG/JPEG/WebPのbase64 data URI、1 MiB以下、magic byte照合（完全な画像デコードではありません）。固定IDのファイル名でGit対象外の `local_state/created_visual_assets/` に保存し、`created_blueprints.json` を原子的更新。最大50件・画像合計20 MiB。asset・blueprint・将来のtraining_job・deployed_model_versionは分離し、後者2つはnullです。
 
 検証: `python3 -B -m unittest discover -s tests -v`、`npm ci --prefix mcp && npm test --prefix mcp`。制限環境では既存HTTPテストのsocket、Nodeの子プロセス、依存取得DNSが拒否されるため、通常のローカル端末で全件を再実行してください。ブラウザーでのモバイル表示・画像選択・3候補・保存後リロードの確認は別途必要です。
+
+### Sprint15: 下書きから架空データで学習
+
+`/create` の保存済みカードで「架空データで学習して比較」→「練習版保存」。
+プレビューは読み取り専用。固定架空40点だけを使い、4指標の重みを20刻み・
+合計100の56候補から学習平均3クラスBrier最小で選びます。期間・感度・
+リスク比率は元の下書きのまま。同点は元の重みへのL1距離、登録順の辞書順で決定。
+0始まりの判断index 20..31（12件）で学習し、32..38（7件）で検証します。
+各入力はindexまでの価格だけで、次の価格のラベルは特徴生成後に計算します。
+`trained_until=32` は最後の学習ラベルの価格index（最後の判断indexは31）。
+元の案の学習・検証Brierと均等予測2/3も独立に表示します。改善は保証しません。
+
+`POST /api/blueprints/train-preview` / `train-save` は `{ "draft_id": "bp_…" }`
+のみ、最大8192バイト、既存と同じ厳格なローカル制限。保存は
+`local_state/trained_versions.json` に最大100件、原子的に追加し、モデル版と
+学習記録を分離します。`GET /api/blueprints/trained` は安全なメタデータのみ。
+画像・任意Python・外部価格入力・実相場評価・ゲームへの反映はありません。
+固定架空40点での学習演習。実相場の能力を証明しない。検証期間は選択に使わない。
+繰り返し比較・手動選択でも過剰適合するため、検証成績は研究上の汎化性能ではありません。

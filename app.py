@@ -17,6 +17,7 @@ from growth import public_growth, complete_training, equip, equipped_models
 from challenge import public_scenarios, run_challenge
 from market import MarketError, market_status, run_market_replay
 import blueprints
+import training_lab
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -73,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._blueprint_access():
             return
         try:
-            if path not in ("/api/blueprints/preview", "/api/blueprints/create"):
+            training = path in ("/api/blueprints/train-preview", "/api/blueprints/train-save")
+            if not training and path not in ("/api/blueprints/preview", "/api/blueprints/create"):
                 raise blueprints.BlueprintError("見つかりません", 404)
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 raise blueprints.BlueprintError("JSONのみ受け付けます", 415)
@@ -81,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
                 raise blueprints.BlueprintError("Content-Lengthを1つ指定してください")
             size = int(lengths[0])
-            if not 0 < size <= blueprints.MAX_REQUEST_BYTES:
+            limit = training_lab.MAX_REQUEST_BYTES if training else blueprints.MAX_REQUEST_BYTES
+            if not 0 < size <= limit:
                 raise blueprints.BlueprintError("入力サイズが上限を超えています", 413)
             raw = self.rfile.read(size)
             if len(raw) != size:
@@ -89,6 +92,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw)
             if not isinstance(payload, dict) or "action" in payload:
                 raise blueprints.BlueprintError("制作設定をJSONオブジェクトで指定してください")
+            if training:
+                save = path.endswith("/train-save")
+                self._json(201 if save else 200,
+                           training_lab.train_save(payload) if save else training_lab.train_preview(payload))
+                return
             payload["action"] = "preview" if path.endswith("/preview") else "save"
             self._json(200 if payload["action"] == "preview" else 201,
                        blueprints.create_draft(payload))
@@ -107,6 +115,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, (ROOT / "web" / "create.html").read_bytes(), "text/html; charset=utf-8")
                 elif path == "/api/blueprints":
                     self._json(200, blueprints.read_drafts())
+                elif path == "/api/blueprints/trained":
+                    self._json(200, training_lab.read_trained())
                 elif path.endswith("/image"):
                     mime, data = blueprints.read_image(path[len("/api/blueprints/"):-len("/image")])
                     self._send(200, data, mime)
