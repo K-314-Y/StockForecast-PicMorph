@@ -185,3 +185,11 @@ API: `GET /create`, `GET /api/blueprints`, `POST /api/blueprints/preview`, `POST
 画像・任意Python・外部価格入力・実相場評価・ゲームへの反映はありません。
 固定架空40点での学習演習。実相場の能力を証明しない。検証期間は選択に使わない。
 繰り返し比較・手動選択でも過剰適合するため、検証成績は研究上の汎化性能ではありません。
+
+### Sprint 16: 2D 着せ替え
+
+`/create` の保存済みDRAFTで「2D 着せ替え」を開き、アクセサリー1枚を選んでX/Y位置・サイズ・表示を調整し「外見を保存」します。**外見だけの変更。予測性能は変わりません。** ベース絵がなければ中立のCSSフレームを表示します。2Dが基本で、3D・アニメーション・実際のvision解析・AI画像生成はありません。ユーザー画像からPythonコードを実行することもありません。
+
+外見は独立したschema 1の `local_state/looks2d.json` と `looks2d_assets/` に保存します（最大50件、合計20 MiB、PNG/JPEG/WebP各1 MiBまで）。`layers` は配列ですが現在は1枚のみ。画像未指定の保存は既存アクセサリーを維持し、表示OFFで隠せます。位置は中心から±100%、サイズはフレームの10〜200%。枠外は切り取ります。署名検証は完全な画像デコードではないため、破損画像はブラウザで表示できない場合があります。保存データ破損時は上書きせず停止します。既存DRAFT・練習版・ゲーム保存・予測重み・スコアは変更しません。
+
+同一端末限定API: `GET /api/looks2d?draft_id=bp_…`、`POST /api/looks2d/save`（JSON上限1.5 MiB）、`GET /api/looks2d/{draft_id}/accessory`。保存JSONは `draft_id, accessory_data_uri, position_x_pct, position_y_pct, scale_pct, visible` のみ。ローカルHost/Origin検証は制作APIと共通です。
