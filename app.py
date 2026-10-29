@@ -16,6 +16,7 @@ from game import PRESETS
 from growth import public_growth, complete_training, equip, equipped_models
 from challenge import public_scenarios, run_challenge
 from market import MarketError, market_status, run_market_replay
+import blueprints
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -49,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(result, ensure_ascii=False).encode(),
                    "application/json; charset=utf-8")
 
-    def _market_access(self) -> bool:
+    def _market_access(self, message="実相場機能は同じ端末のローカル画面からのみ利用できます。") -> bool:
         """Guard both new routes, including GET, against remote browser access."""
         allowed = (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
         try:
@@ -61,13 +62,59 @@ class Handler(BaseHTTPRequestHandler):
                 or (origin and origin not in tuple("http://" + host for host in allowed))
                 or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
                 or any(self.headers.get(h) for h in ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"))):
-            self._json(403, {"error": "実相場機能は同じ端末のローカル画面からのみ利用できます。"})
+            self._json(403, {"error": message})
             return False
         return True
 
+    def _blueprint_access(self):
+        return self._market_access("制作機能は同じ端末のローカル画面からのみ利用できます。")
+
+    def _blueprint_post(self, path):
+        if not self._blueprint_access():
+            return
+        try:
+            if path not in ("/api/blueprints/preview", "/api/blueprints/create"):
+                raise blueprints.BlueprintError("見つかりません", 404)
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                raise blueprints.BlueprintError("JSONのみ受け付けます", 415)
+            lengths = self.headers.get_all("Content-Length", [])
+            if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
+                raise blueprints.BlueprintError("Content-Lengthを1つ指定してください")
+            size = int(lengths[0])
+            if not 0 < size <= blueprints.MAX_REQUEST_BYTES:
+                raise blueprints.BlueprintError("入力サイズが上限を超えています", 413)
+            raw = self.rfile.read(size)
+            if len(raw) != size:
+                raise blueprints.BlueprintError("入力が途中で切れています")
+            payload = json.loads(raw)
+            if not isinstance(payload, dict) or "action" in payload:
+                raise blueprints.BlueprintError("制作設定をJSONオブジェクトで指定してください")
+            payload["action"] = "preview" if path.endswith("/preview") else "save"
+            self._json(200 if payload["action"] == "preview" else 201,
+                       blueprints.create_draft(payload))
+        except blueprints.BlueprintError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except (ValueError, TypeError, RecursionError):
+            self._json(400, {"error": "JSON入力が不正です"})
+
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path == "/api/market/status":
+        if path == "/create" or path == "/api/blueprints" or path.startswith("/api/blueprints/"):
+            if not self._blueprint_access():
+                return
+            try:
+                if path == "/create":
+                    self._send(200, (ROOT / "web" / "create.html").read_bytes(), "text/html; charset=utf-8")
+                elif path == "/api/blueprints":
+                    self._json(200, blueprints.read_drafts())
+                elif path.endswith("/image"):
+                    mime, data = blueprints.read_image(path[len("/api/blueprints/"):-len("/image")])
+                    self._send(200, data, mime)
+                else:
+                    self._json(404, {"error": "見つかりません"})
+            except blueprints.BlueprintError as exc:
+                self._json(exc.status, {"error": str(exc)})
+        elif path == "/api/market/status":
             if self._market_access():
                 self._json(200, market_status())
         elif path in ("/", "/game"):
@@ -100,6 +147,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/blueprints" or path.startswith("/api/blueprints/"):
+            self._blueprint_post(path)
+            return
         if path.startswith("/api/market/") and not self._market_access():
             return
         origin = self.headers.get("Origin")

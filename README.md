@@ -155,3 +155,14 @@ MCPサーバーのツール一覧認識とstdio統合テストは成功。
 新ローカルAPI: `GET /api/market/status` は設定済みかどうか（秘密そのものは返しません）、`POST /api/market/replay` はJSON `{"code":"7203","end_date":"2025-06-30"}` を受けます。過去の日付と銘柄・API利用契約に応じて利用可否が決まります。JPX個人向けJ-QuantsのFreeプランは直近12週間のデータを取得できないため、無料利用時はそれ以前の日付にしてください（契約範囲を要確認）。HTTP429・認証・価格欠損・株式分割を検知したら停止します。
 
 **重要:** 厳密なその当時のデータ版を再現するPoint-in-Time監査ではありません。補正前終値を使い、株式分割等が含まれる52営業日を拒否します。データは改訂されうるため、履歴上の成績が将来の予測力を示すわけではありません。実売買・口座接続・現金移動・発注なし。取得データの再配布禁止（J-Quants個人向け利用規約）。公開Sitesへは実株価・プレイヤー結果を配信しないこと。
+
+### Sprint 14 — イラスト付きモデル案のDRAFT制作（ローカル限定）
+
+`http://127.0.0.1:8765/create`（`/game`から移動）で、任意のイラスト、名前、申告した設定・性格・スタイルから3候補をプレビューし、1案を変更不可のDRAFTとして保存できます。
+「絵のAI解析は未接続: イラストは外見、候補はあなたが選んだ性格・設定から生成」。性格だけを決定的な対応表に使い、自由文は保存のみ。実際の指標レジストリとModel検証を使用します。未学習・性能未検証で、実相場対戦には参加できず、既存3キャラに影響しません。
+
+API: `GET /create`, `GET /api/blueprints`, `POST /api/blueprints/preview`, `POST /api/blueprints/create`, `GET /api/blueprints/{id}/image`。POSTはJSONで `name`, `concept`, `trait`（balanced/energetic/cautious/analytical）, `style`, 任意の `image_data_uri` を指定。createには候補の `candidate_id`（trend/reversion/balanced）を追加。全ルートでloopback接続・Host・Origin・転送ヘッダーを検証し、公開Sitesでは提供しません。
+
+専用本文上限は約1.34 MiB（旧APIは8192 Bのまま）。画像はPNG/JPEG/WebPのbase64 data URI、1 MiB以下、magic byte照合（完全な画像デコードではありません）。固定IDのファイル名でGit対象外の `local_state/created_visual_assets/` に保存し、`created_blueprints.json` を原子的更新。最大50件・画像合計20 MiB。asset・blueprint・将来のtraining_job・deployed_model_versionは分離し、後者2つはnullです。
+
+検証: `python3 -B -m unittest discover -s tests -v`、`npm ci --prefix mcp && npm test --prefix mcp`。制限環境では既存HTTPテストのsocket、Nodeの子プロセス、依存取得DNSが拒否されるため、通常のローカル端末で全件を再実行してください。ブラウザーでのモバイル表示・画像選択・3候補・保存後リロードの確認は別途必要です。

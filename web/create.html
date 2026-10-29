@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>キャラ制作 | Creature Lab</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101723;color:#edf2fa}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0 auto;max-width:1050px;padding:20px}a{color:#a6d6ff}header{display:flex;justify-content:space-between;align-items:center;gap:16px}h1{font-size:26px}h2{font-size:20px}p{line-height:1.7}.notice{background:#273345;border-left:4px solid #9bc8ff;padding:16px;border-radius:8px}section,article{background:#192333;border:1px solid #35445b;border-radius:16px;padding:20px;margin:16px 0}label{display:block;margin:14px 0 6px}input,select,button{font:inherit;border-radius:8px;padding:12px;max-width:100%}input,select{width:100%;background:#101723;color:inherit;border:1px solid #586a83}button{cursor:pointer;background:#b3d7ff;color:#132136;border:0;font-weight:700}button:disabled{opacity:.5;cursor:default}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.grid article{margin:0}img{display:block;width:100%;height:220px;object-fit:contain;background:#101723;border-radius:10px}small{color:#b7c8dc;line-height:1.6}#status{min-height:28px;color:#ffdf9b}#candidates:empty{display:none}.tag{color:#acd5ff;font-weight:700}dl{font-size:14px;line-height:1.8}dt{font-weight:700}dd{margin:0 0 8px;overflow-wrap:anywhere}@media(max-width:500px){body{padding:12px}header{align-items:start}h1{font-size:22px}section,article{padding:16px}}
+</style>
+<header><h1>✦ キャラ制作</h1><a href="/game">ゲームへ戻る</a></header>
+<p class="notice">絵のAI解析は未接続: イラストは外見、候補はあなたが選んだ性格・設定から生成</p>
+<p>イラストと設定を添えて、3つのルールモデル案から下書きを残しましょう。学習済みモデルではなく、実相場対戦には参加できません。既存の3キャラとは独立しています。</p>
+<section><h2>1. 外見と設定</h2><form id="form">
+<label for="name">キャラ名（必須）</label><input id="name" maxlength="60" required placeholder="例: 星読みのアオ">
+<label for="concept">あなたが決めた設定</label><input id="concept" maxlength="300" placeholder="例: 星の流れを観察する旅人">
+<label for="trait">性格</label><select id="trait"><option value="balanced">バランス</option><option value="energetic">元気</option><option value="cautious">慎重</option><option value="analytical">分析好き</option></select>
+<label for="style">スタイル・外見のメモ</label><input id="style" maxlength="100" placeholder="例: アニメ調、青いマント">
+<p><small>性格の対応表で期間・配分・感度を決定します。設定と外見のメモは保存のみで、文章のAI解析は行いません。性能・精度は未検証です。</small></p>
+<label for="illustration">イラスト（任意・PNG / JPEG / WebP・1 MiB以下）</label><input id="illustration" type="file" accept="image/png,image/jpeg,image/webp">
+<p><img id="assetPreview" hidden alt="選んだイラストのプレビュー"></p>
+<button type="submit" id="previewButton">3つの候補を見る</button></form></section>
+<p id="status" role="status" aria-live="polite"></p>
+<section><h2>2. 候補を選んで保存</h2><p>保存後のDRAFTは変更できません。別の案は新しい下書きとして保存します。</p><div id="candidates" class="grid"></div></section>
+<section><h2>3. 保存したギャラリー</h2><p><small>この端末だけに保存（最大50件・画像合計20 MiB）。将来の学習ジョブ・配備版は未作成です。</small></p><div id="gallery" class="grid"></div></section>
+<script>
+const $=id=>document.getElementById(id);
+let previewPayload=null,busy=false,objectUrl=null;
+function status(message){$('status').textContent=message}
+async function api(path,payload){const response=await fetch(path,payload?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{});const data=await response.json();if(!response.ok)throw Error(data.error||'通信に失敗しました');return data}
+function text(tag,value,parent){const node=document.createElement(tag);node.textContent=value;parent.append(node);return node}
+function card(candidate,parent){const box=document.createElement('article');text('h3',candidate.title,box);text('p',candidate.reasoning,box);const p=candidate.blueprint.engine_parameters;const dl=document.createElement('dl');text('dt','指標の配分（合計100）',dl);text('dd',candidate.capacity_parts.map(part=>`${part.name} ${p.plugin_weights[part.indicator_id]}`).join(' / '),dl);text('dt','期間 / 仮想配分比率',dl);text('dd',`${p.fast_window}・${p.slow_window} / ${Math.round(p.risk_fraction*100)}%`,dl);box.append(dl);parent.append(box);return box}
+function invalidate(){previewPayload=null;$('candidates').replaceChildren()}
+$('form').addEventListener('input',invalidate);
+$('illustration').addEventListener('change',()=>{invalidate();if(objectUrl)URL.revokeObjectURL(objectUrl);const file=$('illustration').files[0];$('assetPreview').hidden=true;if(file&&file.size<=1048576&&['image/png','image/jpeg','image/webp'].includes(file.type)){objectUrl=URL.createObjectURL(file);$('assetPreview').src=objectUrl;$('assetPreview').hidden=false}});
+function imageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('画像を読み込めません'));reader.readAsDataURL(file)})}
+function setBusy(value){busy=value;for(const el of document.querySelectorAll('#form input,#form select,button'))el.disabled=value}
+$('form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;invalidate();setBusy(true);status('候補を準備しています…');try{const payload={name:$('name').value,concept:$('concept').value,style:$('style').value,trait:$('trait').value};const file=$('illustration').files[0];if(file){if(file.size>1048576)throw Error('画像は1 MiB以下にしてください');payload.image_data_uri=await imageData(file)}const data=await api('/api/blueprints/preview',payload);previewPayload=payload;for(const candidate of data.candidates){const box=card(candidate,$('candidates'));const button=text('button','この案をDRAFT保存',box);button.type='button';button.onclick=()=>save(candidate.candidate_id)}status('3つの案ができました。内容を確認して選んでください。')}catch(error){status(error.message)}finally{setBusy(false)}});
+async function save(candidate_id){if(busy||!previewPayload)return;setBusy(true);try{await api('/api/blueprints/create',{...previewPayload,candidate_id});invalidate();status('DRAFTを保存しました。学習・対戦登録は行っていません。');await gallery()}catch(error){status(error.message)}finally{setBusy(false)}}
+async function gallery(){const data=await api('/api/blueprints');$('gallery').replaceChildren();if(!data.drafts.length)text('p','まだ下書きはありません。最初の1体を制作しましょう。',$('gallery'));for(const draft of data.drafts){const box=card(draft,$('gallery'));const heading=document.createElement('h3');heading.textContent=draft.user_declared.name;box.prepend(heading);if(draft.visual_asset){const img=document.createElement('img');img.src=draft.visual_asset.url;img.alt=draft.user_declared.name+'のイラスト';img.loading='lazy';box.prepend(img)}text('p','DRAFT · 未学習 · 対戦対象外',box).className='tag';text('p',draft.user_declared.concept,box);text('small',draft.user_declared.style,box)}}
+gallery().catch(error=>status(error.message));
+</script></html>
