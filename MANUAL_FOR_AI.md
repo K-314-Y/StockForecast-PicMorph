@@ -96,3 +96,11 @@ won_steps（丸め前Brierで基準より1e-12超小さいステップ数）。
 新ローカルAPI: `GET /api/market/status` は設定済みかどうか（秘密そのものは返しません）、`POST /api/market/replay` はJSON `{"code":"7203","end_date":"2025-06-30"}` を受けます。過去の日付と銘柄・API利用契約に応じて利用可否が決まります。JPX個人向けJ-QuantsのFreeプランは直近12週間のデータを取得できないため、無料利用時はそれ以前の日付にしてください（契約範囲を要確認）。HTTP429・認証・価格欠損・株式分割を検知したら停止します。
 
 **重要:** 厳密なその当時のデータ版を再現するPoint-in-Time監査ではありません。補正前終値を使い、株式分割等が含まれる52営業日を拒否します。データは改訂されうるため、履歴上の成績が将来の予測力を示すわけではありません。実売買・口座接続・現金移動・発注なし。取得データの再配布禁止（J-Quants個人向け利用規約）。公開Sitesへは実株価・プレイヤー結果を配信しないこと。
+
+### Sprint 14: local draft blueprints
+
+Use `/create` for an optional illustration → three deterministic rule blueprints → immutable DRAFT gallery. Show exactly: 「絵のAI解析は未接続: イラストは外見、候補はあなたが選んだ性格・設定から生成」. Only declared trait selects rule parameters; concept/style text is retained without analysis. No vision, image generation, training, performance claim, battle eligibility, or changes to the three game characters.
+
+Local-only routes: GET `/create`, GET `/api/blueprints`, POST `/api/blueprints/preview`, POST `/api/blueprints/create`, GET `/api/blueprints/{id}/image`. POST fields: name, concept, style, trait, optional image_data_uri; create also needs candidate_id from preview. The server regenerates the selected recipe; never accepts client-supplied Model parameters. Drafts have separate visual_asset, blueprint, training_job=null, deployed_model_version=null, competition_eligible=false. No edit/deploy endpoint.
+
+Blueprint JSON has its own bounded reader (~1.34 MiB); legacy limit stays 8192 bytes. Images <=1 MiB, PNG/JPEG/WebP data URI and signature validation; fixed filenames, private files, atomic catalog, 50 drafts/20 MiB image cap, no public Sites exposure. Storage is only this clone's ignored local_state. Run Python unittest and mcp npm tests; sandbox socket/process/DNS restrictions must be reported as incomplete validation, not a passing full suite. No Playwright/Chrome/Gemini validation was run for this slice.
