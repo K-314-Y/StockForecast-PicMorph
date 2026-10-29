@@ -104,3 +104,27 @@ Use `/create` for an optional illustration → three deterministic rule blueprin
 Local-only routes: GET `/create`, GET `/api/blueprints`, POST `/api/blueprints/preview`, POST `/api/blueprints/create`, GET `/api/blueprints/{id}/image`. POST fields: name, concept, style, trait, optional image_data_uri; create also needs candidate_id from preview. The server regenerates the selected recipe; never accepts client-supplied Model parameters. Drafts have separate visual_asset, blueprint, training_job=null, deployed_model_version=null, competition_eligible=false. No edit/deploy endpoint.
 
 Blueprint JSON has its own bounded reader (~1.34 MiB); legacy limit stays 8192 bytes. Images <=1 MiB, PNG/JPEG/WebP data URI and signature validation; fixed filenames, private files, atomic catalog, 50 drafts/20 MiB image cap, no public Sites exposure. Storage is only this clone's ignored local_state. Run Python unittest and mcp npm tests; sandbox socket/process/DNS restrictions must be reported as incomplete validation, not a passing full suite. No Playwright/Chrome/Gemini validation was run for this slice.
+
+## Sprint15 appendix — isolated blueprint training
+
+- `training_lab.py` uses stdlib and only `engine.SYNTHETIC_PRICES`, never market feeds
+  or challenge scenarios. HTTP only accepts a saved `bp_` UUID; no code/data upload.
+- Feature prefixes include decision index (0-based). Train decisions 20–31, targets
+  21–32; validation decisions 32–38, targets 33–39. Features precede labels via
+  `challenge.actual_direction` (FLAT band .008). Validation is built after selection.
+- Exhaustive 56 weight mixtures, multiples of 20, total100; fixed original windows,
+  strengths and risk. Objective is unrounded mean multiclass Brier; ties use L1
+  distance to draft then registry-order lexicographic tuple. Original model and
+  uniform (2/3) are independent baselines, not selection candidates.
+- Preview writes nothing. Save recomputes and appends an immutable practice version
+  and separate job record atomically to `trained_versions.json` (100 maximum).
+  SHA256 records cover full source draft, selected parameters, and fixed dataset.
+  `trained_until=32` means last observed training target; it excludes validation.
+- No changes to Sprint14 draft schema, image, game saves, active model, market code,
+  or MCP's 21 tools. No competition registration or load-to-game endpoint.
+- Unit tests: `python3 -m unittest discover -s tests -v`. Training route tests use
+  in-memory handlers, no socket/browser. Browser integration QA is a separate task:
+  preview a saved draft, inspect collapsed details and scores, save, reload gallery,
+  and confirm game state is unchanged. Do not start the user's live service for QA.
+- Caveat: 固定架空40点での学習演習。実相場の能力を証明しない。検証期間は選択に使わない。
+  Validation can worsen; repeated human choices can also overfit this tiny dataset.
