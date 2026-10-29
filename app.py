@@ -7,7 +7,7 @@ import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 from engine import Model, PLUGIN_INFO, model_from_python, view, with_visual_change, with_plugin_change, with_plugin_strength_change
 from game import read_versions, save_version, load_version, run_practice
@@ -18,6 +18,7 @@ from challenge import public_scenarios, run_challenge
 from market import MarketError, market_status, run_market_replay
 import blueprints
 import training_lab
+import looks2d
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
@@ -105,8 +106,45 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, RecursionError):
             self._json(400, {"error": "JSON入力が不正です"})
 
+    def _looks2d(self, path, post=False):
+        if not self._blueprint_access():
+            return
+        try:
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if post and path == '/api/looks2d/save' and not query:
+                if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+                    raise blueprints.BlueprintError('JSONのみ受け付けます', 415)
+                lengths = self.headers.get_all('Content-Length', [])
+                if self.headers.get('Transfer-Encoding') or len(lengths) != 1:
+                    raise blueprints.BlueprintError('Content-Lengthを1つ指定してください')
+                size = int(lengths[0])
+                if not 0 < size <= looks2d.MAX_REQUEST_BYTES:
+                    raise blueprints.BlueprintError('入力サイズが上限を超えています', 413)
+                raw = self.rfile.read(size)
+                if len(raw) != size:
+                    raise blueprints.BlueprintError('入力が途中で切れています')
+                self._json(200, looks2d.save_look(json.loads(raw)))
+            elif not post and path == '/api/looks2d':
+                if set(query) != {'draft_id'} or len(query['draft_id']) != 1:
+                    raise blueprints.BlueprintError('draft_idを1つ指定してください')
+                self._json(200, looks2d.read_look(query['draft_id'][0]))
+            elif not post and path.startswith('/api/looks2d/') and path.endswith('/accessory') and not query:
+                mime, data = looks2d.read_accessory(path[len('/api/looks2d/'):-len('/accessory')])
+                self._send(200, data, mime)
+            else:
+                self._json(404, {'error': '見つかりません'})
+        except blueprints.BlueprintError as exc:
+            self._json(exc.status, {'error': str(exc)})
+        except (ValueError, TypeError, RecursionError):
+            self._json(400, {'error': 'JSON入力が不正です'})
+        except OSError:
+            self._json(500, {'error': '外見データを読み書きできません'})
+
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/api/looks2d" or path.startswith("/api/looks2d/"):
+            self._looks2d(path)
+            return
         if path == "/create" or path == "/api/blueprints" or path.startswith("/api/blueprints/"):
             if not self._blueprint_access():
                 return
@@ -157,6 +195,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/looks2d" or path.startswith("/api/looks2d/"):
+            self._looks2d(path, post=True)
+            return
         if path == "/api/blueprints" or path.startswith("/api/blueprints/"):
             self._blueprint_post(path)
             return

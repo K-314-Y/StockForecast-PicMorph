@@ -128,3 +128,5 @@ Blueprint JSON has its own bounded reader (~1.34 MiB); legacy limit stays 8192 b
   and confirm game state is unchanged. Do not start the user's live service for QA.
 - Caveat: 固定架空40点での学習演習。実相場の能力を証明しない。検証期間は選択に使わない。
   Validation can worsen; repeated human choices can also overfit this tiny dataset.
+
+Sprint 16 の外見は2Dが基本。`/create` の保存DRAFT →「2D 着せ替え」で1枚のアクセサリーを重ねる。`looks2d.py` / `local_state/looks2d.json` は独立した外見専用schema。外見だけの変更。予測性能は変わりません。重み・スコア・既存DRAFT・保存モデルを書き換えない。3D、実際のvision、画像からのPythonコード実行、AI画像生成は未実装。絵なしはCSSフレーム。画像検証は既存のコンテナ署名検証であり完全なデコードではない。

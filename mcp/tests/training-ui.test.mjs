@@ -11,6 +11,7 @@ test('saved blueprint preview, safe rendering, collapsed details, explicit save 
     prepend(child){this.children.unshift(child);}
     replaceChildren(){this.children=[];}
     addEventListener(){}
+    setAttribute(key,value){this[key]=value;}
   }
   const nodes=new Map();
   const all=e=>[e,...e.children.flatMap(all)];
