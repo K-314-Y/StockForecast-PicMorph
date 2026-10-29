@@ -1,8 +1,9 @@
-"""Local-only interactive Sprint 1. Standard library; no third-party services."""
+"""Local-only Creature Lab. Market data stays in the private replay response."""
 from __future__ import annotations
 
 import argparse
 import json
+import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
@@ -14,9 +15,11 @@ from lineup import lineup_snapshot, assign_model, effective_models
 from game import PRESETS
 from growth import public_growth, complete_training, equip, equipped_models
 from challenge import public_scenarios, run_challenge
+from market import MarketError, market_status, run_market_replay
 
 ROOT = Path(__file__).resolve().parent
 LOCK = Lock()
+MARKET_LOCK = Lock()
 STATE = {"model": Model(), "revision": 0}
 
 
@@ -46,9 +49,28 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(result, ensure_ascii=False).encode(),
                    "application/json; charset=utf-8")
 
+    def _market_access(self) -> bool:
+        """Guard both new routes, including GET, against remote browser access."""
+        allowed = (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
+        try:
+            local = ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            local = False
+        origin = self.headers.get("Origin")
+        if (not local or self.headers.get("Host") not in allowed
+                or (origin and origin not in tuple("http://" + host for host in allowed))
+                or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+                or any(self.headers.get(h) for h in ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"))):
+            self._json(403, {"error": "実相場機能は同じ端末のローカル画面からのみ利用できます。"})
+            return False
+        return True
+
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in ("/", "/game"):
+        if path == "/api/market/status":
+            if self._market_access():
+                self._json(200, market_status())
+        elif path in ("/", "/game"):
             name = "index.html" if path == "/" else "game.html"
             body = (ROOT / "web" / name).read_bytes()
             self._send(200, body, "text/html; charset=utf-8")
@@ -78,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path.startswith("/api/market/") and not self._market_access():
+            return
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
         if host not in (f"127.0.0.1:{self.server.server_port}",
@@ -98,6 +122,22 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError("JSONオブジェクトで指定してください")
+            if path == "/api/market/replay":
+                # Do not hold the model edit lock during provider I/O. Snapshot
+                # models and all revisions together; this run never writes state.
+                with LOCK:
+                    models = equipped_models({"mine": STATE["model"], **PRESETS, **effective_models()})
+                    revisions = {"source_revision": STATE["revision"],
+                                 "lineup_revision": lineup_snapshot()["revision"],
+                                 "growth_revision": public_growth()["revision"]}
+                if not MARKET_LOCK.acquire(blocking=False):
+                    raise MarketError("replay_busy", "別の実相場リプレイを取得中です。完了後に再実行してください。", 429)
+                try:
+                    result = run_market_replay(payload, models)
+                finally:
+                    MARKET_LOCK.release()
+                self._json(200, {**result, **revisions})
+                return
             with LOCK:
                 # Writes from MCP must not silently overwrite a newer UI edit.
                 expected_revision = payload.pop("expected_revision", None)
@@ -191,10 +231,12 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["revision"] += 1
                 result = view(new, STATE["revision"])
             self._json(200, result)
+        except MarketError as exc:
+            self._json(exc.status, {"error": str(exc), "error_code": exc.code})
         except LookupError as exc:
             self._json(409, {"error": str(exc)})
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            self._json(400, {"error": str(exc)})
+            self._json(400, {"error": "実相場リプレイの入力またはモデル設定が不正です。" if path.startswith("/api/market/") else str(exc)})
 
 
 def main() -> None:
