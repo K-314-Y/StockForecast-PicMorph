@@ -278,3 +278,56 @@ were installed to bypass those restrictions. New Node tests execute the actual
 inline script with mocked browser APIs; real browser visual/export QA and real
 PSD checks remain for the independent review environment. Do not restart or use
 the original live server for these checks.
+
+## Sprint 21: V6設計を参考にした予測記録（オフライン専用）
+
+株価予測V6の次のコードを**読み取りのみ**で確認したうえで、Creature Lab
+独立実装の `forward_journal.py` を追加した。
+
+- `13_株価予測/engine/forward_storage.py`：予測記録のcreate-only、
+  同一内容での再試行、内容競合時の拒否、SHA-256検証、保存後の再読込。
+- `13_株価予測/research/small_mvp/core.py`：as-of日付と次の対象営業日を
+  厳密に区別し、過去の研究再生を本番の先行予測と誤認しない。
+- `13_株価予測/engine/parallel_models.py` および
+  `research/scanner/evaluation.py`：UP/FLAT/DOWNのBrier合計
+  （3で割らない）と評価前のモデル・入力固定。
+
+Creature Labの新しい記録は `mode=OFFLINE_REPLAY_ONLY`、
+`forward_eligible=false` を必須とする。受け取った日時が予測作成日時より
+後の入力、指定カレンダーで翌営業日ではない組合せ、確率合計が1でない場合は
+保存できない。モデルと入力のSHA-256を記録し、予測と結果を**別々のファイルに**
+一度だけ記録する。結果はBrierと均等予測の参考値を保存し、
+**損益・経験値・装備・公式の予測実績には反映しない**。保存形式はSHA-256
+付きの普通のローカルJSONであり、悪意あるローカル管理者からの改変を
+完全に防ぐ電子署名/WORMではない。保存先は呼出側が明示的に渡す。
+ネットワーク取得、バックグラウンド起動、GUI/APIからの自動実行は未接続。
+
+V6のモデル本体、学習済み成果物、J-Quants取得データ、Official、
+Freeze、既存ログは読み込まずコピーもしない。V6のコードや設定を
+Creature Labへ直接importする依存関係も作らない。将来の実時間版では
+営業日カレンダー・価格公開時刻・利用権限・実時計の検証が別途必要。
+過去リプレイの結果を「本当に翌日の予測が的中した」と表示しない。
+
+オフライン記録の使用例（この実行例は仮のSHA値・架空確率なので
+**実市場の予測実績を意味しない**）：
+
+```python
+from pathlib import Path
+from forward_journal import freeze_offline, settle_offline
+
+root = Path("local_state/offline_forecast_demo")
+forecast = freeze_offline(
+    root, run_id="trial1", as_of_session="2026-10-29",
+    target_session="2026-10-30", calendar=["2026-10-29", "2026-10-30"],
+    generated_at="2026-10-31T03:20:00+09:00",
+    input_available_at="2026-10-31T03:19:00+09:00",
+    input_sha256="a"*64, model_sha256="b"*64,
+    probabilities={"UP": .5, "FLAT": .3, "DOWN": .2})
+outcome = settle_offline(
+    root, run_id="trial1", target_session="2026-10-30",
+    actual="DOWN", outcome_available_at="2026-10-31T03:21:00+09:00",
+    outcome_sha256="c"*64)
+```
+
+検証: `python3 -B -m unittest tests.test_forward_journal -v`、
+`python3 -B -m unittest discover -s tests -q`、`(cd mcp && npm test)`。
