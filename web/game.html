@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Creature Lab | コイン運用</title>
+<title>Creature Lab | 1体から始める予測ゲーム</title>
 <style>
 :root{color-scheme:dark;--bg:#080f1a;--card:#12213a;--card2:#162846;--line:#314461;--white:#eaf2ff;--soft:#9fb1c9;--teal:#74ebd2;--rose:#ff98bf;--lav:#c7a6ff}
 *{box-sizing:border-box}[hidden]{display:none!important}
@@ -56,14 +56,42 @@ select{width:100%;max-width:100%;background:#0b192c;color:var(--white);border:1p
 .important{border-left:3px solid #81b2c9;color:#c4d4e4;background:#0e2439;padding:13px 15px;border-radius:0 10px 10px 0;font-size:12px}
 #versionList option{max-width:290px}
 footer{margin-top:25px;color:var(--soft);font-size:12px}
+.starter{background:linear-gradient(135deg,#264460 0%,#17263f 58%,#2d2949 100%);border:1px solid #608b9a;padding:26px}
+.starter h2{font-size:clamp(21px,3vw,28px);margin:12px 0}
+.starter .start-tag{display:inline-block;font-size:11px;letter-spacing:.08em;color:#a6ffe8;font-weight:750}
+.starter .start-stats{display:flex;gap:12px;flex-wrap:wrap;margin:13px 0}
+.starter .start-stats span{border:1px solid #537185;background:#132a3e;border-radius:11px;padding:10px 14px;font-size:13px}
+.starter .start-results{margin-top:18px;border-top:1px solid #527086;padding-top:14px}
+.starter .start-results strong{font-size:22px}
+.advanced{margin-top:24px}
+.advanced>summary{cursor:pointer;list-style:auto;border:1px solid #496075;border-radius:13px;padding:17px 20px;background:#172741;font-weight:700}
+.advanced[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+.advanced>summary:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
 @media(max-width:850px){.cols{grid-template-columns:1fr}.results{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body><div class="wrap">
 <div class="top"><div class="logo">✦ Creature Lab <span style="font-size:12px;color:var(--soft);font-weight:400">/ GAME LAB</span></div><nav><a href="/assemble">パーツを組む</a> <a href="/create">キャラを制作</a> <a href="/">キャラクター編集に戻る</a></nav></div>
-<h1>予測キャラと、あの日の相場に挑もう。</h1>
-<p class="intro">実在の日本株の過去12営業日を、あなたのキャラ・ルナ・ミドリがリプレイ。各10,000の仮想コインで挑みます。本当のお金は動きません。</p>
-<div class="pills"><span class="pill hot">実相場リプレイ</span><span class="pill">個人・ローカル専用</span><span class="pill">実際の発注なし</span><span class="pill">無料・換金不可</span></div>
-<section class="card" style="margin-top:22px" id="challengeSection">
+<h1>最初の1体から、予測の冒険へ。</h1>
+<p class="intro">まずは自分のキャラを送り出してみよう。難しい設定や仲間の編成は後からでOK。ここでのクイック練習は架空の過去12ステップをその場で再生します。</p>
+<div class="pills"><span class="pill hot">初回は1体だけ</span><span class="pill">架空データの練習</span><span class="pill">仮想コイン・換金不可</span><span class="pill">放置予測は今後実装予定</span></div>
+<section class="card starter" id="starter" aria-labelledby="starterHeading">
+<span class="start-tag">✦ はじめての冒険</span>
+<h2 id="starterHeading">✨ 自分のキャラでクイック練習</h2>
+<p class="muted">1体だけで参加。過去の架空価格12ステップを即時再生します。今日の株価予測や、ログアウト中の自動進行ではありません。</p>
+<div class="start-stats"><span id="starterModel">モデル読み込み中…</span><span id="starterGrowth">Lv.1 · 0 XP</span></div>
+<div class="actions"><button type="button" class="main" id="starterPlay">▶ 1体でクイック挑戦</button><a href="/create">自分のキャラを制作する</a></div>
+<p id="starterStatus" class="muted" role="status" style="font-size:13px;margin-top:14px">コインの配分設定は不要。練習を開始しても保存済みモデルは変更されません。</p>
+<div id="starterResult" class="start-results" hidden>
+<h3>✨ クイック練習の結果</h3>
+<div class="start-stats"><span>最終コイン <strong id="starterFinal">--</strong></span><span>損益 <strong id="starterProfit">--</strong></span><span>最大下落率 <strong id="starterDrawdown">--</strong></span></div>
+<p class="muted" style="font-size:12px">固定された架空データによる練習結果。予測精度や現実の投資利益を示しません。</p>
+<div class="actions"><button type="button" id="starterClaim" disabled>★ はじめての参加XPを受け取る</button><small>課題達成の報酬は1回限り。利益に連動しません。</small></div>
+<p id="starterClaimStatus" class="muted" role="status" style="font-size:12px"></p>
+</div>
+</section>
+<details id="advancedGame" class="advanced">
+<summary>🔬 研究所を開く：3体対戦・過去の実相場リプレイ・モデル保存・詳しい分析</summary>
+<section class="card" style="margin-top:18px" id="challengeSection">
 <h2>⚔ チャレンジ・対戦モード</h2>
 <p class="muted" style="font-size:13px">3体が同じ12営業日に挑戦。現在のモデル・保存した編成・育成装備を使います。過去のリプレイは今後の予測能力や利益を保証しません。</p>
 <label for="challengeMode" class="desc">挑戦する相場</label>
@@ -167,7 +195,8 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <div class="important">結果は固定された12日分の架空価格を使った練習の数字。過去の結果であり将来の利益を示さず、Brier Scoreや実際の予測精度の検証でもありません。</div>
 </section>
 
-<footer>SPRINT 13 · Creature Lab / 個人のローカル専用。実相場リプレイと架空相場練習。仮想コインは換金不可。口座接続・現金送金・発注なし。</footer>
+</details>
+<footer>SPRINT 20 · Creature Lab / 個人のローカル専用。クイック練習は架空相場、実相場は過去リプレイのみ。自動放置予測・リアルマネー取引は未実装。</footer>
 </div>
 <script>
 const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
@@ -192,6 +221,8 @@ function recalc(){
 slots.forEach(k=>$(k).addEventListener("input",recalc));
 function renderGrowth(data){
   growthRevision=data.revision;
+  const starterMine=data.slots.find(s=>s.slot==="mine");
+  if(starterMine)$("starterGrowth").textContent="Lv."+starterMine.level+" · "+starterMine.xp+" XP";
   const container=$("growthCards");
   container.replaceChildren();
   const symbols={mine:"✨",owl:"🌙",turtle:"🍀"};
@@ -239,6 +270,7 @@ function renderModel(s){
   const labels={falcon:"アカリ / 短期",owl:"ルナ / 中期",turtle:"ミドリ / 長期",custom:"オリジナル"};
   $("currentModel").textContent=labels[s.visual.eye]||"オリジナル";
   $("myType").textContent="("+$("currentModel").textContent+")";
+  $("starterModel").textContent="相棒: "+$("currentModel").textContent;
   const active=(s.plugins||[]).filter(p=>p.weight_pct>0).map(p=>p.name+":"+p.weight_pct+"%").join(" / ");
   $("myDesc").textContent=`短期 ${s.model.fast_window}日 / 長期 ${s.model.slow_window}日 / リスク上限 ${Math.round(s.model.risk_fraction*100)}% / ${active}`;
 }
@@ -320,6 +352,46 @@ $("simulate").addEventListener("click",async()=>{
     $("result").scrollIntoView({behavior:"smooth",block:"start"});
   }catch(e){$("simError").textContent=e.message}
   finally{recalc()}
+});
+// Beginner mode reuses the existing fixed, fictional practice, with only the
+// player's own slot funded. It neither alters model settings nor starts a job.
+const starterAllocation=()=>({mine:100,owl:0,turtle:0});
+$("starterPlay").addEventListener("click",async()=>{
+  const play=$("starterPlay");
+  play.disabled=true;
+  $("starterStatus").textContent="架空の12ステップを再生中…";
+  $("starterResult").hidden=true;
+  $("starterClaim").disabled=true;
+  $("starterClaimStatus").textContent="";
+  try{
+    const result=await call("/api/practice",{allocations:starterAllocation()});
+    if(result.mode!=="PRACTICE_SYNTHETIC_ONLY")throw Error("練習モードを確認できません");
+    $("starterFinal").textContent=fmt(result.final_coins)+" C";
+    $("starterProfit").textContent=(result.profit_coins>=0?"+":"")+fmt(result.profit_coins)+" C";
+    $("starterProfit").style.color=result.profit_coins>=0?"#80efc8":"#ff9ea4";
+    $("starterDrawdown").textContent=result.max_drawdown_pct.toFixed(2)+"%";
+    $("starterResult").hidden=false;
+    $("starterClaim").disabled=false;
+    $("starterStatus").textContent="クイック練習終了。架空の過去12ステップを再生しました。";
+  }catch(error){
+    $("starterStatus").textContent="練習に失敗: "+error.message;
+  }finally{play.disabled=false;}
+});
+$("starterClaim").addEventListener("click",async()=>{
+  const button=$("starterClaim");
+  button.disabled=true;
+  $("starterClaimStatus").textContent="育成課題を確認中…";
+  try{
+    const value=await call("/api/training/complete",{
+      allocations:starterAllocation(),expected_growth_revision:growthRevision
+    });
+    renderGrowth(value.growth);
+    const xp=value.earned_xp.mine || 0;
+    $("starterClaimStatus").textContent=xp>0?"参加の報酬 +"+xp+" XP！":"この課題のXPはすでに受け取り済みです。";
+  }catch(error){
+    button.disabled=false;
+    $("starterClaimStatus").textContent="XPの受け取りに失敗: "+error.message;
+  }
 });
 // Details use only the existing evaluation ledger; no new forecast is computed.
 function renderChallengeDetails(data){
