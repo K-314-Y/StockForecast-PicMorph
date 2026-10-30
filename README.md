@@ -197,3 +197,84 @@ API: `GET /create`, `GET /api/blueprints`, `POST /api/blueprints/preview`, `POST
 ### Sprint 18 パーツ工房
 
 `/assemble` で期間・仮想配分コアと2〜4個の分析パーツを選び、相対配分を合計100%に正規化して試せます。固定架空データのプレビュー後に不変のDRAFTを保存し、`/create` のギャラリーで確認・学習できます。手動DRAFTの学習は当初0%の指標を再有効化しません。実相場の精度を示す機能ではありません。設計と検証上の制限は `docs/SPRINT18_PARTS_DESIGN.md` を参照してください。
+
+## Sprint19 — isolated character PACK MVP
+
+Convert a local single-frame PNG/JPEG/WebP to a **new** PACK directory (Pillow is
+required and available in this environment; no downloads or remote services):
+
+```bash
+python3 scripts/character_pack_cli.py --input sample.png --output /tmp/my-character-pack
+```
+
+Open `/pack-lab` on your own clone server, or open `web/pack-lab.html` directly
+as an offline file. Choose the generated directory; alternatively select
+`manifest.json`, `original.png`, and all files inside `parts/` together. This
+screen does not upload files, call APIs, or write local/game state. It exports
+full-resolution transparent PNG, or WebP when supported by the browser, using
+Canvas2D `toBlob`. Preview checkerboarding is CSS only. Directory picking and
+`createImageBitmap` require a supporting modern browser; individual file picking
+is provided as an alternative. Nothing was added to `/create`, `/assemble`, the
+MCP API, model code, or save schemas.
+
+PACK v1 contains `manifest.json`, `original.png`, `parts/layer_00.png` etc., and
+`source.psd` only for PSD input. JSON fields are `manifest_version: 1`, `canvas`
+(`width`, `height`), `source` (`kind: image|psd`, original bytes' `sha256`),
+`mode_default: fallback|layers`, and `layers` (`id`, `slot`, `path`, `z`,
+`visible`). Unknown slots use `unclassified`; z is unique and sorted ascending.
+`warnings` is optional diagnostic text. Generated PNGs are fixed-canvas RGBA,
+straight alpha, with an sRGB marker; embedded raster ICC profiles are converted
+where supported, and untagged input is assumed sRGB. No image segmentation or
+slot inference is claimed. A simple raster has a separate standalone layer
+with the same pixels as the original. **Fallback draws only `original.png`;
+layers mode draws only visible parts**, so translucent pixels are never doubled.
+`character_packs.load_pack(path, mode='layers')` validates/reimports canonical
+PNG packs without writing anything. Browser-only imports also accept WebP parts.
+
+Limits: local regular files only, no URLs or symlinks in any path component;
+source ≤20 MiB, each canvas side ≤4096, ≤64 layers (PSD groups also count),
+output ≤300 MiB. Browser compressed files and retained decoded surfaces are
+bounded to 300 MiB, with at most 67 files and 70 MiB per image, manifest ≤128 KiB,
+and preserved PSD ≤20 MiB. Converter also restricts decoded surface totals for
+browser compatibility. PNG/WebP headers and actual decoded dimensions are
+checked in the viewer; animated WebP and unusual WebP chunk layouts are not
+supported. Only canonical paths `original.png` and `parts/<safe-name>.png`
+(or `.webp` in the browser) are accepted. Failed conversion removes its temporary
+sibling directory. Publication uses Linux `renameat2(RENAME_NOREPLACE)` so even a
+concurrently created destination is preserved. Existing output is never reused.
+
+PSD support is **optional and not installed/tested against a real PSD here**.
+The adapter follows psd-tools 1.26 `PSDImage.open`, `PSDImage.composite` and
+`layer.composite`: header dimensions/size are checked before parsing; normal
+layers use bbox offsets; each top-level group is flattened once (its children
+are not emitted again). Masks are delegated to psd-tools. Clipping, effects,
+unsupported blends, excess layers/bounds, or parser failures produce a detailed
+error suggesting a merged PNG. The visible layer composite is compared with the
+merged reference; differences emit a warning and default remains fallback.
+Opacity, color management, group behavior and masks can differ. This is not a
+promise of Photoshop fidelity. Raw PSD bytes are preserved only within limits.
+Tests cover missing-module behavior and a fake PSD adapter, not real PSD fidelity.
+
+The renderer is **Canvas2D, not PixiJS**. A future offline PixiJS v8 adapter can
+reuse the validated manifest, sorted exclusive render plan and fixed canvas,
+then use `renderer.extract.canvas` for transparent exports. It must bundle its
+own dependency locally and pass the same alpha/visibility/mode tests; no CDN or
+Pixi dependency has been introduced in Sprint19.
+
+Validation commands:
+
+```bash
+python3 -m unittest discover -s tests -v
+node --experimental-test-isolation=none --test mcp/tests/pack-lab-ui.test.mjs
+(cd mcp && npm test)
+git diff --check
+```
+
+In this restricted sandbox the Python suite reached 116 tests: 115 passed; the
+existing `test_live_meta_contains_manual_registry_and_scenarios` cannot bind an
+ephemeral socket (`EPERM`). Full Node tests are also incomplete: MCP SDK is absent,
+and the existing challenge UI test cannot spawn Python (`EPERM`). No dependencies
+were installed to bypass those restrictions. New Node tests execute the actual
+inline script with mocked browser APIs; real browser visual/export QA and real
+PSD checks remain for the independent review environment. Do not restart or use
+the original live server for these checks.

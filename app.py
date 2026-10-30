@@ -187,6 +187,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == '/pack-lab':
+            if self._blueprint_access():
+                self._send(200, (ROOT / 'web' / 'pack-lab.html').read_bytes(), 'text/html; charset=utf-8')
+            return
         if path == '/assemble' or path == '/api/parts' or path.startswith('/api/parts/'):
             self._parts(path, post=False)
             return

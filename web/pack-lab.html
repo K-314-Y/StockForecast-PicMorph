@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PACK Lab | Creature Lab</title>
+<style>
+:root{font-family:system-ui,sans-serif;color-scheme:dark;background:#101723;color:#edf2fa}*{box-sizing:border-box}body{max-width:1050px;margin:auto;padding:24px}h1{font-size:1.8rem}p{line-height:1.7}section{padding:20px;background:#192333;border:1px solid #586a83;border-radius:14px;margin:20px 0}label{display:block;margin:16px 0 8px}input,button,select{font:inherit;max-width:100%;padding:10px}button,select{margin:8px 8px 8px 0}a{color:#b3d7ff}canvas{display:block;max-width:100%;max-height:65vh;width:auto;height:auto;margin:auto;background-color:#ddd;background-image:conic-gradient(#aaa 25%,transparent 0 50%,#aaa 0 75%,transparent 0);background-size:24px 24px}#status{overflow-wrap:anywhere;white-space:pre-wrap;min-height:3em}fieldset{border:0;padding:0}#layers label{display:flex;gap:10px;align-items:center;overflow-wrap:anywhere}small{color:#bed0e7}@media(max-width:500px){body{padding:12px}section{padding:12px}}
+</style>
+<h1>PACK Lab · 独立キャラ合成</h1>
+<p>外見だけの試作です。ローカルファイルをブラウザ内で読み込み、透明画像を書き出します。アップロード・ゲーム保存・学習は行いません。Canvas2D 使用（PixiJS は未使用）。このHTMLは単独でオフライン利用できます。</p>
+<section><h2>1. PACKを開く</h2>
+<label for="directory">PACKフォルダを選択</label><input id="directory" type="file" webkitdirectory multiple>
+<label for="files">または manifest.json と画像をまとめて選択</label><input id="files" type="file" multiple accept=".json,.png,.webp,.psd">
+<small>個別選択では parts 内の画像も選んでください。同じファイル名は使えません。source.psd は表示には使いません。</small>
+<p id="status" role="status" aria-live="polite">manifest.json + original.png + parts/*.png を選択してください。</p></section>
+<section><h2>2. 表示と透明書き出し</h2>
+<label for="mode">合成モード（排他的）</label><select id="mode" disabled><option value="fallback">元画像のみ（fallback）</option><option value="layers">パーツのみ（layers）</option></select>
+<fieldset id="layers" aria-label="パーツの表示設定" disabled><legend>パーツの表示（layers モードのみ反映）</legend></fieldset>
+<canvas id="preview" width="1" height="1" aria-label="透明背景のキャラプレビュー" role="img"></canvas>
+<button id="png" disabled>透明 PNG をダウンロード</button><button id="webp" disabled>透明 WebP をダウンロード</button>
+<p><small>チェック柄はプレビュー用で、出力には含まれません。出力は原寸です。PSDのマスク・効果・色は完全再現を保証しません。相違がある場合は fallback を選んでください。</small></p></section>
+<script>
+'use strict';
+const LIMIT=300*1024*1024, MAX_FILE=70*1024*1024;
+function validateManifest(m){
+  if(!m||m.manifest_version!==1||!m.canvas||![m.canvas.width,m.canvas.height].every(x=>Number.isInteger(x)&&x>=1&&x<=4096))throw Error('不正なバージョン / キャンバス（最大4096）');
+  if(!['fallback','layers'].includes(m.mode_default)||!m.source||!['image','psd'].includes(m.source.kind)||!(/^[a-f0-9]{64}$/).test(m.source.sha256))throw Error('不正なモード / ソース');
+  if(!Array.isArray(m.layers)||m.layers.length<1||m.layers.length>64)throw Error('パーツ数は1〜64');
+  // Bound retained decoded surfaces, as well as compressed input bytes.
+  if((m.layers.length+2)*m.canvas.width*m.canvas.height*4>LIMIT)throw Error('展開後の画像が300 MiBを超えます');
+  const ids=new Set(),paths=new Set(),zs=new Set();
+  for(const l of m.layers){
+    if(!l||typeof l.path!=='string'||!(/^parts\/[A-Za-z0-9_-]+\.(png|webp)$/).test(l.path)||typeof l.id!=='string'||!(/^[A-Za-z0-9_-]{1,64}$/).test(l.id)||typeof l.slot!=='string'||l.slot.length<1||l.slot.length>64||typeof l.visible!=='boolean'||!Number.isInteger(l.z)||Math.abs(l.z)>1000000||ids.has(l.id)||paths.has(l.path)||zs.has(l.z))throw Error('不正 / 重複パーツ、または安全でないパス');
+    ids.add(l.id);paths.add(l.path);zs.add(l.z);
+  }
+  return m;
+}
+function indexFiles(files){
+  if(files.length<3||files.length>67)throw Error('ファイル数は3〜67');
+  const map=new Map();let total=0;
+  const directory=files.some(f=>f.webkitRelativePath);
+  let root=null;
+  for(const f of files){
+    total+=f.size;if(f.size<=0||f.size>MAX_FILE||total>LIMIT)throw Error('ファイルサイズ制限を超えました');
+    let path=f.name;
+    if(directory){
+      const bits=(f.webkitRelativePath||'').split('/');
+      if(root===null)root=bits[0];if(bits.shift()!==root)throw Error('単一PACKフォルダを選択してください');
+      path=bits.join('/');
+    }
+    if(!(/^(manifest\.json|original\.png|source\.psd|parts\/[A-Za-z0-9_-]+\.(png|webp))$/).test(path)){
+      if(!directory&&(/^[A-Za-z0-9_-]+\.(png|webp)$/).test(path)&&path!=='original.png')path='parts/'+path;
+      else throw Error('安全でない、または未知のファイルパス');
+    }
+    if(path==='source.psd'&&f.size>20*1024*1024)throw Error('PSDは20 MiB以下');
+    if(map.has(path))throw Error('重複ファイル名');map.set(path,f);
+  }
+  return map;
+}
+function renderPlan(m,mode,visible){
+  if(mode==='fallback')return ['original.png'];
+  if(mode!=='layers')throw Error('不正なモード');
+  return [...m.layers].sort((a,b)=>a.z-b.z).filter(l=>visible?visible.get(l.id):l.visible).map(l=>l.path);
+}
+async function decodeAsset(file,path,size){
+  if(file.type&&!['image/png','image/webp'].includes(file.type))throw Error('PNG / WebP のみ');
+  const head=new Uint8Array(await file.slice(0,12).arrayBuffer());
+  const png=head.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>head[i]===v);
+  const webp=String.fromCharCode(...head.slice(0,4))==='RIFF'&&String.fromCharCode(...head.slice(8,12))==='WEBP';
+  if(!(path.endsWith('.png')?png:webp))throw Error('画像署名と拡張子が一致しません');
+  // Inspect dimensions before allocating a decoded browser image.
+  if(png){const b=await file.slice(0,24).arrayBuffer();if(b.byteLength<24)throw Error('壊れたPNG');const v=new DataView(b);if(v.getUint32(16)!==size.width||v.getUint32(20)!==size.height)throw Error('画像サイズがキャンバスと一致しません');}
+  if(webp){
+    const bytes=new Uint8Array(await file.slice(0,40).arrayBuffer());
+    const chunk=String.fromCharCode(...bytes.slice(12,16));
+    const u24=i=>bytes[i]+bytes[i+1]*256+bytes[i+2]*65536;
+    let width=0,height=0;
+    if(chunk==='VP8X'&&bytes.length>=30){width=u24(24)+1;height=u24(27)+1;if(bytes[20]&2)throw Error('アニメーションWebPは対象外');}
+    else if(chunk==='VP8L'&&bytes.length>=25&&bytes[20]===47){const bits=new DataView(bytes.buffer).getUint32(21,true);width=(bits&16383)+1;height=((bits>>>14)&16383)+1;}
+    else if(chunk==='VP8 '&&bytes.length>=30&&bytes[23]===157&&bytes[24]===1&&bytes[25]===42){const view=new DataView(bytes.buffer);width=view.getUint16(26,true)&16383;height=view.getUint16(28,true)&16383;}
+    if(width!==size.width||height!==size.height)throw Error('WebPヘッダのサイズが不正または未対応です');
+  }
+  const bitmap=await createImageBitmap(file);
+  if(bitmap.width!==size.width||bitmap.height!==size.height){bitmap.close();throw Error('画像サイズがキャンバスと一致しません');}
+  return bitmap;
+}
+const $=id=>document.getElementById(id);
+let current=null,loading=false,generation=0;
+function release(pack){if(pack)for(const img of pack.images.values())img.close();}
+function render(){if(!current)return;const c=$('preview'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);for(const path of renderPlan(current.manifest,$('mode').value,current.visible))ctx.drawImage(current.images.get(path),0,0);}
+function controls(disabled){for(const id of ['mode','layers','png','webp'])$(id).disabled=disabled;}
+async function openPack(files){
+  const token=++generation;controls(true);loading=true;
+  release(current);current=null;$('layers').replaceChildren();$('preview').width=1;$('preview').height=1;
+  const pending={images:new Map()};
+  try{
+    const map=indexFiles([...files]),file=map.get('manifest.json');
+    if(!file||file.size>128*1024)throw Error('manifest.json がないか128 KiBを超えています');
+    const m=validateManifest(JSON.parse(await file.text()));
+    const expected=['manifest.json','original.png',...m.layers.map(l=>l.path)];
+    if(expected.some(p=>!map.has(p))||[...map.keys()].some(p=>!expected.includes(p)&&p!=='source.psd'))throw Error('不足または未参照のファイルがあります');
+    for(const path of expected.slice(1)){
+      const img=await decodeAsset(map.get(path),path,m.canvas);
+      pending.images.set(path,img);
+      if(token!==generation){release(pending);return;}
+    }
+    current={...pending,manifest:m,visible:new Map(m.layers.map(l=>[l.id,l.visible]))};
+    $('preview').width=m.canvas.width;$('preview').height=m.canvas.height;$('mode').value=m.mode_default;
+    for(const l of m.layers){const label=document.createElement('label'),input=document.createElement('input'),span=document.createElement('span');input.type='checkbox';input.checked=l.visible;span.textContent=`${l.id} · ${l.slot} · z=${l.z}`;input.onchange=()=>{current.visible.set(l.id,input.checked);render();};label.append(input,span);$('layers').append(label);}
+    const notes=Array.isArray(m.warnings)?m.warnings.filter(x=>typeof x==='string').join('\n'):'';
+    $('status').textContent=`読込完了: ${m.canvas.width} × ${m.canvas.height} / ${m.layers.length} パーツ\n${notes}`;
+    controls(false);render();
+  }catch(error){release(pending);if(token===generation)$('status').textContent=error.message;}
+  finally{if(token===generation)loading=false;}
+}
+for(const id of ['directory','files'])$(id).onchange=()=>openPack($(id).files);
+$('mode').onchange=render;
+async function download(type){
+  if(!current||loading)return;
+  try{
+    const blob=await new Promise(resolve=>$('preview').toBlob(resolve,type));
+    if(!blob||blob.type!==type)throw Error('このブラウザは指定形式の書き出しに対応していません');
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='character.'+(type==='image/png'?'png':'webp');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){$('status').textContent=error.message;}
+}
+$('png').onclick=()=>download('image/png');$('webp').onclick=()=>download('image/webp');
+window.addEventListener('pagehide',()=>{++generation;release(current);current=null;});
+</script></html>

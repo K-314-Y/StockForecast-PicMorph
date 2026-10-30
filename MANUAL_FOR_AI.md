@@ -134,3 +134,24 @@ Sprint 16 の外見は2Dが基本。`/create` の保存DRAFT →「2D 着せ替�
 ## Sprint 18: パーツ組み立て
 
 `/assemble` は独立した手動制作画面です。localhost限定の `GET /api/parts/catalog`、`POST /api/parts/preview`、`POST /api/parts/draft` を使います。POSTはJSON・8192バイト以内。入力は name、任意concept、window_part_id、risk_part_id、analysis（part_id/share/strength）のみ。プレビューは架空観測値だけを利用し、保存は既存blueprintsストアの不変DRAFTです。既存の3候補制作・現行ゲームモデルは変更しません。manual_parts_v1の学習は元の0%指標を保持し、画像・任意コードは予測入力にしません。既存MCPツールは増減していません。
+
+## Sprint19: 独立したキャラ PACK
+
+- `/pack-lab` は `_blueprint_access` と同じローカル制限の GET 静的画面のみ。
+  POST/API/MCPツールの追加なし。既存ゲーム・Sprint18・保存schemaは変更しない。
+- `python3 scripts/character_pack_cli.py --input sample.png --output /tmp/my-character-pack`
+  は新しいディレクトリだけに出力。入力はローカル画像のみ、Pillowで実デコード。
+  上書き・symlink・URLは拒否し、失敗時は一時出力を削除する。
+- 画面はPACKフォルダまたはmanifestと画像の個別選択を受け付ける。
+  アップロード・localStorage・local_state書込みなし。HTML単独でオフライン利用可能。
+  fallbackは元画像のみ、layersはパーツのみ。両者を重ねない。
+  Canvas2Dで透明PNGと対応ブラウザのWebPを原寸出力する。PixiJSは未使用。
+- 画像は最大4096×4096、ソース20 MiB、64レイヤー、PACK300 MiB以内。
+  パス・ファイル数・サイズ・実寸を検証する。詳細仕様・追加の展開後上限はREADME参照。
+- PSDは任意のpsd-tools 1.26 API向けアダプタ。未導入なら説明付きで停止する。
+  通常レイヤーと一度だけflattenしたグループをbboxで配置し、マスクはライブラリに委ねる。
+  クリッピング・効果・複雑なblendは拒否。merged referenceとの差は警告。
+  Photoshop完全再現・画像解析・学習・対戦への登録は行わない。
+- Python追加テストとNodeのPACK UIテストあり。NodeはブラウザAPIのmock検証であり、
+  実ブラウザや実PSDを検証済みと主張しない。全体テストのsocket/process制限とSDK欠如は
+  READMEに記録。既存のライブサーバーや元プロジェクトをテスト目的に変更しない。
