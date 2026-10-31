@@ -63,6 +63,17 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 .starter .start-stats span{border:1px solid #537185;background:#132a3e;border-radius:11px;padding:10px 14px;font-size:13px}
 .starter .start-results{margin-top:18px;border-top:1px solid #527086;padding-top:14px}
 .starter .start-results strong{font-size:22px}
+.review{margin-top:20px;background:#0c1b2f;border:1px solid #537185;border-radius:14px;padding:18px}
+.review-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.timeline{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:6px;margin:14px 0}
+.timeline button{padding:10px 0;min-height:44px;font-variant-numeric:tabular-nums}
+.timeline button[aria-pressed="true"]{background:var(--teal);color:#10202c;border-color:var(--teal);font-weight:800}
+.starter button:focus-visible,.starter a:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
+.review dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}
+.review dl>div{background:#172b42;border-radius:10px;padding:12px;overflow-wrap:anywhere}
+.review dt{font-size:12px;color:#b6c8db}.review dd{margin:5px 0 0;font-size:17px;font-variant-numeric:tabular-nums}
+.review .actions button{min-height:44px}
+@media(max-width:540px){.starter{padding:18px}.timeline{grid-template-columns:repeat(6,minmax(0,1fr))}.review{padding:13px}.review dl{grid-template-columns:1fr}.top{flex-wrap:wrap}.top nav{display:flex;flex-wrap:wrap;gap:6px}}
 .advanced{margin-top:24px}
 .advanced>summary{cursor:pointer;list-style:auto;border:1px solid #496075;border-radius:13px;padding:17px 20px;background:#172741;font-weight:700}
 .advanced[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
@@ -84,7 +95,27 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <div id="starterResult" class="start-results" hidden>
 <h3>✨ クイック練習の結果</h3>
 <div class="start-stats"><span>最終コイン <strong id="starterFinal">--</strong></span><span>損益 <strong id="starterProfit">--</strong></span><span>最大下落率 <strong id="starterDrawdown">--</strong></span></div>
-<p class="muted" style="font-size:12px">固定された架空データによる練習結果。予測精度や現実の投資利益を示しません。</p>
+<p class="important">損益は架空練習、精度/Brierとは別。固定された12日間の結果で、現実の投資利益や予測精度を示しません。</p>
+<section class="review" aria-labelledby="starterReviewHeading">
+<div class="review-head"><h3 id="starterReviewHeading">足あとをたどる · 12日の振り返り</h3><span class="pill">固定の架空履歴</span></div>
+<p class="muted" style="font-size:12px">日を選んで、相棒の保有判断とその日の結果を見てみよう。相棒は買って保有するか、現金で待つかを選びます。価格の上下を当てた回数ではありません。</p>
+<p id="starterSummary" class="muted" style="font-size:13px"></p>
+<div id="starterTimeline" class="timeline" role="group" aria-label="振り返る日を選択"></div>
+<div id="starterDayPanel" role="status" aria-live="polite" aria-atomic="true">
+<h3 id="starterDay"></h3>
+<dl>
+<div><dt>相棒の保有判断</dt><dd id="starterSignal"></dd></div>
+<div><dt>その日の架空価格（判断後）</dt><dd id="starterPrice"></dd></div>
+<div><dt>価格の前日比</dt><dd id="starterMovement"></dd></div>
+<div><dt>終了時のコイン</dt><dd id="starterEquity"></dd></div>
+<div><dt>コインの前日比（初日は開始時比）</dt><dd id="starterDelta"></dd></div>
+<div id="starterBenchmarkCard" hidden><dt>同じ価格を買って保有した参考コイン</dt><dd id="starterDayBenchmark"></dd></div>
+</dl>
+</div>
+<div class="actions"><button type="button" id="starterPrev">← 前の日</button><button type="button" id="starterNext">次の日 →</button></div>
+<p class="muted" style="font-size:12px;margin-top:12px">価格変動とコインの増減は別の値です。コインには保有量や仮想手数料も反映されます。</p>
+</section>
+<div class="actions"><a href="/create">相棒を作り直す・設定を見直す</a><a id="starterAdvanced" href="#advancedGame">研究所で詳しく調べる →</a></div>
 <div class="actions"><button type="button" id="starterClaim" disabled>★ はじめての参加XPを受け取る</button><small>課題達成の報酬は1回限り。利益に連動しません。</small></div>
 <p id="starterClaimStatus" class="muted" role="status" style="font-size:12px"></p>
 </div>
@@ -222,7 +253,15 @@ slots.forEach(k=>$(k).addEventListener("input",recalc));
 function renderGrowth(data){
   growthRevision=data.revision;
   const starterMine=data.slots.find(s=>s.slot==="mine");
-  if(starterMine)$("starterGrowth").textContent="Lv."+starterMine.level+" · "+starterMine.xp+" XP";
+  if(starterMine){
+    $("starterGrowth").textContent="Lv."+starterMine.level+" · "+starterMine.xp+" XP";
+    // The participation achievement is persisted by the server. Restore this
+    // UI state after a page reload rather than showing a misleading claim.
+    if(Array.isArray(starterMine.achievements) && starterMine.achievements.includes("first_practice")){
+      starterClaimed=true;
+      updateStarterControls();
+    }
+  }
   const container=$("growthCards");
   container.replaceChildren();
   const symbols={mine:"✨",owl:"🌙",turtle:"🍀"};
@@ -356,42 +395,104 @@ $("simulate").addEventListener("click",async()=>{
 // Beginner mode reuses the existing fixed, fictional practice, with only the
 // player's own slot funded. It neither alters model settings nor starts a job.
 const starterAllocation=()=>({mine:100,owl:0,turtle:0});
+let starterBusy=false,starterPractice=null,starterDayIndex=0,starterClaimed=false;
+const starterSigned=value=>(value>=0?"+":"")+fmt(value);
+function updateStarterControls(){
+  $("starterPlay").disabled=starterBusy;
+  $("starterClaim").disabled=starterBusy || !starterPractice || starterClaimed;
+  $("starterClaim").textContent=starterClaimed?"✓ 参加XPは受け取り済み":"★ はじめての参加XPを受け取る";
+}
+function validateStarter(result){
+  if(!result || result.mode!=="PRACTICE_SYNTHETIC_ONLY")throw Error("練習モードを確認できません");
+  if(![result.initial_coins,result.final_coins,result.profit_coins,result.max_drawdown_pct].every(Number.isFinite) ||
+     !Array.isArray(result.equity_path) || result.equity_path.length!==13 || !result.equity_path.every(Number.isFinite) ||
+     !Array.isArray(result.decisions) || result.decisions.length!==12 ||
+     !result.decisions.every((d,i)=>d && d.step===i+1 && Number.isFinite(d.price) && d.price>0 && ["LONG","CASH"].includes(d.signals?.mine)))
+    throw Error("12日分の練習データを確認できません。もう一度お試しください。");
+  return result;
+}
+function renderStarterDay(index){
+  if(!starterPractice || index<0 || index>=12)return;
+  starterDayIndex=index;
+  const r=starterPractice,d=r.decisions[index],prior=r.decisions[index-1];
+  $("starterDay").textContent=(index+1)+"日目 / 12日";
+  $("starterSignal").textContent=d.signals.mine==="LONG"?"買って保有する判断":"現金で待つ判断";
+  $("starterPrice").textContent=fmt(d.price);
+  $("starterMovement").textContent=prior?starterSigned(d.price-prior.price)+"（"+starterSigned((d.price/prior.price-1)*100)+"%）":"比較なし（初日の前日価格は未提供）";
+  $("starterEquity").textContent=fmt(r.equity_path[index+1])+" C";
+  $("starterDelta").textContent=starterSigned(r.equity_path[index+1]-r.equity_path[index])+" C";
+  const benchmark=Array.isArray(r.benchmark_path) && r.benchmark_path.length===13 && r.benchmark_path.every(Number.isFinite);
+  $("starterBenchmarkCard").hidden=!benchmark;
+  $("starterDayBenchmark").textContent=benchmark?fmt(r.benchmark_path[index+1])+" C":"";
+  Array.from($("starterTimeline").children).forEach((button,i)=>button.setAttribute("aria-pressed",String(i===index)));
+  $("starterPrev").disabled=index===0;
+  $("starterNext").disabled=index===11;
+}
+function renderStarterReview(result){
+  const long=result.decisions.filter(d=>d.signals.mine==="LONG").length;
+  const mine=result.characters?.mine;
+  let summary="12日間の判断：買って保有 "+long+"日 / 現金待機 "+(12-long)+"日";
+  if(Number.isInteger(mine?.trades) && mine.trades>=0)summary+=" · 売買 "+mine.trades+"回";
+  if(Number.isFinite(mine?.fees) && mine.fees>=0)summary+=" · 仮想手数料 "+fmt(mine.fees)+" C";
+  $("starterSummary").textContent=summary;
+  $("starterTimeline").replaceChildren();
+  result.decisions.forEach((d,i)=>{
+    const button=document.createElement("button");
+    button.type="button";button.textContent=d.step;
+    button.setAttribute("aria-label",d.step+"日目を振り返る");
+    button.setAttribute("aria-controls","starterDayPanel");
+    button.addEventListener("click",()=>renderStarterDay(i));
+    $("starterTimeline").appendChild(button);
+  });
+  renderStarterDay(0);
+}
+$("starterPrev").addEventListener("click",()=>renderStarterDay(starterDayIndex-1));
+$("starterNext").addEventListener("click",()=>renderStarterDay(starterDayIndex+1));
+$("starterAdvanced").addEventListener("click",()=>{$("advancedGame").open=true;});
 $("starterPlay").addEventListener("click",async()=>{
-  const play=$("starterPlay");
-  play.disabled=true;
+  if(starterBusy)return;
+  starterBusy=true;
+  // Invalidate the previous run before awaiting; a failed replay cannot claim it.
+  starterPractice=null;
+  updateStarterControls();
   $("starterStatus").textContent="架空の12ステップを再生中…";
   $("starterResult").hidden=true;
-  $("starterClaim").disabled=true;
-  $("starterClaimStatus").textContent="";
+  $("starterTimeline").replaceChildren();
+  $("starterClaimStatus").textContent=starterClaimed?"この課題のXPは受け取り済みです。":"";
   try{
-    const result=await call("/api/practice",{allocations:starterAllocation()});
-    if(result.mode!=="PRACTICE_SYNTHETIC_ONLY")throw Error("練習モードを確認できません");
+    const result=validateStarter(await call("/api/practice",{allocations:starterAllocation()}));
+    starterPractice=result;
     $("starterFinal").textContent=fmt(result.final_coins)+" C";
-    $("starterProfit").textContent=(result.profit_coins>=0?"+":"")+fmt(result.profit_coins)+" C";
+    $("starterProfit").textContent=starterSigned(result.profit_coins)+" C";
     $("starterProfit").style.color=result.profit_coins>=0?"#80efc8":"#ff9ea4";
-    $("starterDrawdown").textContent=result.max_drawdown_pct.toFixed(2)+"%";
+    $("starterDrawdown").textContent=fmt(result.max_drawdown_pct)+"%";
+    renderStarterReview(result);
     $("starterResult").hidden=false;
-    $("starterClaim").disabled=false;
-    $("starterStatus").textContent="クイック練習終了。架空の過去12ステップを再生しました。";
+    $("starterStatus").textContent="クイック練習終了。架空の過去12ステップを再生しました。日を選んで振り返れます。";
   }catch(error){
+    starterPractice=null;
+    $("starterResult").hidden=true;
     $("starterStatus").textContent="練習に失敗: "+error.message;
-  }finally{play.disabled=false;}
+  }finally{starterBusy=false;updateStarterControls();}
 });
 $("starterClaim").addEventListener("click",async()=>{
-  const button=$("starterClaim");
-  button.disabled=true;
+  if(starterBusy || !starterPractice || starterClaimed)return;
+  starterBusy=true;updateStarterControls();
   $("starterClaimStatus").textContent="育成課題を確認中…";
   try{
     const value=await call("/api/training/complete",{
       allocations:starterAllocation(),expected_growth_revision:growthRevision
     });
+    const xp=value?.earned_xp?.mine;
+    if(!Number.isFinite(xp) || xp<0 || !value.growth)throw Error("育成記録を確認できません");
     renderGrowth(value.growth);
-    const xp=value.earned_xp.mine || 0;
-    $("starterClaimStatus").textContent=xp>0?"参加の報酬 +"+xp+" XP！":"この課題のXPはすでに受け取り済みです。";
+    starterClaimed=true;
+    $("starterClaimStatus").textContent=xp>0?"参加の報酬 +"+xp+" XP！ 同じ課題の報酬は1回限りです。":"この課題のXPはすでに受け取り済みです。";
   }catch(error){
-    button.disabled=false;
-    $("starterClaimStatus").textContent="XPの受け取りに失敗: "+error.message;
-  }
+    $("starterClaimStatus").textContent="XPの受け取りに失敗: "+error.message+"。もう一度受け取れます（重複報酬なし）。";
+    // Refresh the existing revision after a conflict or an uncertain response.
+    try{renderGrowth(await call("/api/growth"));}catch(e){}
+  }finally{starterBusy=false;updateStarterControls();}
 });
 // Details use only the existing evaluation ledger; no new forecast is computed.
 function renderChallengeDetails(data){
