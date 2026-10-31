@@ -331,3 +331,49 @@ outcome = settle_offline(
 
 検証: `python3 -B -m unittest tests.test_forward_journal -v`、
 `python3 -B -m unittest discover -s tests -q`、`(cd mcp && npm test)`。
+
+## Sprint 22: Game runtime migration (JavaScript game math, Python forecasting)
+
+**Migration direction:** use TypeScript/JavaScript for the Web game, gameplay
+state/progression, economy, eventual Node.js game API, and scheduled leagues.
+Keep Python for model calculation, feature extraction, and offline research.
+The two sides will exchange a deliberately small versioned prediction
+contract. The game must not import the V6 repo or execute arbitrary model code.
+
+### First completed migration seam
+
+- `game_runtime/practice.mjs` implements the **pure JavaScript synthetic
+  practice economy**: per-character allocation, LONG/CASH position changes,
+  virtual fees, equity trajectory, drawdown, benchmark, and result formatting.
+  It accepts prediction signals and model metadata as **inputs**. It never
+  imports Python or accesses files/network; it never places real trades.
+- `tests/practice_parity_fixture.py` is a **test-only** exporter. It asks the
+  existing Python model for time-prefix-based signals and computes the
+  reference output using the old Python game implementation.
+- `mcp/tests/game-runtime.test.mjs` verifies exact/near-exact parity for four
+  scenarios (solo, three participants, zero allocation, changed model) and
+  rejection of malformed inputs, without changing user data.
+- **Not yet switched:** `/game` and `/api/practice` still use the old
+  Python server. Saved models, XP, gear, and account state stay untouched.
+  No Node game API or independent scheduled server is running yet.
+
+### Migration sequence
+
+1. Keep the JS simulator as a parity-tested replacement candidate.
+2. Move the *gameplay API* and storage into Node.js, with model-only forecasts
+   obtained from a narrowly defined local Python predictor interface.
+3. Validate server-side game economy and reward claims, then route the Web
+   game to Node.js. Browser computations alone are not authoritative for
+   multiplayer rankings or XP.
+4. Only after parity and storage checks, retire the corresponding Python game
+   handlers. Preserve existing local state and revision history.
+5. Build the actual offline-progress scheduler and league on the Node server;
+   do not claim that synthetic replays are live forward predictions.
+
+Recheck with `node --test mcp/tests/game-runtime.test.mjs`,
+`(cd mcp && npm test)`, and
+`python3 -B -m unittest discover -s tests -q`.
+
+**Important:** This is a phased migration, not a claim that all game logic has
+moved from Python. The V6 forecasting repository and the existing Creature
+Lab servers remain independent and unchanged.
