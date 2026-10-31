@@ -265,3 +265,19 @@ test('failed growth refresh releases busy state and an uncertain claim can safel
   assert.equal(get('starterClaim').disabled, true);
   assert.match(get('starterClaimStatus').textContent, /受け取り済み/);
 });
+
+test('companion reacts to confirmed practice, selected signal and actual XP only', async () => {
+  const pending=deferred();
+  const h=setup({respond:path=>path==='/api/practice'?pending.promise:earned()});
+  const state=()=>h.get('characterScene').attributes['data-state'];
+  const run=h.click('starterPlay');assert.equal(state(),'practicing');
+  pending.resolve(practice());await run;assert.equal(state(),'result positive');
+  await h.get('starterTimeline').children[0].handlers.click();assert.equal(state(),'cash');
+  await h.get('starterTimeline').children[3].handlers.click();assert.equal(state(),'holding');
+  await h.click('starterClaim');assert.equal(state(),'growth');
+  assert.deepEqual(h.calls.map(c=>c.path),['/api/practice','/api/training/complete']);
+  const negative=practice();negative.profit_coins=-20;
+  const n=setup({respond:()=>negative});await n.click('starterPlay');assert.equal(n.get('characterScene').attributes['data-state'],'result negative');
+  const f=setup({practiceFails:true});await f.click('starterPlay');assert.equal(f.get('characterScene').attributes['data-state'],'ready');
+  const zero=setup({respond:path=>path==='/api/practice'?practice():earned(0)});await zero.click('starterPlay');await zero.click('starterClaim');assert.notEqual(zero.get('characterScene').attributes['data-state'],'growth');
+});
