@@ -79,6 +79,29 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 .advanced[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
 .advanced>summary:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
 @media(max-width:850px){.cols{grid-template-columns:1fr}.results{grid-template-columns:repeat(2,1fr)}}
+
+.companion{display:grid;grid-template-columns:minmax(220px, .8fr) minmax(0,1fr);gap:22px;align-items:center;margin:20px 0;padding:18px;background:#0d2034;border:1px solid #557e8c;border-radius:18px}
+.character-scene{position:relative;min-height:245px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;isolation:isolate;background:radial-gradient(ellipse at 50% 80%,#427c7870,transparent 65%);border-radius:14px}
+.character-scene:after{content:"";position:absolute;bottom:29px;width:180px;height:30px;border-radius:50%;background:#67b7a43b;border:1px solid #78d8c455;z-index:-1}
+.character-actor{width:150px;height:154px;position:relative;transform-origin:50% 100%;transition:transform .25s ease,filter .25s ease}
+.character-actor img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 8px 8px #0005)}
+.generic-creature{position:absolute;inset:18px 10px 9px;border-radius:48% 48% 41% 41%;background:linear-gradient(145deg,#c2ffe2,#65c8be 68%,#438eab);border:3px solid #b9fbe0;box-shadow:inset -9px -8px 0 #347b8f44,0 12px 20px #0003}
+.generic-creature:before{content:"";position:absolute;width:29px;height:37px;left:49px;top:-26px;border-radius:0 90% 0 90%;background:#b9eaa5;transform:rotate(28deg);border:2px solid #e3ffbe}
+.creature-face{position:absolute;top:41px;left:27px;width:15px;height:21px;border-radius:50%;background:#173e51;box-shadow:49px 0 #173e51}
+.creature-face:after{content:"";position:absolute;top:26px;left:23px;width:18px;height:9px;border-bottom:3px solid #173e51;border-radius:50%}
+.creature-scarf{position:absolute;bottom:17px;left:-8px;right:-8px;height:22px;border-radius:9px;background:#7179bb;border:2px solid #b5b0ec;transform:rotate(-5deg)}
+.character-scene[data-state="practicing"] .character-actor{transform:rotate(-7deg) translateY(-3px)}
+.character-scene[data-state="result positive"] .character-actor{transform:translateY(-10px) rotate(5deg)}
+.character-scene[data-state="result negative"] .character-actor{transform:rotate(-5deg) scale(.95);filter:saturate(.7)}
+.character-scene[data-state="holding"] .character-actor{transform:rotate(4deg)}
+.character-scene[data-state="cash"] .character-actor{transform:scale(.95)}
+.character-scene[data-state="growth"] .character-actor{transform:translateY(-9px) scale(1.08);filter:drop-shadow(0 0 12px #d8ed9c)}
+.character-bubble{background:#e1f4ed;color:#173847;border-radius:14px 14px 14px 3px;padding:9px 13px;font-size:13px;max-width:100%;margin-bottom:12px;min-height:38px}
+.character-caption{font-size:11px;color:#bbd9dc;margin:13px 0 0;text-align:center}
+.portrait-tools{min-width:0;font-size:13px}.portrait-tools label{display:block;margin:12px 0 6px}.portrait-tools input{max-width:100%;font:inherit}.portrait-tools p{margin-top:10px;font-size:12px;overflow-wrap:anywhere}
+.starter select:focus-visible,.starter input:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
+@media(max-width:600px){.companion{grid-template-columns:1fr;gap:12px;padding:14px}.character-scene{min-height:230px}}
+@media(prefers-reduced-motion:reduce){.character-actor{transition:none!important;transform:none!important}}
 </style></head>
 <body><div class="wrap">
 <div class="top"><div class="logo">✦ Creature Lab <span style="font-size:12px;color:var(--soft);font-weight:400">/ GAME LAB</span></div><nav><a href="/assemble">パーツを組む</a> <a href="/create">キャラを制作</a> <a href="/">キャラクター編集に戻る</a></nav></div>
@@ -89,6 +112,20 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 <span class="start-tag">✦ はじめての冒険</span>
 <h2 id="starterHeading">✨ 自分のキャラでクイック練習</h2>
 <p class="muted">1体だけで参加。過去の架空価格12ステップを即時再生します。今日の株価予測や、ログアウト中の自動進行ではありません。</p>
+<div class="companion">
+<div id="characterScene" class="character-scene" data-state="ready">
+<p id="characterSpeech" class="character-bubble" role="status" aria-live="polite">いっしょに12日間を見てみよう。</p>
+<div class="character-actor"><div id="characterGeneric" class="generic-creature" role="img" aria-label="若葉とスカーフの汎用2Dアバター"><span class="creature-face"></span><span class="creature-scarf"></span></div><img id="characterPortrait" alt="選択した外見イラスト" hidden></div>
+<p id="characterSource" class="character-caption">汎用アバター · 保存イラスト未選択</p>
+</div>
+<div class="portrait-tools"><strong>相棒の見た目</strong>
+<p>外見だけの変更です。使用中の予測モデル・戦略は変わりません。イラストとモデルは独立しています。</p>
+<label for="portraitSelect">保存した下書きのイラスト</label><select id="portraitSelect"><option value="">汎用アバター（標準）</option></select>
+<div class="actions"><button type="button" id="portraitReload">保存絵の一覧を読む</button><button type="button" id="portraitDefault">標準に戻す</button></div>
+<label for="characterPack">ローカルPACKフォルダを選ぶ</label><input id="characterPack" type="file" webkitdirectory multiple aria-describedby="packHelp">
+<p id="packHelp" class="muted">このセッションだけ（再読込で解除）。PNG限定：manifest.json・original.png・parts/*.png。最大67ファイル・4096px・合計300 MiB。PSDは描画に使いません。アップロード・保存なし。<a href="/pack-lab">PACK Labで編集・管理 →</a></p>
+<p id="portraitStatus" role="status" aria-live="polite">保存絵は一覧から明示的に選択してください。</p>
+</div></div>
 <div class="start-stats"><span id="starterModel">モデル読み込み中…</span><span id="starterGrowth">Lv.1 · 0 XP</span></div>
 <div class="actions"><button type="button" class="main" id="starterPlay">▶ 1体でクイック挑戦</button><a href="/create">自分のキャラを制作する</a></div>
 <p id="starterStatus" class="muted" role="status" style="font-size:13px;margin-top:14px">コインの配分設定は不要。練習を開始しても保存済みモデルは変更されません。</p>
@@ -227,8 +264,136 @@ footer{margin-top:25px;color:var(--soft);font-size:12px}
 </section>
 
 </details>
-<footer>SPRINT 20 · Creature Lab / 個人のローカル専用。クイック練習は架空相場、実相場は過去リプレイのみ。自動放置予測・リアルマネー取引は未実装。</footer>
+<footer>SPRINT 24 · Creature Lab / 個人のローカル専用。クイック練習は架空相場、実相場は過去リプレイのみ。自動放置予測・リアルマネー取引は未実装。</footer>
 </div>
+<script>
+// Character appearance is session-only and never configures a predictive model.
+(()=>{
+'use strict';
+const el=id=>document.getElementById(id);
+const LIMIT=300*1024*1024, MAX_FILE=70*1024*1024;
+function validateManifest(m){
+  if(!m||m.manifest_version!==1||!m.canvas||![m.canvas.width,m.canvas.height].every(x=>Number.isInteger(x)&&x>=1&&x<=4096))throw Error('不正なバージョン / キャンバス（最大4096）');
+  if(!['fallback','layers'].includes(m.mode_default)||!m.source||!['image','psd'].includes(m.source.kind)||!(/^[a-f0-9]{64}$/).test(m.source.sha256))throw Error('不正なモード / ソース');
+  if(!Array.isArray(m.layers)||m.layers.length<1||m.layers.length>64)throw Error('パーツ数は1〜64');
+  // Bound retained decoded surfaces, as well as compressed input bytes.
+  if((m.layers.length+2)*m.canvas.width*m.canvas.height*4>LIMIT)throw Error('展開後の画像が300 MiBを超えます');
+  const ids=new Set(),paths=new Set(),zs=new Set();
+  for(const l of m.layers){
+    if(!l||typeof l.path!=='string'||!(/^parts\/[A-Za-z0-9_-]+\.(png)$/).test(l.path)||typeof l.id!=='string'||!(/^[A-Za-z0-9_-]{1,64}$/).test(l.id)||typeof l.slot!=='string'||l.slot.length<1||l.slot.length>64||typeof l.visible!=='boolean'||!Number.isInteger(l.z)||Math.abs(l.z)>1000000||ids.has(l.id)||paths.has(l.path)||zs.has(l.z))throw Error('不正 / 重複パーツ、または安全でないパス');
+    ids.add(l.id);paths.add(l.path);zs.add(l.z);
+  }
+  return m;
+}
+function indexFiles(files){
+  if(files.length<3||files.length>67)throw Error('ファイル数は3〜67');
+  const map=new Map();let total=0;
+  const directory=files.some(f=>f.webkitRelativePath);if(!directory)throw Error('PACKフォルダを選んでください');
+  let root=null;
+  for(const f of files){
+    total+=f.size;if(f.size<=0||f.size>MAX_FILE||total>LIMIT)throw Error('ファイルサイズ制限を超えました');
+    let path=f.name;
+    if(directory){
+      const bits=(f.webkitRelativePath||'').split('/');
+      if(!/^[^/\\\x00-\x1f]+$/.test(bits[0])||['.','..'].includes(bits[0]))throw Error('安全でないルート');if(root===null)root=bits[0];if(bits.shift()!==root)throw Error('単一PACKフォルダを選択してください');
+      path=bits.join('/');
+    }
+    if(!(/^(manifest\.json|original\.png|source\.psd|parts\/[A-Za-z0-9_-]+\.(png))$/).test(path)){
+      throw Error('安全でない、または未知のファイルパス');
+    }
+    if(path==='source.psd'&&f.size>20*1024*1024)throw Error('PSDは20 MiB以下');
+    if(map.has(path))throw Error('重複ファイル名');map.set(path,f);
+  }
+  return map;
+}
+function renderPlan(m,mode){
+  if(mode==='fallback')return ['original.png'];
+  if(mode!=='layers')throw Error('不正なモード');
+  return [...m.layers].sort((a,b)=>a.z-b.z).filter(l=>l.visible).map(l=>l.path);
+}
+
+async function decodeAsset(file,path,size){
+  if(file.type && file.type!=='image/png')throw Error('ゲーム内PACKはPNGのみ対応');
+  const b=await file.slice(0,33).arrayBuffer(),a=new Uint8Array(b),v=new DataView(b);
+  if(a.length<33||![137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82].every((x,i)=>a[i]===x))throw Error('PNG署名 / IHDRが不正です');
+  if(v.getUint32(16)!==size.width||v.getUint32(20)!==size.height)throw Error('画像サイズがキャンバスと一致しません');
+  const image=await createImageBitmap(file);
+  if(image.width!==size.width||image.height!==size.height){image.close();throw Error('画像実寸が一致しません');}
+  return image;
+}
+let generation=0,objectUrl=null,catalog=new Map(),catalogBusy=false;
+const status=message=>{el('portraitStatus').textContent=message;};
+function dispose(){if(objectUrl){URL.revokeObjectURL(objectUrl);objectUrl=null;}}
+function reset(){
+  ++generation;dispose();el('characterPortrait').hidden=true;el('characterPortrait').removeAttribute('src');
+  el('characterGeneric').hidden=false;el('portraitSelect').value='';el('characterPack').value='';
+  el('characterSource').textContent='汎用アバター · 保存イラスト未選択';
+}
+function show(url,label){dispose();el('characterPortrait').src=url;el('characterPortrait').hidden=false;el('characterGeneric').hidden=true;el('characterSource').textContent=label;}
+function portraitPath(d){
+  if(!d||typeof d.id!=='string'||!/^bp_[a-f0-9]{32}$/.test(d.id)||typeof d.visual_asset?.url!=='string')return null;
+  const path='/api/blueprints/'+d.id+'/image';
+  // Accept only the exact canonical path or its same-origin absolute form.
+  if(d.visual_asset.url!==path && d.visual_asset.url!==location.origin+path)return null;
+  return path;
+}
+async function loadCatalog(){
+  if(catalogBusy)return;catalogBusy=true;el('portraitReload').disabled=true;
+  try{
+    const response=await fetch('/api/blueprints',{method:'GET',credentials:'same-origin'});
+    if(!response.ok)throw Error('一覧を取得できません');
+    const data=await response.json();if(!Array.isArray(data.drafts)||data.drafts.length>50)throw Error('一覧が不正です');
+    const selected=el('portraitSelect').value;catalog=new Map();
+    const standard=document.createElement('option');standard.value='';standard.textContent='汎用アバター（標準）';el('portraitSelect').replaceChildren(standard);
+    for(const d of data.drafts){const path=portraitPath(d);if(!path||catalog.has(d.id))continue;
+      const name=typeof d.user_declared?.name==='string'?d.user_declared.name.slice(0,60):'名前なし';
+      catalog.set(d.id,{path,name});const option=document.createElement('option');option.value=d.id;option.textContent=name+' · 下書きの外見';el('portraitSelect').appendChild(option);
+    }
+    el('portraitSelect').value=catalog.has(selected)?selected:'';
+    status(catalog.size?'保存絵を選ぶと外見に反映します。モデルは変わりません。':'選べる保存イラストはありません。汎用アバターやローカルPACKで練習できます。');
+  }catch(error){status('保存絵の一覧を取得できません。標準やローカルPACKで練習できます。');}
+  finally{catalogBusy=false;el('portraitReload').disabled=false;}
+}
+async function openPack(files){
+  if(!files.length)return;
+  reset();const token=generation;status('ローカルPACKを確認中…');
+  try{
+    if(typeof createImageBitmap!=='function'||typeof URL.createObjectURL!=='function')throw Error('このブラウザはPACK表示に未対応です');
+    const map=indexFiles([...files]),file=map.get('manifest.json');
+    if(!file||file.size>128*1024)throw Error('manifest.json は128 KiB以下で必要です');
+    const m=validateManifest(JSON.parse(await file.text()));
+    const expected=['manifest.json','original.png',...m.layers.map(l=>l.path)];
+    if(expected.some(p=>!map.has(p))||[...map.keys()].some(p=>!expected.includes(p)&&p!=='source.psd'))throw Error('不足または未参照ファイルがあります');
+    const canvas=document.createElement('canvas');canvas.width=m.canvas.width;canvas.height=m.canvas.height;
+    const ctx=canvas.getContext('2d');if(!ctx||typeof canvas.toBlob!=='function')throw Error('Canvas2D / PNG書出しに未対応です');
+    const plan=new Set(renderPlan(m,m.mode_default));
+    // Validate all rendered PNG assets, retaining only one decoded surface at a time.
+    for(const path of expected.slice(1)){
+      if(token!==generation)return;
+      const image=await decodeAsset(map.get(path),path,m.canvas);
+      try{if(token!==generation)return;}finally{image.close();}
+    }
+    for(const path of plan){
+      if(token!==generation)return;
+      const image=await decodeAsset(map.get(path),path,m.canvas);
+      try{if(token!==generation)return;ctx.drawImage(image,0,0);}finally{image.close();}
+    }
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    if(token!==generation)return;
+    if(!blob||blob.type!=='image/png')throw Error('PNGを書き出せません');
+    const url=URL.createObjectURL(blob);show(url,'ローカルPACK · '+m.mode_default+' · このセッションのみ');objectUrl=url;
+    status('PACKの外見を表示中。再読込で解除されます。モデルは変わりません。');
+  }catch(error){if(token===generation){reset();status('PACKを表示できません: '+error.message+'。標準で練習できます。');}}
+}
+el('portraitReload').onclick=loadCatalog;
+el('portraitSelect').onchange=()=>{const chosen=catalog.get(el('portraitSelect').value);reset();if(chosen){show(chosen.path,chosen.name+' · 下書きの外見のみ');el('portraitSelect').value=[...catalog].find(([,v])=>v===chosen)[0];status('外見を選択しました。使用中の戦略は変わりません。');}else status('汎用アバターで練習できます。');};
+el('portraitDefault').onclick=()=>{reset();status('汎用アバターに戻しました。');};
+el('characterPortrait').onerror=()=>{reset();status('画像を表示できません。汎用アバターに戻しました。');};
+el('characterPack').onchange=()=>openPack([...el('characterPack').files]);
+window.addEventListener('pagehide',reset);
+// Load metadata only after an explicit action; image bytes are requested only on selection.
+})();
+</script>
 <script>
 const slots=["mine","owl","turtle"],$=id=>document.getElementById(id);
 let revision=-1,lineupRevision=-1,growthRevision=-1,lastPractice=null;
@@ -394,6 +559,10 @@ $("simulate").addEventListener("click",async()=>{
 });
 // Beginner mode reuses the existing fixed, fictional practice, with only the
 // player's own slot funded. It neither alters model settings nor starts a job.
+function companionState(state,speech){
+  $('characterScene').setAttribute('data-state',state);
+  $('characterSpeech').textContent=speech;
+}
 const starterAllocation=()=>({mine:100,owl:0,turtle:0});
 let starterBusy=false,starterPractice=null,starterDayIndex=0,starterClaimed=false;
 const starterSigned=value=>(value>=0?"+":"")+fmt(value);
@@ -414,6 +583,8 @@ function validateStarter(result){
 function renderStarterDay(index){
   if(!starterPractice || index<0 || index>=12)return;
   starterDayIndex=index;
+  const holding=starterPractice.decisions[index].signals.mine==='LONG';
+  companionState(holding?'holding':'cash',(index+1)+'日目。'+(holding?'買って保有する判断だね。':'現金で待つ判断だね。'));
   const r=starterPractice,d=r.decisions[index],prior=r.decisions[index-1];
   $("starterDay").textContent=(index+1)+"日目 / 12日";
   $("starterSignal").textContent=d.signals.mine==="LONG"?"買って保有する判断":"現金で待つ判断";
@@ -452,6 +623,7 @@ $("starterAdvanced").addEventListener("click",()=>{$("advancedGame").open=true;}
 $("starterPlay").addEventListener("click",async()=>{
   if(starterBusy)return;
   starterBusy=true;
+  companionState('practicing','12日間の足あとを調べているよ。');
   // Invalidate the previous run before awaiting; a failed replay cannot claim it.
   starterPractice=null;
   updateStarterControls();
@@ -467,11 +639,13 @@ $("starterPlay").addEventListener("click",async()=>{
     $("starterProfit").style.color=result.profit_coins>=0?"#80efc8":"#ff9ea4";
     $("starterDrawdown").textContent=fmt(result.max_drawdown_pct)+"%";
     renderStarterReview(result);
+    companionState(result.profit_coins>=0?'result positive':'result negative',result.profit_coins>=0?(result.profit_coins===0?'練習終了。架空コインの損益はゼロだったね。':'練習終了。架空コインが増えたね。'):'練習終了。架空コインが減ったね。いっしょに振り返ろう。');
     $("starterResult").hidden=false;
     $("starterStatus").textContent="クイック練習終了。架空の過去12ステップを再生しました。日を選んで振り返れます。";
   }catch(error){
     starterPractice=null;
     $("starterResult").hidden=true;
+    companionState('ready','準備して待っているよ。もう一度試してみよう。');
     $("starterStatus").textContent="練習に失敗: "+error.message;
   }finally{starterBusy=false;updateStarterControls();}
 });
@@ -487,6 +661,7 @@ $("starterClaim").addEventListener("click",async()=>{
     if(!Number.isFinite(xp) || xp<0 || !value.growth)throw Error("育成記録を確認できません");
     renderGrowth(value.growth);
     starterClaimed=true;
+    if(xp>0)companionState('growth','参加XPを受け取ったよ。一歩ずつ育とう！');
     $("starterClaimStatus").textContent=xp>0?"参加の報酬 +"+xp+" XP！ 同じ課題の報酬は1回限りです。":"この課題のXPはすでに受け取り済みです。";
   }catch(error){
     $("starterClaimStatus").textContent="XPの受け取りに失敗: "+error.message+"。もう一度受け取れます（重複報酬なし）。";
