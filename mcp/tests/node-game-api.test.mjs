@@ -127,13 +127,14 @@ test('Revision conflict rejects stale game results', async () => {
   });
 });
 
-test('Node preview serves a dedicated beginner game, no old server writes', async () => {
+test('Node preview serves the beginner game and isolated XP flow', async () => {
   await serve({loadSnapshot:async()=>snapshot()}, async url => {
     const r=await fetch(url+'/game');
     assert.equal(r.status,200);
     const content=await r.text();
     assert.match(content, /JavaScriptゲームエンジン実験版/);
-    assert.match(content, /コインや経験値は保存されません/);
+    assert.match(content, /コインは保存されません/);
+    assert.match(content, /XPは練習実績として1回だけ別保存/);
     assert.match(content, /demo\.mjs/);
     const script=await fetch(url+'/demo.mjs');
     assert.equal(script.status,200);
@@ -141,8 +142,8 @@ test('Node preview serves a dedicated beginner game, no old server writes', asyn
     assert.equal((await fetch(url+'/favicon.ico')).status, 204);
     const health=await (await fetch(url+'/health')).json();
     assert.equal(health.game_runtime,'node');
-    assert.equal(health.xp,false);
-    assert.equal((await fetch(url+'/api/training/complete',{method:'POST'})).status,404);
+    assert.equal(health.xp,'node-tutorial-only');
+    assert.equal((await fetch(url+'/api/training/complete',{method:'POST'})).status,415);
   });
 });
 

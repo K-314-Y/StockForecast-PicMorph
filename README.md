@@ -424,3 +424,51 @@ Nodeへの移行が完了するまでは「Pythonは予測専用」は未達。
 `python3 -B -m unittest discover -s tests -q`。
 ブラウザで `8890/game` → 「練習スタート」を押し、
 12日の結果が表示され、XPと実績に反映されないことを確認。
+
+## Sprint 26: Nodeゲーム育成・装備・XP保存
+
+**JavaScript版の実ゲーム処理を進める**ため、
+`game_runtime/growth.mjs` にチュートリアル実績・XP・装備の
+Node.js版を追加した。既存のPython `growth.py` と同じ
+`schema:1`、スロット `mine/ owl/ turtle`、実績
+`first_practice/diversify_slots/full_allocation`、XP=20/10/10、
+装備の解放条件を守る。予測精度・ゲーム内損益とXPは独立。
+
+**保存は必ず分離する。** Nodeの書込先は
+`local_state/node_game/growth.json`。
+元の `local_state/growth.json` が存在する場合、Nodeの保存先が
+**まだ存在しない間だけ**旧ファイルを読み取り、最初の変更時に
+Node用ファイルへ取り込む。旧ファイルへの書込みは一切しない。
+Node用ファイル作成後は、旧ゲームの育成実績変更は自動同期しない。
+**同時編集の競合を避けるため**、PythonゲームとNodeゲームを
+完成まで別のプレビューとして使う。Node側は単一ライターを前提とした
+ローカル版であり、複数プロセス・複数アカウントの本番サービスはまだ対応しない。
+
+新しいNode画面 `http://127.0.0.1:8890/game` でできること:
+- `GET /api/growth`: 育成状態と装備の解放条件を表示。
+- `POST /api/practice`: 架空の12ステップ練習を実行し、結果と
+  **一度だけ使える10分間の受取券**を返す。チケットはサーバー内だけに保存。
+- `POST /api/training/complete`: 終了後に利用者が明示的に
+  `{"ticket":"<発行済み48桁>","expected_growth_revision":0}`
+  と送信したときだけXPを保存。実績ごとに一度きり、
+  再実行しても同じ実績のXPは増えない。期限切れ・二重請求を拒否。
+- `POST /api/growth/equip`: `{"slot":"mine","gear_id":"focus_lens","expected_growth_revision":1}`
+  などの装備変更。未解放装備を拒否し、成長revisionが古ければ
+  衝突として拒否する。装備感度はNode版予測要求にだけ反映する。
+- 保存は同じディレクトリ内の一時ファイルを同期書込み後に置換する。
+  競合するNode内部の更新を直列化し、失敗したリクエストはXPを付けない。
+
+ゲーム内の仮想コインや株価リプレイは**保存せず**、
+実相場に対する予測的中率やBrier Scoreへ混ぜない。
+まだ既存 `web/game.html` のPython版APIを置き換えておらず、
+Nodeの専用画面だけでXP・装備を変更できる。
+旧 `8765` / `8884` Pythonサーバー、Node MCPの `8766`、
+V6のOfficial/Freeze/モデルには変更を加えない。
+ユーザー認証、ランキング、Web公開、キャラ共有は未対応。
+
+テスト: `node --test mcp/tests/node-growth.test.mjs` 7件、
+`(cd mcp && npm test)` 全60件、
+`python3 -B -m unittest discover -s tests -q` 全122件。
+ブラウザ実機は旧データと**独立した一時保存先**を使う
+`127.0.0.1:8891` で練習→30XP→集中レンズ装備→
+保存revision 2、390px幅の横はみ出し無しを確認。
