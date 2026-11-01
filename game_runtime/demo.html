@@ -1,0 +1,41 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creature Lab | JavaScript ゲーム実験版</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color-scheme:dark;background:#0e1423;color:#e9f0ff}
+body{max-width:800px;margin:30px auto;padding:0 18px}
+h1{font-size:clamp(24px,5vw,36px);margin-bottom:8px}
+p{line-height:1.7}
+small,.sub{color:#b5c5df}
+.panel{background:#19233a;border:1px solid #354763;border-radius:18px;padding:22px;margin:18px 0}
+button{border:0;border-radius:12px;padding:12px 18px;background:#7ed8b8;color:#0d2130;font-size:16px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+button:focus-visible{outline:3px solid #ffdb85;outline-offset:3px}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.stat{background:#10192b;border-radius:12px;padding:12px}
+.stat strong{font-size:22px;display:block}
+.days{display:flex;gap:5px;flex-wrap:wrap;margin-top:16px}
+.days button{padding:8px 11px;background:#263751;color:#fff;font-size:13px}
+.days button[aria-pressed="true"]{background:#7ed8b8;color:#10212a}
+code{color:#add9fb}
+</style></head><body>
+<main>
+<h1>🐾 Creature Lab</h1>
+<p class="sub">JavaScriptゲームエンジン実験版。Pythonはキャラの予測判断だけを担当します。</p>
+<div class="panel">
+<h2>1体でクイック挑戦</h2>
+<p>架空の12ステップをプレイします。コインや経験値は保存されません。実市場の予測成績でもありません。</p>
+<button id="play">▶ 練習スタート</button>
+<p id="status" role="status" aria-live="polite">ゲーム用Node.js APIに接続して練習できます。</p>
+</div>
+<section class="panel" id="result" hidden>
+<h2>架空の練習結果</h2>
+<div class="statgrid"><div class="stat">最終コイン<strong id="final"></strong></div>
+<div class="stat">損益<strong id="profit"></strong></div>
+<div class="stat">最大下落率<strong id="drawdown"></strong></div></div>
+<div id="days" class="days" aria-label="練習ステップ"></div>
+<p id="dayDetail" aria-live="polite"></p>
+<small>この結果は架空の固定相場から算出したものです。XP付与・保存・ランキング反映なし。</small>
+</section>
+<p><small>既存ゲームやV6の保存データには触れません。元のゲーム画面は別サーバーに残っています。</small></p>
+</main>
+<script type="module" src="/demo.mjs"></script></body></html>

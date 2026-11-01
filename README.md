@@ -377,3 +377,50 @@ Recheck with `node --test mcp/tests/game-runtime.test.mjs`,
 **Important:** This is a phased migration, not a claim that all game logic has
 moved from Python. The V6 forecasting repository and the existing Creature
 Lab servers remain independent and unchanged.
+
+## Sprint 25: Node.js 実ゲームAPIの独立プレビュー（既存ゲーム無変更）
+
+旧サーバーとは**別の** `127.0.0.1:8890` に、新しいゲームの最小画面と
+`POST /api/practice` を実装。ゲームの計算はJavaScript、
+Python `game_runtime/predict_bridge.py` は固定の架空価格に対して
+`engine.Model` から予測シグナルを作るだけ。**ユーザーがコイン残高、
+予測確率、信号やリターンを送信することはできず**、要求は
+`{"allocations":{"mine":100,"owl":0,"turtle":0}}` のみ。
+Node.js が現在のモデル状態、保存済み編成、装備を既存ローカルPython
+サーバーの読み取りAPIから取得し、Python予測を呼び出し、
+ゲームのコインと損益をJavaScriptで計算する。
+処理の前後で各revisionを読み直し、途中にモデル変更があれば競合で停止する。
+旧Pythonの練習結果と同じ数値・判断になることを検証済み。
+
+新しいプレビューは**架空12ステップ限定で読み取り専用**。
+XP、モデル保存、装備変更、ランキング更新、実発注、実市場データ取得は
+実装せず、明示的に無効化している。Node.jsがV6を直接importしたり
+V6のOfficial / Freeze / 履歴・評価結果を書き換えたりしない。
+元の `8765` サーバーは再起動せず、保有しているモデルrevisionを
+維持する。旧版 `8884` も変更しない。
+
+Linuxで別起動する場合:
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー
+node game_runtime/server.mjs
+# 同じLinuxのブラウザから http://127.0.0.1:8890/game
+```
+
+接続元はループバック、HostとOriginは同一ローカル画面のみを許可。
+`/health` は新ゲーム用Node.jsサーバーの稼働状況を返す。
+Python既存サーバーは `127.0.0.1:8765` で動作している必要がある。
+Nodeを公開サーバーにそのまま公開してはいけない。
+現段階でのlocalhost同一PC利用はログイン・認証済みの公開サービスではない。
+
+**今後の移行**: 既存の `web/game.html` はまだPython版APIを使用。
+このNodeプレビューを同じ結果・UXに育ててから旧ゲームを切り替える。
+育成の保存・ユーザー別DBは次の別スプリントで設計する。
+Nodeへの移行が完了するまでは「Pythonは予測専用」は未達。
+
+検証:
+`node --test mcp/tests/node-game-api.test.mjs`、
+`(cd mcp && npm test)`、
+`python3 -B -m unittest discover -s tests -q`。
+ブラウザで `8890/game` → 「練習スタート」を押し、
+12日の結果が表示され、XPと実績に反映されないことを確認。
