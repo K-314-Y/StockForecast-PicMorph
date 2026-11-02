@@ -32,6 +32,8 @@ function refreshButtons() {
   $('discard').hidden = ticket === null;
   $('discard').disabled = busy;
   $('refreshGrowth').disabled = busy;
+  $('loadSkins').disabled = busy;
+  $('skinSelect').disabled = busy;
   $('gear').disabled = busy || growthRevision === null;
   $('equip').disabled = busy || growthRevision === null ||
     !$('gear').value || $('gear').value === currentGearId;
@@ -77,11 +79,11 @@ function chooseDay(index) {
     fmt(choice.price) + ' C / 判断 ' + signal +
     ' / 仮想コイン残高 ' + fmt(result.equity_path[index + 1]) + ' C';
   if (signal === 'CASH') {
-    scene('cautious', '今日は現金で待機。動かない判断も大切だよ。');
+    scene('cautious', '標準モデルは今日は現金待機。動かない判断も大切だよ。');
   } else if (signal === 'LONG') {
-    scene('thinking', '今日は上昇を狙う判断。どうなったかな？');
+    scene('thinking', '標準モデルは上昇を狙う判断。結果を確かめよう。');
   } else {
-    scene('thinking', '今日の判断は「' + signal + '」。結果を確かめよう。');
+    scene('thinking', '標準モデルの判断は「' + signal + '」。結果を確かめよう。');
   }
   $('next').textContent = index === result.decisions.length - 1 ?
     '12日間を確認しました' : '次の日を見る';
@@ -235,6 +237,84 @@ function discard() {
   refreshButtons();
 }
 
+// Appearance is purely page-local and never changes the forecast model or XP.
+let skinEpoch = 0;
+function defaultSkin(message='デモ用キャラを表示しています。') {
+  skinEpoch++;
+  const img = $('portrait');
+  img.hidden = true;
+  img.onload = null; img.onerror = null;
+  img.src = '';
+  $('chibi').hidden = false;
+  $('skinCaption').textContent = '外見：デモ用2D相棒';
+  $('skinStatus').textContent = message;
+}
+async function loadSkins() {
+  if (busy) return;
+  const button = $('loadSkins');
+  button.disabled = true;
+  $('skinStatus').textContent = '保存キャラを読み込んでいます…';
+  try {
+    const catalog = await call('/api/appearance/drafts');
+    if (!Array.isArray(catalog.drafts)) throw Error('一覧の形式が不正です');
+    const select = $('skinSelect');
+    select.replaceChildren();
+    const fallback = document.createElement('option');
+    fallback.value = '';
+    fallback.textContent = 'デモ用キャラ';
+    select.append(fallback);
+    for (const draft of catalog.drafts) {
+      if (!/^bp_[a-f0-9]{32}$/.test(draft.id) || typeof draft.name !== 'string') continue;
+      const option = document.createElement('option');
+      option.value = draft.id;
+      option.disabled = !draft.has_image;
+      option.textContent = draft.name + (draft.has_image ? ' · 外見だけ' : ' · 画像なし');
+      select.append(option);
+    }
+    select.value = '';
+    defaultSkin(catalog.drafts.length ?
+      '保存キャラを読み込みました。選択すると外見だけ変わります。' :
+      '保存キャラはまだありません。デモ用キャラでそのまま遊べます。');
+  } catch (error) {
+    defaultSkin('一覧を読み込めません: ' + error.message + '。デモ用キャラで遊べます。');
+  } finally {
+    button.disabled = busy;
+  }
+}
+function chooseSkin() {
+  const select = $('skinSelect');
+  const id = select.value;
+  if (!id || !/^bp_[a-f0-9]{32}$/.test(id)) {
+    defaultSkin();
+    return;
+  }
+  const item = [...select.children].find(option => option.value === id);
+  if (!item || item.disabled) {
+    select.value = '';
+    defaultSkin('画像がありません。デモ用キャラに戻しました。');
+    return;
+  }
+  const epoch = ++skinEpoch;
+  const img = $('portrait');
+  img.hidden = true;
+  $('chibi').hidden = false;
+  $('skinStatus').textContent = '外見の画像を確認しています…';
+  img.onload = () => {
+    if (epoch !== skinEpoch || select.value !== id) return;
+    img.hidden = false;
+    $('chibi').hidden = true;
+    $('skinCaption').textContent = '外見：' + item.textContent.replace(/ · 外見だけ$/, '') + '（DRAFT）';
+    $('skinStatus').textContent = '外見のみ変更済み。予測は標準モデルmineのままです。';
+  };
+  img.onerror = () => {
+    if (epoch !== skinEpoch) return;
+    select.value = '';
+    defaultSkin('外見データが見つからないか壊れています。初期外見に戻しました。');
+  };
+  img.src = '/api/appearance/image/' + id;
+}
+$('loadSkins').addEventListener('click', loadSkins);
+$('skinSelect').addEventListener('change', chooseSkin);
 $('play').addEventListener('click', play);
 $('claim').addEventListener('click', claim);
 $('equip').addEventListener('click', equip);
