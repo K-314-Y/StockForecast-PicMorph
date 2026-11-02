@@ -11,7 +11,8 @@ let savedCompanion = null;
 let companionSaving = false;
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
-const resultName = () => result?.companion_name || '標準モデル';
+const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
+  '学習済み練習版' : result?.companion_name || '標準モデル';
 
 async function call(path, body) {
   const response = await fetch(path, body === undefined ? undefined : {
@@ -42,6 +43,8 @@ function refreshButtons() {
   $('refreshGrowth').disabled = busy;
   $('loadSkins').disabled = busy;
   $('skinSelect').disabled = busy;
+  $('loadBrains').disabled = busy || companionSaving || ticket !== null;
+  $('brainSelect').disabled = busy || companionSaving || ticket !== null;
   $('gear').disabled = busy || growthRevision === null;
   $('equip').disabled = busy || growthRevision === null ||
     !$('gear').value || $('gear').value === currentGearId;
@@ -82,6 +85,8 @@ function chooseDay(index) {
   }
   const choice = result.decisions[index];
   const signal = choice.signals.mine;
+  const brainLabel = result.brain?.kind === 'trained_practice_only' ?
+    '保存した練習版' : '標準モデル';
   $('dayCount').textContent = (index + 1) + ' / ' + result.decisions.length + ' 日目';
   $('dayDetail').textContent = (index + 1) + '日目: 架空価格 ' +
     fmt(choice.price) + ' C / 判断 ' + signal +
@@ -110,11 +115,25 @@ function showResult(value) {
     throw Error('練習結果の形式が不正です');
   }
   result = value;
+  const trained = value.brain?.kind === 'trained_practice_only';
   $('resultTitle').textContent = resultName() + 'の12日間の練習結果';
-  $('resultCompanion').textContent = value.companion_created ?
+  $('resultCompanion').textContent = trained ?
+    '保存した学習済み練習版を予測に使用しました。相棒フォームの判断ルールは適用していません。架空40点で学習・実相場精度は未検証です。' :
+    value.companion_created ?
     resultName() + ' / 保存revision ' + value.companion_revision + ' / ' +
     approachLabels[value.approach] + 'を重視 / 資金使用率 ' + value.risk_percent + '%。保存した独自設定を練習に反映しました。' :
     '未作成の標準モデルで練習しました。相棒を保存すると独自設定が反映されます。';
+  $('modelJudgmentHeading').textContent = trained ?
+    '日ごとに保存した練習版の判断を見よう' : '日ごとに相棒の判断を見よう';
+  $('brainResult').textContent = trained ?
+    '実行に使ったモデル：学習済み練習版 ' + value.brain.version_id +
+    '（固定架空40点で学習・実相場精度未検証）' :
+    value.companion_created ? '実行に使ったモデル：保存した相棒 ' + resultName() :
+    '実行に使ったモデル：標準モデル mine';
+  $('brainProof').hidden = !trained;
+  $('brainProofText').textContent = trained ?
+    '保存版のモデル設定: ' + value.brain.parameters_sha256 +
+    ' / 装備込みの実行モデル: ' + value.brain.effective_sha256 : '';
   $('final').textContent = fmt(value.final_coins) + ' C';
   $('profit').textContent = (value.profit_coins >= 0 ? '+' : '') + fmt(value.profit_coins) + ' C';
   $('drawdown').textContent = fmt(value.max_drawdown_pct) + '%';
@@ -144,9 +163,17 @@ async function play() {
   scene('thinking', '未来は見ないで、今日の判断を考えているよ…');
   $('status').textContent = 'Pythonで予測判断を作成し、Node.jsで架空コインを計算しています…';
   try {
-    const value = await call('/api/practice', {
-      allocations: {mine: 100, owl: 0, turtle: 0},
-    });
+    const selectedId = $('brainSelect').value;
+    const payload = {allocations: {mine: 100, owl: 0, turtle: 0}};
+    if (selectedId) {
+      if (!/^tv_[0-9a-f]{32}$/.test(selectedId)) throw Error('練習版IDが不正です');
+      payload.trained_version_id = selectedId;
+    }
+    const value = await call('/api/practice', payload);
+    if (selectedId && (value.brain?.version_id !== selectedId ||
+        value.brain?.kind !== 'trained_practice_only')) {
+      throw Error('選択した練習版の実行確認ができません');
+    }
     showResult(value);
     ticket = typeof value.training_ticket === 'string' ? value.training_ticket : null;
     $('status').textContent = '練習完了！ 12日間を振り返り、XPを受け取って装備を変えよう。';
@@ -326,6 +353,52 @@ function chooseSkin() {
   };
   img.src = '/api/appearance/image/' + id;
 }
+async function loadBrains() {
+  if (busy || companionSaving || ticket !== null) return;
+  const button = $('loadBrains');
+  button.disabled = true;
+  $('brainNotice').textContent = '保存した練習版を確認しています…';
+  try {
+    const result = await call('/api/trained/versions');
+    if (!Array.isArray(result.versions)) throw Error('練習版の一覧が不正です');
+    const select = $('brainSelect');
+    select.replaceChildren();
+    const standard = document.createElement('option');
+    standard.value = ''; standard.textContent = '標準モデル mine';
+    select.append(standard);
+    for (const version of result.versions) {
+      if (!/^tv_[0-9a-f]{32}$/.test(version?.id) ||
+          !/^bp_[0-9a-f]{32}$/.test(version?.source_draft_id)) continue;
+      const option = document.createElement('option');
+      option.value = version.id;
+      option.textContent = '練習版 ' + version.id.slice(0, 11) + ' · 元キャラ ' +
+        (typeof version.source_name === 'string' && version.source_name ?
+          version.source_name : version.source_draft_id.slice(0, 11));
+      select.append(option);
+    }
+    select.value = '';
+    $('brainNotice').textContent = result.versions.length ?
+      '保存した練習版を選択できます。実相場の精度は未検証です。' :
+      '学習済み練習版はまだありません。標準モデルで遊べます。';
+    showNextBrain();
+  } catch (error) {
+    $('brainNotice').textContent = '練習版を読み込めません: ' + error.message +
+      '。標準モデルは使えます。';
+  } finally { button.disabled = busy || ticket !== null; }
+}
+function showNextBrain() {
+  const select = $('brainSelect');
+  const selected = select.value;
+  if (!selected) {
+    if (savedCompanion) displayCompanion(savedCompanion);
+    else $('brainStatus').textContent = '予測：標準モデル mine（未作成）。外見の変更は予測に影響しません。';
+  } else {
+    $('brainStatus').textContent = '次回の予測：保存した学習済み練習版 ' +
+      selected + '。保存した相棒の判断ルールより優先。架空40点での学習のみ、実相場精度は未検証。外見と独立。';
+  }
+}
+$('loadBrains').addEventListener('click', loadBrains);
+$('brainSelect').addEventListener('change', showNextBrain);
 $('loadSkins').addEventListener('click', loadSkins);
 $('skinSelect').addEventListener('change', chooseSkin);
 $('play').addEventListener('click', play);
@@ -381,6 +454,7 @@ function displayCompanion(value) {
     '保存済み：' + c.name + ' / ' + approachLabels[c.approach] + 'を重視 / 資金使用率 ' + c.risk_percent +
     '% / revision ' + value.revision + '。次の練習に反映。色とDRAFT画像は外見だけ。' :
     '未作成：予測は標準モデルmine。フォームを保存すると自分のルールで練習します。';
+  if ($('brainSelect').value) showNextBrain();
 }
 async function loadCompanion() {
   displayCompanion(await call('/api/companion'));

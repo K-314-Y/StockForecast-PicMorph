@@ -15,11 +15,13 @@ import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from '.
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
+const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
+const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
 const GEAR = Object.freeze({
   none: null,
   focus_lens: {key: 'trend', bonus: 10},
@@ -59,7 +61,7 @@ export async function loadLocalSnapshot(store) {
     growth_revision: growth.revision};
 }
 
-function withGear(source) {
+function withGear(source, trainedModel = null) {
   const lineup = new Map(source.lineup.slots.map(x => [x.slot, x.model]));
   const gears = new Map(source.growth.slots.map(x => [x.slot, x.gear]));
   if (lineup.size !== 2 || gears.size !== 3 || !gears.has('mine') ||
@@ -68,7 +70,7 @@ function withGear(source) {
   }
   const models = {};
   for (const slot of SLOTS) {
-    const original = slot === 'mine' ? source.state.model : lineup.get(slot);
+    const original = slot === 'mine' ? (trainedModel || source.state.model) : lineup.get(slot);
     if (!original || typeof original !== 'object' || !original.plugin_strengths) {
       throw failure('キャラモデルが不足しています');
     }
@@ -111,6 +113,64 @@ export async function pythonPredict(models) {
       catch {rejectResult(failure('予測結果が不正です'));}
     });
     child.stdin.end(JSON.stringify(models));
+  });
+}
+
+export async function readTrainingVersions() {
+  const data = await readJson('http://127.0.0.1:8884/api/blueprints/trained');
+  if (!data || !Array.isArray(data.versions) || data.versions.length > 100) {
+    throw failure('保存済み練習版の一覧が不正です');
+  }
+  const seen = new Set(), versions = [];
+  let namesByDraft = new Map();
+  try {
+    const catalog = await readAppearanceCatalog();
+    namesByDraft = new Map(catalog.drafts.map(item => [item.id, item.name]));
+  } catch {
+    // A broken artwork catalog cannot block an otherwise valid trained version list.
+  }
+  for (const entry of data.versions) {
+    if (!TRAINED_ID.test(entry?.id) || seen.has(entry.id) ||
+        !/^bp_[0-9a-f]{32}$/.test(entry?.source_draft_id) ||
+        entry?.competition_eligible !== false || entry?.status !== 'practice_only' ||
+        !/^[a-f0-9]{64}$/.test(entry?.parameters_sha256)) {
+      throw failure('保存済み練習版の情報が不正です');
+    }
+    seen.add(entry.id);
+    versions.push({id:entry.id,source_draft_id:entry.source_draft_id,
+      parameters_sha256:entry.parameters_sha256,
+      source_name:namesByDraft.get(entry.source_draft_id) || null});
+  }
+  return {versions, notice:'架空40点だけで学習。実相場の予測精度は未検証。'};
+}
+
+export async function resolveTrainedVersion(versionId) {
+  if (typeof versionId !== 'string' || !TRAINED_ID.test(versionId)) {
+    throw failure('保存済み練習版IDが不正です',400);
+  }
+  const {spawn} = await import('node:child_process');
+  return new Promise((resolveResult,rejectResult) => {
+    const child = spawn('python3',['-B',TRAINED_BRIDGE,versionId],
+      {cwd:ROOT,stdio:['ignore','pipe','pipe']});
+    const timeout = setTimeout(()=>child.kill('SIGKILL'),3500);
+    let out='',failed=false;
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data',part=>{
+      out+=part;
+      if(out.length>8192) {failed=true;child.kill('SIGKILL');}
+    });
+    child.stderr.resume(); // No secrets or arbitrary command output returned.
+    child.on('error',error=>{clearTimeout(timeout);rejectResult(error);});
+    child.on('close',code=>{
+      clearTimeout(timeout);
+      if(failed || code!==0) return rejectResult(failure('保存済み練習版を検証できません',409));
+      try {
+        const found=JSON.parse(out);
+        if(found.version_id!==versionId || found.kind!=='trained_practice_only' ||
+           typeof found.model!=='object') throw Error('invalid model');
+        resolveResult(found);
+      } catch {rejectResult(failure('保存済み練習版の形式が不正です'));}
+    });
   });
 }
 
@@ -164,7 +224,9 @@ async function getBody(req) {
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, companionStore = createCompanionStore(),
                                   appearanceCatalog = readAppearanceCatalog,
-                                  appearanceImage = readAppearanceImage} = {}) {
+                                  appearanceImage = readAppearanceImage,
+                                  trainedVersions = readTrainingVersions,
+                                  trainedVersion = resolveTrainedVersion} = {}) {
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
   const tickets = new Map();
@@ -194,6 +256,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 200, {status: 'ok', mode: 'PRACTICE_SYNTHETIC_ONLY',
         game_runtime: 'node', forecaster: 'python-model-only',
         xp: 'node-tutorial-only', server_only: true, multiuser: false});
+    }
+    if (req.method === 'GET' && path === '/api/trained/versions') {
+      try {return json(res, 200, await trainedVersions());}
+      catch {return json(res, 503, {error:'保存した練習版を読み取れません'});}
     }
     if (req.method === 'GET' && path === '/api/growth') {
       try {return json(res, 200, await store.public());}
@@ -277,29 +343,63 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           payload.slot, payload.gear_id, payload.expected_growth_revision
         ));
       }
-      if (names !== 'allocations') {
-        throw failure('allocationsだけを指定してください', 400);
+      if (names !== 'allocations' && names !== 'allocations|trained_version_id') {
+        throw failure('allocationsと保存済み練習版IDだけ指定できます', 400);
       }
       const allocations = validateAllocations(payload.allocations);
+      const selectedId = Object.hasOwn(payload, 'trained_version_id') ? payload.trained_version_id : null;
+      if (names === 'allocations|trained_version_id' &&
+          (typeof selectedId !== 'string' || !TRAINED_ID.test(selectedId))) {
+        throw failure('保存済み練習版IDが不正です', 400);
+      }
+      // Saved training versions override the authored companion rules for this run.
+      // Otherwise retain the authored companion as the active model.
+      const brain = selectedId === null ? null : await trainedVersion(selectedId);
+      if (selectedId !== null &&
+          (brain?.version_id !== selectedId || brain?.kind !== 'trained_practice_only' ||
+           !/^bp_[0-9a-f]{32}$/.test(brain.source_draft_id) ||
+           !/^[0-9a-f]{64}$/.test(brain.parameters_sha256) || !brain.model)) {
+        throw failure('練習版モデルを確認できません');
+      }
       const companion = await companionStore.read();
       const snapshot = await loadSnapshot();
-      const plan = await predict(applyCompanion(withGear(snapshot), companion));
+      const modelPlan = withGear(snapshot, brain?.model || null);
+      const plan = await predict(selectedId === null ?
+        applyCompanion(modelPlan, companion) : modelPlan);
       // Re-read current model and equipment so a concurrent edit never produces
       // a result incorrectly labelled with the latest model revision.
       const after = await loadSnapshot();
       for (const key of REVISIONS) {
         if (snapshot[key] !== after[key]) throw failure('モデル変更と重なりました。再実行してください', 409);
       }
+      if (selectedId !== null) {
+        const latest = await trainedVersion(selectedId);
+        if (latest?.parameters_sha256 !== brain.parameters_sha256 ||
+            latest?.source_draft_id !== brain.source_draft_id ||
+            latest?.version_id !== selectedId) {
+          throw failure('練習版が途中で変わりました。再実行してください',409);
+        }
+      }
       const result = runSyntheticGame({...plan, allocations});
       if (companion.revision !== (await companionStore.read()).revision) {
         throw failure('相棒変更と重なりました。再実行してください', 409);
       }
       return json(res, 200, {...result,
-        companion_name: companion.companion.name,
+        // Companion metadata is retained, but never claims its rules were used when a
+        // saved training version overrides it.  The brain field is authoritative.
+        companion_name: selectedId === null ? companion.companion.name : null,
         companion_revision: companion.revision,
-        companion_created: companion.created,
-        approach: companion.created ? companion.companion.approach : null,
-        risk_percent: companion.created ? companion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
+        companion_created: selectedId === null && companion.created,
+        companion_applied: selectedId === null && companion.created,
+        approach: selectedId === null && companion.created ? companion.companion.approach : null,
+        risk_percent: selectedId === null && companion.created ?
+          companion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
+        brain: selectedId !== null ? {
+          kind:'trained_practice_only', version_id:selectedId,
+          source_draft_id:brain.source_draft_id,
+          parameters_sha256:brain.parameters_sha256,
+          effective_sha256:result.characters.mine.effective_sha256,
+        } : {kind:companion.created ? 'authored_companion' : 'standard_mine'},
         source_revision: snapshot.source_revision,
         lineup_revision: snapshot.lineup_revision,
         growth_revision: snapshot.growth_revision,
