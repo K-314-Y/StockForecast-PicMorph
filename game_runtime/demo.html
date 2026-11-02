@@ -60,6 +60,11 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #companionName{max-width:100%;overflow-wrap:anywhere;text-align:center}
 .scene-note{z-index:1;font-size:11px;color:#cfddf5;text-align:center}
 #portrait{z-index:1;max-width:94%;width:220px;height:194px;object-fit:contain;margin-bottom:6px;filter:drop-shadow(0 8px 10px #0004)}
+#artworkStage{position:relative;width:150px;height:192px;margin-bottom:7px;z-index:1}
+#artworkStage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
+#artworkBase{z-index:0}#artworkOutfit{z-index:1}#artworkFace{z-index:2}#artworkHair{z-index:3}
+.artwork-slot{border-top:1px solid var(--line);padding:10px 0}.artwork-slot label{display:block;font-weight:650}
+.artwork-slot input{display:block;width:100%;max-width:100%;margin:8px 0}.artwork-slot .actions{gap:6px}
 #skinSelect{max-width:100%;width:100%;margin:8px 0}.appearance-controls{margin:14px 0}.appearance-controls summary{cursor:pointer;font-weight:700}.brain-note{padding:9px 12px;background:#121d33;border-left:3px solid #ffdc94;border-radius:0 9px 9px 0;font-size:13px}
 button,select{font:inherit}button{border:0;border-radius:12px;padding:12px 16px;font-weight:750;background:#3b5274;color:white;cursor:pointer;min-height:44px}button.primary{background:var(--mint);color:#12303b}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}
 .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:16px 0}.notice{border-left:3px solid #a1f1d1;padding:8px 13px;background:#182f43;font-size:13px;border-radius:0 8px 8px 0}
@@ -91,6 +96,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <div class="bangs"></div><div class="bow"></div><div class="acc-glasses"></div><div class="acc-star"></div>
   </div>
   <img id="portrait" alt="選択した保存下書きの外見" hidden>
+  <div id="artworkStage" role="img" aria-label="自分で制作したイラスト" hidden>
+   <img id="artworkBase" alt="完成イラスト" hidden>
+   <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
+  </div>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
  </div>
  <div>
@@ -129,6 +138,30 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    </details>
    <p id="companionStatus" role="status" aria-live="polite">相棒を読み込んでいます…</p>
    <p class="creator-note">予測はゲーム練習専用です。V6の学習済みOfficialは書き換えません。実際の注文や自動売買は行いません。</p>
+  </details>
+  <details id="artworkControls" class="appearance-controls" open>
+   <summary>私のイラストを重ねる</summary>
+   <p>自分で制作した完成イラストを1枚選ぶだけで、上のゲーム画面に表示できます。選んだ直後は未保存です。各画像の <strong>SAVE</strong> を押すと、このPCに保存して再読込後も使えます。</p>
+   <p class="creator-note">自動切り抜き・自動分割は行いません。髪・顔・服は任意です。人や別アプリであらかじめ切り抜いた、完成イラストと同じサイズの透明キャンバスのPNG/WebPを使うと位置がそろいます。重なる順は完成イラスト→服→顔→髪です。元の画像データは加工しません。</p>
+   <small>1枚450KB、4枚で合計2MBまで。完成イラスト：PNG/JPEG/WebP。任意レイヤー：透明PNG/WebP。</small>
+   <div class="artwork-slot">
+    <label for="artworkFileBase">完成イラスト（base）</label><input id="artworkFileBase" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="artworkInfoBase">
+    <small id="artworkInfoBase">未取得</small><div class="actions"><button id="artworkSaveBase" type="button" class="primary" disabled>SAVE 完成イラスト</button><button id="artworkClearBase" type="button" disabled>CLEAR 保存した完成イラストを削除</button></div>
+   </div>
+   <div class="artwork-slot">
+    <label for="artworkFileHair">髪（hair・任意）</label><input id="artworkFileHair" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoHair">
+    <small id="artworkInfoHair">未取得</small><div class="actions"><button id="artworkSaveHair" type="button" disabled>SAVE 髪</button><button id="artworkClearHair" type="button" disabled>CLEAR 保存した髪を削除</button></div>
+   </div>
+   <div class="artwork-slot">
+    <label for="artworkFileFace">顔（face・任意）</label><input id="artworkFileFace" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoFace">
+    <small id="artworkInfoFace">未取得</small><div class="actions"><button id="artworkSaveFace" type="button" disabled>SAVE 顔</button><button id="artworkClearFace" type="button" disabled>CLEAR 保存した顔を削除</button></div>
+   </div>
+   <div class="artwork-slot">
+    <label for="artworkFileOutfit">服（outfit・任意）</label><input id="artworkFileOutfit" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoOutfit">
+    <small id="artworkInfoOutfit">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
+   </div>
+   <div class="actions"><button id="showArtwork" type="button">自分のイラストに切り替える</button><button id="showChibi" type="button">カスタムchibiに切り替える</button><button id="reloadArtwork" type="button">未保存を破棄して再取得</button></div>
+   <p id="artworkStatus" role="status" aria-live="polite">イラストの保存状況を読み込んでいます…</p>
   </details>
   <details id="skinControls" class="appearance-controls">
    <summary>🎨 保存したキャラの外見を選ぶ</summary>

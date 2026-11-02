@@ -14,6 +14,13 @@ const lookIds = ['lookHair','lookExpression','lookAccessory'];
 let companionSaving = false;
 let handoffPending = false;
 let handoffInvalid = false;
+const artworkSlots = ['base','hair','face','outfit'];
+const artworkNames = {base:'完成イラスト',hair:'髪',face:'顔',outfit:'服'};
+const artworkId = slot => slot[0].toUpperCase() + slot.slice(1);
+let savedArtwork = null;
+let artworkSaving = false;
+let artworkActive = false;
+const artworkPreviews = new Map();
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
 const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
@@ -38,6 +45,7 @@ function scene(mood, message) {
 }
 
 function refreshButtons() {
+  refreshArtworkButtons();
   $('saveLook').disabled = busy || lookSaving || savedLook === null;
   $('reloadLook').disabled = busy || lookSaving;
   for (const id of lookIds) $(id).disabled = busy || lookSaving;
@@ -289,6 +297,8 @@ function discard() {
 let skinEpoch = 0;
 function defaultSkin(message='デモ用キャラを表示しています。') {
   skinEpoch++;
+  artworkActive = false;
+  if ($('artworkStage')) $('artworkStage').hidden = true;
   const img = $('portrait');
   img.hidden = true;
   img.onload = null; img.onerror = null;
@@ -351,6 +361,8 @@ function chooseSkin() {
     return;
   }
   const epoch = ++skinEpoch;
+  artworkActive = false;
+  if ($('artworkStage')) $('artworkStage').hidden = true;
   const img = $('portrait');
   img.hidden = true;
   $('chibi').hidden = false;
@@ -600,6 +612,159 @@ loadCompanion().catch(error => {
   $('companionStatus').textContent = '相棒を読み込めません: ' + error.message + '。再取得してください。';
   refreshButtons();
 });
+
+// Local File previews are separate from the revision-guarded saved source bytes.
+function refreshArtworkButtons() {
+  for (const slot of artworkSlots) {
+    const suffix = artworkId(slot);
+    const save = $('artworkSave' + suffix);
+    if (!save) continue;
+    save.disabled = artworkSaving || savedArtwork === null || !artworkPreviews.has(slot);
+    $('artworkClear' + suffix).disabled = artworkSaving || !savedArtwork?.slots[slot]?.exists;
+    $('artworkFile' + suffix).disabled = artworkSaving;
+    const preview = artworkPreviews.get(slot);
+    const stored = savedArtwork?.slots[slot];
+    $('artworkInfo' + suffix).textContent = preview ?
+      '未保存：' + preview.file.name + ' / ' + preview.file.size + ' bytes' :
+      stored?.exists ? '保存済み：' + stored.mime + ' / ' + stored.size + ' bytes' :
+      savedArtwork ? '画像なし' : '保存状況は未取得（選択してプレビューできます）';
+  }
+  if ($('reloadArtwork')) $('reloadArtwork').disabled = artworkSaving;
+}
+function discardArtworkPreview(slot) {
+  const preview = artworkPreviews.get(slot);
+  if (preview) URL.revokeObjectURL(preview.url);
+  artworkPreviews.delete(slot);
+  $('artworkFile' + artworkId(slot)).value = '';
+}
+function artworkSource(slot) {
+  return artworkPreviews.get(slot)?.url || (savedArtwork?.slots[slot]?.exists ?
+    '/api/artwork/image/' + slot + '?revision=' + savedArtwork.revision : '');
+}
+function showArtwork() {
+  const base = artworkSource('base');
+  if (!base) {
+    defaultSkin('完成イラストを選ぶと、自分の画像で遊べます。');
+    $('artworkStatus').textContent = 'まず完成イラストを1枚選んでください。髪・顔・服は任意です。';
+    return;
+  }
+  const epoch = ++skinEpoch;
+  artworkActive = true;
+  $('skinSelect').value = '';
+  const portrait = $('portrait');
+  portrait.onload = null; portrait.onerror = null; portrait.hidden = true;
+  $('artworkStage').hidden = true;
+  $('chibi').hidden = false;
+  for (const slot of artworkSlots) {
+    const img = $('artwork' + artworkId(slot));
+    const src = artworkSource(slot);
+    img.onload = null; img.onerror = null;
+    img.hidden = !src;
+    if (src) {
+      img.onerror = () => {
+        if (epoch !== skinEpoch || !artworkActive) return;
+        img.hidden = true;
+        if (slot === 'base') defaultSkin('完成イラストを表示できません。カスタムchibiを表示しています。');
+        $('artworkStatus').textContent = artworkNames[slot] + 'を表示できません。画像の形式や保存状況を確認してください。';
+      };
+      if (slot === 'base') img.onload = () => {
+        if (epoch !== skinEpoch || !artworkActive) return;
+        $('artworkStage').hidden = false;
+        $('chibi').hidden = true;
+      };
+      img.src = src;
+    } else {
+      img.src = '';
+    }
+  }
+  $('skinCaption').textContent = '外見：私のイラスト' + (artworkPreviews.size ? '（未保存のプレビューあり）' : '（保存済み）');
+  $('skinStatus').textContent = '自分のイラストを表示中です。予測ルールやXPは変わりません。';
+}
+function previewArtwork(slot) {
+  const input = $('artworkFile' + artworkId(slot));
+  const file = input.files?.[0];
+  if (!file || artworkSaving) return;
+  const allowed = slot === 'base' ? ['image/png','image/jpeg','image/webp'] : ['image/png','image/webp'];
+  if (!allowed.includes(file.type) || file.size <= 0 || file.size > 450 * 1024) {
+    input.value = '';
+    $('artworkStatus').textContent = '画像は1枚450KBまで。完成イラストはPNG/JPEG/WebP、レイヤーはPNG/WebPを選んでください。';
+    return;
+  }
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    $('artworkStatus').textContent = 'このブラウザーではローカル画像をプレビューできません。';
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  discardArtworkPreview(slot);
+  artworkPreviews.set(slot, {file,url});
+  refreshArtworkButtons();
+  $('artworkStatus').textContent = artworkNames[slot] + 'の未保存プレビューです。この画像のSAVEを押すと保存します。';
+  showArtwork();
+}
+async function artworkBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
+}
+async function saveArtworkSlot(slot, clear = false) {
+  if (artworkSaving || !savedArtwork || (!clear && !artworkPreviews.has(slot))) return;
+  artworkSaving = true; refreshArtworkButtons();
+  try {
+    const file = artworkPreviews.get(slot)?.file;
+    const image = clear ? null : {mime:file.type,base64:await artworkBase64(file)};
+    savedArtwork = await call('/api/artwork', {expected_revision:savedArtwork.revision,slot,image});
+    discardArtworkPreview(slot);
+    $('artworkStatus').textContent = artworkNames[slot] + (clear ? 'の保存画像を削除しました。' : 'を保存しました。再読込後も使えます。');
+    if (artworkActive) showArtwork();
+  } catch (error) {
+    $('artworkStatus').textContent = '保存できません: ' + error.message + '。「未保存を破棄して再取得」で現在の保存状況を確認できます。';
+  } finally {artworkSaving = false; refreshArtworkButtons();}
+}
+async function loadArtwork(restore = false) {
+  const epoch = skinEpoch;
+  const record = await call('/api/artwork');
+  savedArtwork = record;
+  refreshArtworkButtons();
+  $('artworkStatus').textContent = record.created ? '保存済みイラストを復元しました。revision ' + record.revision :
+    'まだ画像は保存されていません。完成イラスト1枚から使えます。';
+  if (restore || (epoch === skinEpoch && !artworkPreviews.size && record.slots.base.exists)) showArtwork();
+}
+for (const slot of artworkSlots) {
+  const suffix = artworkId(slot);
+  $('artworkFile' + suffix)?.addEventListener('change', () => previewArtwork(slot));
+  $('artworkSave' + suffix)?.addEventListener('click', () => saveArtworkSlot(slot));
+  $('artworkClear' + suffix)?.addEventListener('click', () => saveArtworkSlot(slot, true));
+}
+$('showArtwork')?.addEventListener('click', showArtwork);
+$('showChibi')?.addEventListener('click', () => {
+  $('skinSelect').value = '';
+  defaultSkin('自分で組み立てたカスタムchibiを表示しています。');
+});
+$('reloadArtwork')?.addEventListener('click', async () => {
+  if (artworkSaving) return;
+  artworkSaving = true; refreshArtworkButtons();
+  try {
+    for (const slot of artworkSlots) discardArtworkPreview(slot);
+    await loadArtwork(true);
+  } catch (error) {
+    savedArtwork = null;
+    defaultSkin('保存したイラストを確認できません。');
+    $('artworkStatus').textContent = '読み込めません: ' + error.message;
+  } finally {artworkSaving = false; refreshArtworkButtons();}
+});
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', () => {
+    for (const slot of artworkSlots) discardArtworkPreview(slot);
+  });
+}
+loadArtwork().catch(error => {
+  if ($('artworkStatus')) $('artworkStatus').textContent = 'イラストを読み込めません: ' + error.message + '。再取得してください。';
+  refreshArtworkButtons();
+});
+
 async function applyCreateHandoff() {
   if (typeof window === 'undefined' || !window.location) return;
   const query = new URLSearchParams(window.location.search);
