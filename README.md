@@ -533,3 +533,13 @@ stdio入口: `node mcp/companion-stdio.mjs`。
 一般公開の認証は未実装なので、非認証の公開トンネルは作らず
 **ChatGPTへの実際の接続にはOpenAI Secure MCP Tunnelと利用権限が必要**。
 詳しくは `mcp/README.md` を参照。
+
+## Sprint 32：ChatGPTで試してから保存する
+
+MCP `preview_my_companion` は未保存の名前・髪色・服色・得意分析・
+資金使用率を一時適用し、Nodeゲームに架空12ステップの試遊を依頼する。
+`POST /api/practice/preview` は通常練習と予測計算を共用するが、
+XP用の受取券は生成せず、ゲームの保存ファイルも編集しない。
+`list_my_trained_brains` で過去の学習版を取得して試遊することも可能。
+気に入った候補の保存は既存 `save_my_companion` で本人の意思により行う。
+MCP登録・安全な外部接続は未完了。詳細は `mcp/README.md`。

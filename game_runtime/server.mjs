@@ -5,7 +5,7 @@
  */
 import {createServer} from 'node:http';
 import {randomBytes} from 'node:crypto';
-import {createCompanionStore, applyCompanion} from './companion.mjs';
+import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -306,7 +306,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -343,15 +343,24 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           payload.slot, payload.gear_id, payload.expected_growth_revision
         ));
       }
-      if (names !== 'allocations' && names !== 'allocations|trained_version_id') {
+      const preview = path === '/api/practice/preview';
+      if (!preview && names !== 'allocations' && names !== 'allocations|trained_version_id') {
         throw failure('allocationsと保存済み練習版IDだけ指定できます', 400);
+      }
+      if (preview && ![
+        'allocations', 'allocations|candidate', 'allocations|trained_version_id'
+      ].includes(names)) {
+        throw failure('試遊には配分と候補設定または練習版IDだけ指定できます', 400);
       }
       const allocations = validateAllocations(payload.allocations);
       const selectedId = Object.hasOwn(payload, 'trained_version_id') ? payload.trained_version_id : null;
-      if (names === 'allocations|trained_version_id' &&
+      if (Object.hasOwn(payload, 'trained_version_id') &&
           (typeof selectedId !== 'string' || !TRAINED_ID.test(selectedId))) {
         throw failure('保存済み練習版IDが不正です', 400);
       }
+      // Candidate belongs to THIS request only. It cannot be written by preview.
+      const candidate = preview && Object.hasOwn(payload, 'candidate') ?
+        validateCompanion(payload.candidate) : null;
       // Saved training versions override the authored companion rules for this run.
       // Otherwise retain the authored companion as the active model.
       const brain = selectedId === null ? null : await trainedVersion(selectedId);
@@ -364,8 +373,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const companion = await companionStore.read();
       const snapshot = await loadSnapshot();
       const modelPlan = withGear(snapshot, brain?.model || null);
+      const effectiveCompanion = candidate === null ?
+        companion : {revision:companion.revision, created:true, companion:candidate};
       const plan = await predict(selectedId === null ?
-        applyCompanion(modelPlan, companion) : modelPlan);
+        applyCompanion(modelPlan, effectiveCompanion) : modelPlan);
       // Re-read current model and equipment so a concurrent edit never produces
       // a result incorrectly labelled with the latest model revision.
       const after = await loadSnapshot();
@@ -387,23 +398,26 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 200, {...result,
         // Companion metadata is retained, but never claims its rules were used when a
         // saved training version overrides it.  The brain field is authoritative.
-        companion_name: selectedId === null ? companion.companion.name : null,
+        preview_only:preview,
+        candidate_applied:candidate !== null,
+        companion_name: selectedId === null ? effectiveCompanion.companion.name : null,
         companion_revision: companion.revision,
         companion_created: selectedId === null && companion.created,
-        companion_applied: selectedId === null && companion.created,
-        approach: selectedId === null && companion.created ? companion.companion.approach : null,
-        risk_percent: selectedId === null && companion.created ?
-          companion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
+        companion_applied: selectedId === null && companion.created && candidate === null,
+        approach: selectedId === null && effectiveCompanion.created ? effectiveCompanion.companion.approach : null,
+        risk_percent: selectedId === null && effectiveCompanion.created ?
+          effectiveCompanion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
         brain: selectedId !== null ? {
           kind:'trained_practice_only', version_id:selectedId,
           source_draft_id:brain.source_draft_id,
           parameters_sha256:brain.parameters_sha256,
           effective_sha256:result.characters.mine.effective_sha256,
-        } : {kind:companion.created ? 'authored_companion' : 'standard_mine'},
+        } : {kind:candidate !== null ? 'unsaved_candidate_preview' :
+          companion.created ? 'authored_companion' : 'standard_mine'},
         source_revision: snapshot.source_revision,
         lineup_revision: snapshot.lineup_revision,
         growth_revision: snapshot.growth_revision,
-        training_ticket: Object.values(allocations).some(x => x > 0) ? createTicket(allocations) : null,
+        training_ticket: !preview && Object.values(allocations).some(x => x > 0) ? createTicket(allocations) : null,
       });
     } catch (error) {
       const status = error?.status || (/不正|配分|100%|整数/.test(error?.message) ? 400 : 503);

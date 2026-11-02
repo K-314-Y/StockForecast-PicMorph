@@ -20,6 +20,16 @@ const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 65536;
 const approaches = ['trend','momentum','reversion','volatility'];
 const modelLabels = {trend:'流れ',momentum:'勢い',reversion:'反転',volatility:'値動きの大きさ'};
+const draftSchema = z.object({
+  name:z.string().min(1).max(16),
+  hair_color:z.string().regex(/^#[a-fA-F0-9]{6}$/),
+  clothing_color:z.string().regex(/^#[a-fA-F0-9]{6}$/),
+  approach:z.enum(approaches),
+  risk_percent:z.number().int().min(5).max(100).multipleOf(5),
+}).strict();
+const pct = z.number().int().min(0).max(100);
+const trainedId = /^tv_[0-9a-f]{32}$/;
+
 
 async function jsonFromGame(apiBase, path, body) {
   const response = await fetch(apiBase + path, {
@@ -47,9 +57,9 @@ function errorResult(error) {
 
 export function makeCompanionChatGptMcp({apiBase=API}={}) {
   const server = new McpServer(
-    {name:'creature-lab-companion',version:'1.0.0'},
+    {name:'creature-lab-companion',version:'1.1.0'},
     {instructions:
-      'ユーザー自身がゲーム用相棒を設計する。まず get_my_companion で現在のrevisionと設定を取得し、希望を聞いてから save_my_companion に具体的な名前・髪色・服色・予測方法・仮想資金比率を渡す。勝手に上書きしない。保存結果はWeb版Creature Labと共通。実市場への注文・投資助言・V6変更・キャラ画像の自動作画はできない。架空相場のみ。'}
+      'ユーザー自身がゲーム用相棒を設計する。まず get_my_companion で現在の設定を取得し、preview_my_companion で未保存の案を架空相場で試す。保存意図を確認してから save_my_companion で保存する。学習済みキャラは list_my_trained_brains で取得し、試遊時にIDを選べる。プレビューにXP・保存・実取引なし。V6変更・画像の自動作画もできない。'}
   );
   server.registerTool('get_my_companion',{
     title:'Creature Lab: 自分の相棒を確認',
@@ -92,6 +102,48 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       };
     }catch(e){return errorResult(e);}
   });
+  server.registerTool('list_my_trained_brains',{
+    title:'Creature Lab: 作って学習させたキャラを確認',
+    description:'旧制作画面から保存した練習専用の学習済みキャラ一覧を取得。次の試遊では指定したバージョンIDで判断させられる。読み取りのみ。実市場の検証結果ではない。',
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const data=await jsonFromGame(apiBase,'/api/trained/versions');
+      return {content:[{type:'text',text:
+        `保存された練習専用モデルは${data.versions.length}件です。実市場の優位性を示す結果ではありません。`}],
+        structuredContent:{...data,practice_only:true,real_market_validation:false}};
+    }catch(e){return errorResult(e);}
+  });
+  server.registerTool('preview_my_companion',{
+    title:'Creature Lab: 保存前のキャラ案を12日間お試し',
+    description:'自分で決めた未保存の候補キャラ、現在保存済みの相棒、または制作画面で学習した練習版を、架空相場12日間で試す。XPやコイン、候補設定の保存、注文は行わない。結果を見てから保存を判断できる。',
+    inputSchema:z.object({
+      mine_pct:pct.describe('自分のキャラへの仮想コイン配分。合計100%以内'),
+      owl_pct:pct.describe('ルナへの仮想コイン配分。合計100%以内'),
+      turtle_pct:pct.describe('ミドリへの仮想コイン配分。合計100%以内'),
+      candidate:draftSchema.optional().describe('未保存で試すキャラ案。省略すると現在の保存済み相棒を使う'),
+      trained_version_id:z.string().regex(trainedId).optional().describe('学習済み練習版ID。候補キャラと同時には指定不可'),
+    }).strict().refine(data=>!data.candidate || !data.trained_version_id,
+      '候補キャラと学習済み練習版は同時に指定できません')
+      .refine(data=>data.mine_pct+data.owl_pct+data.turtle_pct<=100 &&
+        data.mine_pct+data.owl_pct+data.turtle_pct>0,
+        '仮想コインを1～100%の範囲で配分してください'),
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async({mine_pct,owl_pct,turtle_pct,candidate,trained_version_id})=>{
+    try {
+      const request={allocations:{mine:mine_pct,owl:owl_pct,turtle:turtle_pct}};
+      if(candidate!==undefined) request.candidate=candidate;
+      if(trained_version_id!==undefined) request.trained_version_id=trained_version_id;
+      const result=await jsonFromGame(apiBase,'/api/practice/preview',request);
+      if(result.preview_only!==true || result.training_ticket!==null) {
+        throw Error('プレビュー専用の応答ではありません');
+      }
+      return {content:[{type:'text',text:
+        `保存せずに試しました: 最終${result.final_coins}仮想コイン、損益${result.profit_coins}、最大下落率${result.max_drawdown_pct}%。この結果は固定架空相場だけの値で、投資実績や予測精度の検証ではありません。XPは付かず、設定も保存していません。`}],
+        structuredContent:{result}};
+    }catch(e){return errorResult(e);}
+  });
   server.registerTool('get_my_creature_growth',{
     title:'Creature Lab: 育成レベル・装備を確認',
     description:'Nodeゲームの育成XP、レベル、現在の装備を読み取る。XPや装備の変更はしない。',
@@ -126,7 +178,7 @@ export function createCompanionChatGptHttpServer(options={}) {
     const url=new URL(req.url ?? '/', 'http://localhost');
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
-        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:3}));
+        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:5}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {
