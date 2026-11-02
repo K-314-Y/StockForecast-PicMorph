@@ -7,6 +7,7 @@ import {createServer} from 'node:http';
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
+import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -23,6 +24,7 @@ const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
+const MAX_ARTWORK_REQUEST = 750 * 1024;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
 const GEAR = Object.freeze({
@@ -202,31 +204,34 @@ function safeLocal(req, port) {
     !['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'].some(k => req.headers[k]);
 }
 
-async function getBody(req) {
+async function getBody(req, limit = MAX_REQUEST) {
   if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') {
     throw failure('JSON形式のみ対応します', 415);
   }
   if (req.headers['transfer-encoding'] ||
       !/^\d+$/.test(req.headers['content-length'] ?? '') ||
-      Number(req.headers['content-length']) > MAX_REQUEST ||
       Number(req.headers['content-length']) <= 0) {
     throw failure('入力サイズが不正です', 400);
   }
-  let data = '';
+  if (Number(req.headers['content-length']) > limit) throw failure('入力が大きすぎます', 413);
+  const chunks = [];
+  let size = 0;
   for await (const part of req) {
-    data += part.toString('utf8');
-    if (Buffer.byteLength(data) > MAX_REQUEST) throw failure('入力が大きすぎます', 413);
+    size += part.length;
+    if (size > limit) throw failure('入力が大きすぎます', 413);
+    chunks.push(part);
   }
-  if (Buffer.byteLength(data) !== Number(req.headers['content-length'])) {
+  if (size !== Number(req.headers['content-length'])) {
     throw failure('入力が途中で切れています', 400);
   }
-  try {return JSON.parse(data);}
+  try {return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
   catch {throw failure('JSONが不正です', 400);}
 }
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, companionStore = createCompanionStore(),
                                   lookStore = createLookStore(),
+                                  artworkStore = createArtworkStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -277,6 +282,24 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       try {return json(res,200,await lookStore.read());}
       catch {return json(res,503,{error:'外見の保存情報を読み取れません'});}
     }
+    if (req.method === 'GET' && path === '/api/artwork') {
+      try {return json(res,200,await artworkStore.read());}
+      catch {return json(res,503,{error:'イラストの保存情報を読み取れません。保存ファイルを確認してください'});}
+    }
+    if (req.method === 'GET' && path.startsWith('/api/artwork/image/')) {
+      const slot=path.slice('/api/artwork/image/'.length);
+      if (!ARTWORK_SLOTS.includes(slot)) return json(res,404,{error:'画像が見つかりません'});
+      try {
+        const {mime,bytes}=await artworkStore.image(slot);
+        res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.length,
+          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+          'Content-Security-Policy':"default-src 'none'; sandbox",
+          'X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'});
+        return res.end(bytes);
+      } catch(error) {
+        return json(res,error?.status===404?404:503,{error:'イラストを読み込めません'});
+      }
+    }
     // Read-only appearance bridge: the browser never requests the Python origin directly.
     if (req.method === 'GET' && path === '/api/appearance/drafts') {
       try { return json(res, 200, await appearanceCatalog()); }
@@ -310,22 +333,23 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
-        'Content-Security-Policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"});
+        'Content-Security-Policy': "default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"});
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/training/complete','/api/growth/equip','/api/companion','/api/looks'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
     inFlight++;
     try {
-      const payload = await getBody(req);
+      const payload = await getBody(req, path === '/api/artwork' ? MAX_ARTWORK_REQUEST : MAX_REQUEST);
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         throw failure('JSONオブジェクトを指定してください', 400);
       }
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
+      if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/compare') {
         if (names !== 'contenders') throw failure('比較する3モデルだけ指定してください',400);

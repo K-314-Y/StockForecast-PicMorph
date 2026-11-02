@@ -195,6 +195,19 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       return {content:[{type:'text',text:'保存済みの育成XP・装備を読み取りました。'}],structuredContent:{growth}};
     }catch(e){return errorResult(e);}
   });
+  server.registerTool('get_my_artwork',{
+    title:'Creature Lab: 自分のイラストの保存状況を確認',
+    description:'完成イラスト・髪・顔・服の保存状況（revision、存在、MIME、サイズ）だけを読み取る。画像バイトはChatGPTに送らない。ChatGPTからの画像バイナリ転送は未実装。画像はローカルゲーム画面のファイル入力で選び、SAVEする。自動切り抜きは行わない。',
+    inputSchema:z.object({}).strict(),
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const state=await jsonFromGame(apiBase,'/api/artwork');
+      return {content:[{type:'text',text:
+        '自分のイラストの保存状況を読み取りました。ChatGPTからの画像バイナリ転送は未実装です。ローカルゲームの「私のイラストを重ねる」でファイルを選び、SAVEしてください。自動切り抜きは行いません。任意レイヤーは人や別アプリで切り抜いた同じサイズの透明キャンバスを使います。'}],
+        structuredContent:state};
+    }catch(e){return errorResult(e);}
+  });
   return server;
 }
 
@@ -218,7 +231,7 @@ export function createCompanionChatGptHttpServer(options={}) {
     const url=new URL(req.url ?? '/', 'http://localhost');
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
-        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:7}));
+        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:8}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {
