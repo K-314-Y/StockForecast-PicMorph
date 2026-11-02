@@ -6,6 +6,7 @@ const TRAINED=/^tv_[0-9a-f]{32}$/;
 let busy=false;
 let match=null;
 let activeDay=0;
+const actorViews=new Map();
 const coins=value=>Number(value).toLocaleString('ja-JP',{maximumFractionDigits:2});
 const signed=value=>(value>0?'+':'')+coins(value);
 function status(message){$('arenaStatus').textContent=message;}
@@ -60,6 +61,51 @@ async function loadModels(){
     status('学習版を取得できません: '+error.message+'。既存の選択で比較できます。');
   }finally{busy=false;controls();}
 }
+function buildAvatar(fighter){
+  const persona=fighter.persona;
+  const root=document.createElement('div');
+  root.className='arena-avatar';
+  root.setAttribute('role','img');
+  root.setAttribute('aria-label',fighter.name+'。'+persona.label+'を擬人化した2Dキャラクター');
+  root.dataset.hair=persona.look.hair_style;
+  root.dataset.expression=persona.look.expression;
+  root.dataset.accessory=persona.look.accessory;
+  root.dataset.mood='ready';
+  root.setAttribute('style','--av-hair:'+persona.look.hair_color+
+    ';--av-clothing:'+persona.look.clothing_color);
+  const hair=document.createElement('div');hair.className='av-hair';
+  const outfit=document.createElement('div');outfit.className='av-outfit';
+  const face=document.createElement('div');face.className='av-face';
+  for(const side of ['left','right']){
+    const eye=document.createElement('span');eye.className='av-eye '+side;
+    face.append(eye);
+  }
+  const mouth=document.createElement('span');mouth.className='av-mouth';face.append(mouth);
+  const bangs=document.createElement('div');bangs.className='av-bangs';
+  const ribbon=document.createElement('div');ribbon.className='av-ribbon';
+  root.append(hair,outfit,face,bangs,ribbon);
+  if(fighter.kind==='trained_practice_only' &&
+     /^bp_[a-f0-9]{32}$/.test(fighter.source_draft_id||'')){
+    const portrait=document.createElement('img');
+    portrait.className='av-image';
+    portrait.alt='学習版の元キャラに保存したイラスト';
+    portrait.loading='lazy';
+    portrait.onerror=()=>{portrait.remove();};
+    portrait.src='/api/appearance/image/'+fighter.source_draft_id;
+    root.append(portrait);
+  }
+  return root;
+}
+function dayReaction(fighter,prevPrice,nextPrice,signal){
+  if(nextPrice===prevPrice)return {mood:'thinking',line:'価格は横ばい。次の変化を観察しているよ。'};
+  if(signal==='LONG' && nextPrice>prevPrice)return {
+    mood:'cheer',line:'上昇を予測！ 価格も上昇したよ。'};
+  if(signal==='LONG')return {
+    mood:'concern',line:'上昇を予測したけれど、価格は下落。'};
+  if(nextPrice<prevPrice)return {
+    mood:'cheer',line:'現金待機で下落を回避したよ。'};
+  return {mood:'thinking',line:'現金待機だったけれど、価格は上がったね。'};
+}
 function showDay(index){
   if(!match||index<0||index>=12)return;
   activeDay=index;
@@ -77,6 +123,12 @@ function showDay(index){
     p.textContent=model.name+'：'+(model.signals[index]==='LONG'?'上昇を予測して保有':'現金待機')+
       ' ／ '+coins(model.equity_path[index+1])+'コイン';
     box.append(p);
+    const actor=actorViews.get(slot);
+    if(actor){
+      const reaction=dayReaction(model,match.prices[index],match.prices[index+1],model.signals[index]);
+      actor.avatar.dataset.mood=reaction.mood;
+      actor.voice.textContent=(index+1)+'日目：'+reaction.line;
+    }
   }
 }
 function drawChart(data){
@@ -125,6 +177,9 @@ function showResult(data) {
      !SLOTS.every(slot=>{
        const fighter=data.fighters?.[slot];
        return fighter&&typeof fighter.name==='string'&&
+         fighter.persona&&typeof fighter.persona.label==='string'&&
+         typeof fighter.persona.nature==='string'&&
+         fighter.persona.look&&typeof fighter.persona.look.hair_color==='string'&&
          Number.isFinite(fighter.return_pct)&&Number.isFinite(fighter.profit_coins)&&
          Number.isFinite(fighter.max_drawdown_pct)&&
          Array.isArray(fighter.equity_path)&&fighter.equity_path.length===13&&
@@ -140,13 +195,22 @@ function showResult(data) {
   drawChart(data);
   const container=$('arenaStandings');
   container.replaceChildren();
+  actorViews.clear();
   for(const [position,slot] of data.ranking.entries()){
     const f=data.fighters[slot];
     const article=document.createElement('article');
     article.className='arena-fighter';
+    const avatar=buildAvatar(f);
+    const info=document.createElement('div');
+    info.className='arena-fighter-info';
     const title=document.createElement('strong');
     title.textContent=(position+1)+'位 · '+f.name;
-    article.append(title);
+    info.append(title);
+    const trait=document.createElement('p');
+    trait.className='arena-trait';
+    trait.textContent='🧠 '+f.persona.label+'：'+f.persona.nature+
+      '（実際の予測配分から自動設定）';
+    info.append(trait);
     const metrics=document.createElement('div');
     metrics.className='arena-metrics';
     const metricsData=[
@@ -160,13 +224,19 @@ function showResult(data) {
       span.textContent=label+'：'+value;
       metrics.append(span);
     }
-    article.append(metrics);
+    info.append(metrics);
     const note=document.createElement('small');
     note.textContent=f.kind==='trained_practice_only'?
       '保存学習版 '+f.version_id+' · 固定架空40点で学習':
       f.kind==='authored_companion'?'自分で設定した予測ルール':
       f.kind==='standard_mine'?'標準モデル':'既存の比較用モデル';
-    article.append(note);
+    info.append(note);
+    const voice=document.createElement('p');
+    voice.className='arena-voice';
+    voice.textContent='今日の予測を見てみよう！';
+    info.append(voice);
+    actorViews.set(slot,{avatar,voice});
+    article.append(avatar,info);
     container.append(article);
   }
   const dayButtons=$('arenaDays');
