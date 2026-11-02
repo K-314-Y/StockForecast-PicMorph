@@ -185,3 +185,36 @@ node --test mcp/tests/chatgpt-companion.test.mjs
 
 テストでは一時保存ファイルと別ポートのNodeゲームを使い、
 実ゲームの相棒を勝手に作成・更新しない。
+
+### Sprint 32：ChatGPTで保存前のキャラ案を試してから確定する
+
+ローカルMCPへ次の2つの**読み取り専用操作**を追加。
+
+- `preview_my_companion`: 3キャラへのコイン配分を指定し、必要なら候補の
+  `name/hair_color/clothing_color/approach/risk_percent` を渡すと、
+  **まだ保存していないキャラの予測方針**で架空12日間の試遊結果を返す。
+  `candidate` を省略すると保存済み相棒で試せる。保存確定は
+  別ツール `save_my_companion` を呼んだときだけ。
+- `list_my_trained_brains`: Python制作画面で保存した学習済み練習版の
+  名前とバージョンIDをNode側の読取APIから返す。試遊時に
+  `trained_version_id` を指定可能。候補キャラ設定と学習版IDを同時に
+  送信することは不可。学習版と自作相棒の適用を混同しない。
+
+プレビュー実行先 `POST /api/practice/preview` は
+通常ゲームの `POST /api/practice` と計算エンジン・モデル設定を共用。
+**結果は保存しない、実績XPを付けない、受取券を発行しない、実取引をしない**。
+`preview_only: true` と `training_ticket: null` で機械的に区別する。
+候補データと保存済みデータも `candidate_applied` で区別。
+選択した学習版が使われた場合は `brain.kind=trained_practice_only` とIDを付記。
+
+ユーザーにとっては
+「自分でキャラ案を考える → ChatGPTで架空12日間の結果を試す →
+  修正する → 気に入った案だけ保存する → Webゲームで育成する」
+という制作過程になる。例：
+「名前は星読み、髪色#ee88aa、服色#55ccaa、勢い型、資金55%の子を
+**保存せず**仮想相場で試して、欠点を教えて」。
+
+MCPは5ツールに増えたが、ChatGPTへのカスタム登録や
+非公開トンネルの設定はまだ別途必要。
+**認証のない公開URLは作らない**。試遊の成績は固定の架空価格なので、
+実相場での優劣や投資成績の証拠に使わない。
