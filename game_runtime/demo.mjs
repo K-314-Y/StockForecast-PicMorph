@@ -9,6 +9,8 @@ let result = null;
 let dayIndex = 0;
 let savedCompanion = null;
 let companionSaving = false;
+let handoffPending = false;
+let handoffInvalid = false;
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
 const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
@@ -33,7 +35,7 @@ function scene(mood, message) {
 }
 
 function refreshButtons() {
-  $('play').disabled = busy || companionSaving || ticket !== null;
+  $('play').disabled = busy || companionSaving || ticket !== null || handoffPending || handoffInvalid;
   $('saveCompanion').disabled = busy || companionSaving || savedCompanion === null;
   $('reloadCompanion').disabled = busy || companionSaving;
   for (const id of creatorIds) $(id).disabled = busy || companionSaving;
@@ -154,7 +156,7 @@ function showResult(value) {
 }
 
 async function play() {
-  if (busy || companionSaving || ticket !== null) return;
+  if (busy || companionSaving || ticket !== null || handoffPending || handoffInvalid) return;
   busy = true; skipArmed = false;
   $('reward').textContent = '';
   $('result').hidden = true;
@@ -289,7 +291,7 @@ function defaultSkin(message='デモ用キャラを表示しています。') {
   $('skinCaption').textContent = '外見：カスタムchibi（編集中は一時プレビュー）';
   $('skinStatus').textContent = message;
 }
-async function loadSkins() {
+async function loadSkins(preferredId = '') {
   if (busy) return;
   const button = $('loadSkins');
   button.disabled = true;
@@ -311,10 +313,18 @@ async function loadSkins() {
       option.textContent = draft.name + (draft.has_image ? ' · 外見だけ' : ' · 画像なし');
       select.append(option);
     }
-    select.value = '';
-    defaultSkin(catalog.drafts.length ?
-      '保存キャラを読み込みました。選択すると外見だけ変わります。' :
-      '保存キャラはまだありません。デモ用キャラでそのまま遊べます。');
+    const matched = preferredId && [...select.children].some(option =>
+      option.value === preferredId && !option.disabled);
+    select.value = matched ? preferredId : '';
+    if (matched) {
+      chooseSkin();
+    } else {
+      defaultSkin(preferredId ?
+        'この下書きの画像は未登録・削除済みです。外見だけ初期表示に戻しました。予測版の選択には影響しません。' :
+        catalog.drafts.length ?
+        '保存キャラを読み込みました。選択すると外見だけ変わります。' :
+        '保存キャラはまだありません。初期キャラでそのまま遊べます。');
+    }
   } catch (error) {
     defaultSkin('一覧を読み込めません: ' + error.message + '。デモ用キャラで遊べます。');
   } finally {
@@ -353,7 +363,7 @@ function chooseSkin() {
   };
   img.src = '/api/appearance/image/' + id;
 }
-async function loadBrains() {
+async function loadBrains(preferredId = '', expectedDraftId = '') {
   if (busy || companionSaving || ticket !== null) return;
   const button = $('loadBrains');
   button.disabled = true;
@@ -376,15 +386,33 @@ async function loadBrains() {
           version.source_name : version.source_draft_id.slice(0, 11));
       select.append(option);
     }
-    select.value = '';
-    $('brainNotice').textContent = result.versions.length ?
-      '保存した練習版を選択できます。実相場の精度は未検証です。' :
-      '学習済み練習版はまだありません。標準モデルで遊べます。';
+    const matched = preferredId && [...select.children].some(option =>
+      option.value === preferredId) && result.versions.some(version =>
+      version.id === preferredId && (!expectedDraftId ||
+      version.source_draft_id === expectedDraftId));
+    select.value = matched ? preferredId : '';
+    if (preferredId) {
+      handoffInvalid = !matched;
+      $('resetBrain').hidden = matched;
+      refreshButtons();
+    }
+    $('brainNotice').textContent = preferredId ?
+      (matched ?
+        '制作画面から練習版を引き継ぎました。「練習スタート」を押すとこのモデルで開始します。' :
+        '指定された練習版が存在しないか元の下書きが一致しません。別のモデルを使う前に選択を確認してください。') :
+      result.versions.length ?
+        '保存した練習版を選択できます。実相場の精度は未検証です。' :
+        '学習済み練習版はまだありません。標準モデルで遊べます。';
     showNextBrain();
   } catch (error) {
+    if (preferredId) {
+      handoffInvalid = true;
+      $('resetBrain').hidden = false;
+      refreshButtons();
+    }
     $('brainNotice').textContent = '練習版を読み込めません: ' + error.message +
-      '。標準モデルは使えます。';
-  } finally { button.disabled = busy || ticket !== null; }
+      (preferredId ? '。誤ったモデルで始めないよう練習を停止しました。' : '。標準モデルは使えます。');
+  } finally { button.disabled = busy || companionSaving || ticket !== null; }
 }
 function showNextBrain() {
   const select = $('brainSelect');
@@ -397,9 +425,23 @@ function showNextBrain() {
       selected + '。保存した相棒の判断ルールより優先。架空40点での学習のみ、実相場精度は未検証。外見と独立。';
   }
 }
-$('loadBrains').addEventListener('click', loadBrains);
-$('brainSelect').addEventListener('change', showNextBrain);
-$('loadSkins').addEventListener('click', loadSkins);
+$('loadBrains').addEventListener('click', () => loadBrains());
+$('brainSelect').addEventListener('change', () => {
+  handoffInvalid = false;
+  $('resetBrain').hidden = true;
+  showNextBrain();
+  refreshButtons();
+});
+$('resetBrain').addEventListener('click', () => {
+  if (handoffPending || busy) return;
+  handoffInvalid = false;
+  $('resetBrain').hidden = true;
+  $('brainSelect').value = '';
+  $('brainNotice').textContent = '学習版の指定を解除しました。保存した相棒、または標準モデルで練習できます。';
+  showNextBrain();
+  refreshButtons();
+});
+$('loadSkins').addEventListener('click', () => loadSkins());
 $('skinSelect').addEventListener('change', chooseSkin);
 $('play').addEventListener('click', play);
 $('claim').addEventListener('click', claim);
@@ -491,3 +533,38 @@ loadCompanion().catch(error => {
   $('companionStatus').textContent = '相棒を読み込めません: ' + error.message + '。再取得してください。';
   refreshButtons();
 });
+async function applyCreateHandoff() {
+  if (typeof window === 'undefined' || !window.location) return;
+  const query = new URLSearchParams(window.location.search);
+  const versionId = query.get('trained_version_id');
+  const draftId = query.get('draft_id');
+  if (!versionId && !draftId) return;
+  $('brainControls').open = true;
+  $('skinControls').open = true;
+  if (versionId) {
+    if (!/^tv_[a-f0-9]{32}$/.test(versionId) ||
+        (draftId && !/^bp_[a-f0-9]{32}$/.test(draftId))) {
+      handoffInvalid = true;
+      $('resetBrain').hidden = false;
+      $('brainNotice').textContent = '制作画面から渡されたモデルのIDが不正です。練習の開始を停止しました。';
+      refreshButtons();
+    } else {
+      handoffPending = true;
+      refreshButtons();
+      try {await loadBrains(versionId, draftId || '');}
+      finally {handoffPending = false; refreshButtons();}
+    }
+  }
+  if (draftId && /^bp_[a-f0-9]{32}$/.test(draftId)) {
+    await loadSkins(draftId);
+  }
+}
+if (typeof window !== 'undefined') {
+  applyCreateHandoff().catch(error => {
+    handoffPending = false;
+    handoffInvalid = true;
+    $('resetBrain').hidden = false;
+    $('brainNotice').textContent = '学習版の引継ぎを確認できません: ' + error.message;
+    refreshButtons();
+  });
+}

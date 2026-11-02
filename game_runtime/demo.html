@@ -90,22 +90,23 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <p id="companionStatus" role="status" aria-live="polite">相棒を読み込んでいます…</p>
    <p class="creator-note">予測はゲーム練習専用です。V6の学習済みOfficialは書き換えません。実際の注文や自動売買は行いません。</p>
   </details>
-  <details class="appearance-controls">
+  <details id="skinControls" class="appearance-controls">
    <summary>🎨 保存したキャラの外見を選ぶ</summary>
    <p>ゲーム画面に外見だけ表示。画像のDRAFT設定は予測に使いません。判断ルールは上の相棒フォームで保存します。選択はページを閉じると解除されます。</p>
    <button id="loadSkins" type="button">保存キャラの一覧を読み込む</button>
    <label for="skinSelect">表示するキャラ</label>
    <select id="skinSelect" aria-label="外見を選ぶ"><option value="">カスタムchibi（自分の外見）</option></select>
    <p id="skinStatus" role="status" aria-live="polite">保存済みキャラを確認する場合は一覧を読み込んでください。</p>
-   <a href="http://127.0.0.1:8884/create">別画面でキャラを制作する（Python版）</a>
+   <a href="http://127.0.0.1:8884/create">① キャラ制作・② 架空学習・③ 練習版保存（制作画面へ）</a>
   </details>
-  <details class="appearance-controls brain-controls">
+  <details id="brainControls" class="appearance-controls brain-controls">
    <summary>🧠 練習に使う予測モデルを選ぶ</summary>
-   <p>学習済み練習版は固定の架空40点で作られたモデルです。選択中は上の「私の相棒」の判断ルールより優先して適用します。外見は変わりません。実際の株価に対する精度は未検証で、対戦には使えません。</p>
+   <p>キャラ制作画面で練習版を保存し「このモデルでゲームへ進む」を押すと、ここで自動的に選択されます。学習済み練習版は固定の架空40点で作られたモデルです。選択中は上の「私の相棒」の判断ルールより優先して適用します。外見は変わりません。実際の株価に対する精度は未検証で、対戦には使えません。</p>
    <button id="loadBrains" type="button">保存した練習版を確認する</button>
    <label for="brainSelect">練習版を使わない場合は保存した相棒の判断ルールを使用</label>
    <select id="brainSelect" aria-label="練習で使う予測モデル"><option value="">標準モデル mine</option></select>
    <p id="brainNotice" role="status" aria-live="polite">まだ標準モデルを使用します。</p>
+   <button id="resetBrain" type="button" hidden>学習版を使わずに進む（標準・自作相棒へ戻す）</button>
   </details>
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
