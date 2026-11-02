@@ -472,3 +472,32 @@ V6のOfficial/Freeze/モデルには変更を加えない。
 ブラウザ実機は旧データと**独立した一時保存先**を使う
 `127.0.0.1:8891` で練習→30XP→集中レンズ装備→
 保存revision 2、390px幅の横はみ出し無しを確認。
+
+## Sprint 28: TypeScriptの段階導入（既存ゲームを壊さない）
+
+既存のSprint 27（Nodeの12日間・1体で遊ぶ画面）はすでにmainへ
+統合済み。その状態を変更せず、まずコイン計算の**入力と出力の型**を
+検査できるようにした。
+
+- `game_runtime/contracts.ts`: 3キャラの配分、LONG/CASHの予測判断、
+  元モデルの識別情報、架空12ステップの計算結果をTypeScriptで定義。
+  `typecheck.test.ts` は誤った「SELL」や「LIVE_TRADING」、
+  3枠未満の配分が**型チェックで拒否される**ことを保証する。
+- `game_runtime/practice.mjs`: 実行中のJavaScriptエンジンをそのまま使い、
+  JSDocで型の情報を付与。TypeScriptでエラーを検出できるようにした。
+  既存の価格計算・手数料・丸め方・リターンを変更しない。
+- `game_runtime/tsconfig.json`: 厳格な型チェックのみ。生成ファイルなし。
+  `game_runtime/package.json` とlockfileには開発用TypeScript 5.9.3
+  のみを追加。React / Vite / PixiJSなどは**まだ追加しない**。
+
+初回のみ `npm ci --prefix game_runtime`。
+型チェックは `npm --prefix game_runtime run typecheck`、
+型チェック＋既存ゲーム計算互換性のテストは
+`npm --prefix game_runtime test`。
+ゲーム全体はこれまで通り `node game_runtime/server.mjs`
+で起動できる。画面の `demo.mjs` とPythonの予測ブリッジは変更していない。
+
+**限界**: TypeScriptの型チェックは開発中の間違いを検出するものであり、
+ネットワーク越しの入力・不正データを無条件で信用する機能ではない。
+従来の実行時の配分・モデル・シグナル検証は残す。
+型がそろった次の段階で、画面側・ゲーム処理側を徐々にTypeScript化する。

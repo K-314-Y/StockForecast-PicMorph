@@ -1,9 +1,10 @@
 /**
  * Pure JavaScript gameplay math, no Python dependencies or network calls.
  * Python may supply the forecast decisions; JS owns trading, accounting and
- * the synthetic game result. Not connected to the live /api/practice route yet.
+ * the synthetic game result. Used by the Node /api/practice preview endpoint.
  * All input is a synthetic replay plan, never broker orders or live returns.
  */
+/** @type {readonly import('./contracts.js').CharacterSlot[]} */
 const SLOTS = Object.freeze(['mine', 'owl', 'turtle']);
 const MODE = 'PRACTICE_SYNTHETIC_ONLY';
 const WARNINGS = Object.freeze([
@@ -12,6 +13,13 @@ const WARNINGS = Object.freeze([
   '過去に固定した練習シナリオで、隠れた未来データを使った実力評価ではありません。',
 ]);
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {number} min
+ * @param {number} max
+ * @returns {number}
+ */
 function numeric(value, label, min, max) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
     throw new Error(label + ' が不正です');
@@ -19,14 +27,20 @@ function numeric(value, label, min, max) {
   return value;
 }
 
+/**
+ * @param {unknown} value
+ * @returns {import('./contracts.js').Allocations}
+ */
 export function validateAllocations(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).sort().join('|') !== [...SLOTS].sort().join('|')) {
     throw new Error('3体分の配分が必要です');
   }
-  const result = {};
+  const source = /** @type {Record<string, unknown>} */ (value);
+  /** @type {import('./contracts.js').Allocations} */
+  const result = {mine: 0, owl: 0, turtle: 0};
   for (const key of SLOTS) {
-    const pct = numeric(value[key], '配分', 0, 100);
+    const pct = numeric(source[key], '配分', 0, 100);
     if (!Number.isInteger(pct)) throw new Error('配分は整数％です');
     result[key] = pct;
   }
@@ -36,6 +50,10 @@ export function validateAllocations(value) {
   return result;
 }
 
+/**
+ * @param {number} value
+ * @param {number} places
+ */
 function rounded(value, places) {
   // Python's round uses ties-to-even. Mirror it, including rare exact half cases.
   const scale = 10 ** places;
@@ -49,6 +67,10 @@ function rounded(value, places) {
   return nearest / scale;
 }
 
+/**
+ * @param {import('./contracts.js').PracticePlan} plan
+ * @returns {import('./contracts.js').PracticeResult}
+ */
 export function runSyntheticGame(plan) {
   if (!plan || plan.mode !== MODE) throw new Error('架空データの練習プランのみ対応しています');
   const allocations = validateAllocations(plan.allocations);
@@ -67,7 +89,8 @@ export function runSyntheticGame(plan) {
   if (typeof plan.model_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(plan.model_sha256)) {
     throw new Error('元モデルの識別情報がありません');
   }
-  const wallets = {};
+  /** @type {Record<import('./contracts.js').CharacterSlot, import('./contracts.js').GameWallet>} */
+  const wallets = /** @type {any} */ ({});
   for (const key of SLOTS) {
     const meta = models[key];
     if (!meta || typeof meta !== 'object') throw new Error('キャラのモデルが不足しています');
@@ -124,13 +147,14 @@ export function runSyntheticGame(plan) {
     equity.push(idle + SLOTS.reduce((s, key) => s + wallets[key].cash + wallets[key].units * next, 0));
     decisions.push({step: index + 1, price: next, signals: {...signals}});
   }
-  const final = equity[equity.length - 1];
-  let peak = equity[0], drawdown = 0;
+  const final = equity[equity.length - 1] ?? initialCoins;
+  let peak = equity[0] ?? initialCoins, drawdown = 0;
   for (const value of equity.slice(1)) {
     peak = Math.max(peak, value);
     drawdown = Math.max(drawdown, 1 - value / peak);
   }
-  const characters = {};
+  /** @type {Record<import('./contracts.js').CharacterSlot, import('./contracts.js').CharacterResult>} */
+  const characters = /** @type {any} */ ({});
   for (const key of SLOTS) {
     const wallet = wallets[key], model = models[key];
     characters[key] = {
