@@ -5,6 +5,7 @@
  */
 import {createServer} from 'node:http';
 import {randomBytes} from 'node:crypto';
+import {createCompanionStore, applyCompanion} from './companion.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -161,7 +162,7 @@ async function getBody(req) {
 }
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
-                                  predict = pythonPredict,
+                                  predict = pythonPredict, companionStore = createCompanionStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage} = {}) {
   loadSnapshot ??= () => loadLocalSnapshot(store);
@@ -197,6 +198,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     if (req.method === 'GET' && path === '/api/growth') {
       try {return json(res, 200, await store.public());}
       catch {return json(res, 503, {error:'育成情報を読み取れません'});}
+    }
+    if (req.method === 'GET' && path === '/api/companion') {
+      try {return json(res, 200, await companionStore.read());}
+      catch {return json(res, 503, {error:'相棒の保存情報を読み取れません'});}
     }
     // Read-only appearance bridge: the browser never requests the Python origin directly.
     if (req.method === 'GET' && path === '/api/appearance/drafts') {
@@ -235,7 +240,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/training/complete','/api/growth/equip'].includes(path)) {
+        !['/api/practice','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -245,6 +250,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         throw failure('JSONオブジェクトを指定してください', 400);
       }
+      if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/training/complete') {
         if (names !== 'expected_growth_revision|ticket' ||
@@ -275,8 +281,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         throw failure('allocationsだけを指定してください', 400);
       }
       const allocations = validateAllocations(payload.allocations);
+      const companion = await companionStore.read();
       const snapshot = await loadSnapshot();
-      const plan = await predict(withGear(snapshot));
+      const plan = await predict(applyCompanion(withGear(snapshot), companion));
       // Re-read current model and equipment so a concurrent edit never produces
       // a result incorrectly labelled with the latest model revision.
       const after = await loadSnapshot();
@@ -284,7 +291,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         if (snapshot[key] !== after[key]) throw failure('モデル変更と重なりました。再実行してください', 409);
       }
       const result = runSyntheticGame({...plan, allocations});
+      if (companion.revision !== (await companionStore.read()).revision) {
+        throw failure('相棒変更と重なりました。再実行してください', 409);
+      }
       return json(res, 200, {...result,
+        companion_name: companion.companion.name,
+        companion_revision: companion.revision,
+        companion_created: companion.created,
+        approach: companion.created ? companion.companion.approach : null,
+        risk_percent: companion.created ? companion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
         source_revision: snapshot.source_revision,
         lineup_revision: snapshot.lineup_revision,
         growth_revision: snapshot.growth_revision,
