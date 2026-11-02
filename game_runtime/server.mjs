@@ -343,6 +343,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           versions.set(id, found);
         }
         const companion = await companionStore.read();
+        const ownLook = choices.mine === 'self' ? await lookStore.read() : null;
         const snapshot = await loadSnapshot();
         let models = withGear(snapshot, null, false);
         if (choices.mine === 'self') models = applyCompanion(models, companion);
@@ -359,8 +360,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             };
           } else if (slot === 'mine') {
             metadata[slot] = companion.created ?
-              {kind:'authored_companion',name:companion.companion.name} :
-              {kind:'standard_mine',name:'標準モデル'};
+              {kind:'authored_companion',name:companion.companion.name,
+                appearance:{look:ownLook?.created ? ownLook.look : null,
+                  companion:companion.created ? companion.companion : null}} :
+              {kind:'standard_mine',name:'標準モデル',
+                appearance:{look:ownLook?.created ? ownLook.look : null,
+                  companion:companion.created ? companion.companion : null}};
           } else {
             metadata[slot] = {kind:'preset_rival',
               name:slot === 'owl' ? 'フクロウ（既存）' : 'カメ（既存）'};
@@ -373,8 +378,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             throw failure('比較中に既存モデルが変更されました。再実行してください',409);
           }
         }
-        if (companion.revision !== (await companionStore.read()).revision) {
-          throw failure('比較中に相棒が変更されました。再実行してください',409);
+        if (companion.revision !== (await companionStore.read()).revision ||
+            (ownLook && ownLook.revision !== (await lookStore.read()).revision)) {
+          throw failure('比較中に相棒の設定が変更されました。再実行してください',409);
         }
         for (const id of selected) {
           const latest = await trainedVersion(id);

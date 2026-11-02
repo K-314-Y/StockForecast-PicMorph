@@ -2,6 +2,60 @@
 import {runSyntheticGame} from './practice.mjs';
 export const SLOTS = Object.freeze(['mine','owl','turtle']);
 const TRAINED = /^tv_[0-9a-f]{32}$/;
+const TRAITS = Object.freeze({
+  trend:{name:'流れ読み',nature:'長い流れを見守る分析家',hair:'#9c86e8',clothing:'#6b9adb',hair_style:'long',accessory:'star'},
+  momentum:{name:'勢い派',nature:'新しい動きに素早く反応',hair:'#f4a76a',clothing:'#dd729b',hair_style:'twintails',accessory:'ribbon'},
+  reversion:{name:'逆張り派',nature:'行き過ぎを冷静に見つめる',hair:'#abb0eb',clothing:'#6dbaa9',hair_style:'bob',accessory:'glasses'},
+  volatility:{name:'変動警戒派',nature:'大きな揺れを慎重に観察',hair:'#83d5c8',clothing:'#728ed7',hair_style:'long',accessory:'glasses'},
+});
+const KEYS = Object.keys(TRAITS);
+export function personaFromModel(model, appearance = null) {
+  const weights = model?.plugin_weights;
+  if (!weights || Object.keys(weights).sort().join('|') !== [...KEYS].sort().join('|') ||
+    !KEYS.every(key=>Number.isInteger(weights[key]) && weights[key]>=0 && weights[key]<=100) ||
+    KEYS.reduce((s,key)=>s+weights[key],0)!==100) {
+    throw Error('擬人化するモデルの予測配分が不正です');
+  }
+  const sorted = [...KEYS].sort((a,b)=>weights[b]-weights[a] || KEYS.indexOf(a)-KEYS.indexOf(b));
+  const top=sorted[0];
+  const mixed = weights[top]<50 || weights[top]-weights[sorted[1]]<15;
+  const base=TRAITS[top];
+  const given=appearance?.look;
+  const validLook=given && ['bob','long','twintails'].includes(given.hair_style) &&
+    ['cheerful','calm','determined'].includes(given.expression) &&
+    ['ribbon','glasses','star','none'].includes(given.accessory);
+  const appearanceVariants=[
+    {hair_style:base.hair_style,accessory:base.accessory,
+      hair_color:base.hair,clothing_color:base.clothing},
+    {hair_style:'bob',accessory:'glasses',
+      hair_color:'#94a5dd',clothing_color:'#7ba7b9'},
+    {hair_style:'twintails',accessory:'ribbon',
+      hair_color:'#e4a2cb',clothing_color:'#7d93d0'},
+    {hair_style:'long',accessory:'star',
+      hair_color:'#8ccac5',clothing_color:'#a17fc5'},
+  ];
+  // This changes only the 2D portrait. The SHA identifies the actual forecast
+  // model, never the rank, daily return or a cosmetic random seed.
+  const variant=/^[0-9a-f]{64}$/.test(model.effective_sha256||'') ?
+    parseInt(model.effective_sha256.slice(0,2),16)%appearanceVariants.length : 0;
+  const costume=appearanceVariants[variant];
+  const color=appearance?.companion;
+  const colorValid=color && /^#[0-9a-f]{6}$/i.test(color.hair_color) &&
+    /^#[0-9a-f]{6}$/i.test(color.clothing_color);
+  return {
+    type:mixed?'mixed':top, label:mixed?'複合タイプ':base.name,
+    nature:mixed?'複数の分析を組み合わせて考える':base.nature,
+    weights:{...weights}, risk_fraction:model.risk_fraction,
+    look:{
+      hair_style:validLook?given.hair_style:costume.hair_style,
+      expression:validLook?given.expression:'cheerful',
+      accessory:validLook?given.accessory:costume.accessory,
+      hair_color:colorValid?color.hair_color:costume.hair_color,
+      clothing_color:colorValid?color.clothing_color:costume.clothing_color,
+    },
+    look_source: validLook || colorValid ? 'player_saved' : 'model_default',
+  };
+}
 
 export function validateContenders(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -55,6 +109,7 @@ export function makeFairComparison(plan, contenders, metadata) {
       fees:model.fees, trades:model.trades, long_steps:model.long_steps,
       equity_path:result.equity_path,
       signals:result.decisions.map(day=>day.signals[slot]),
+      persona:personaFromModel(plan.models[slot],metadata[slot].appearance),
     };
   }
   const ranking = [...SLOTS].sort((left,right)=>
