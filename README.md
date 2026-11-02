@@ -514,3 +514,22 @@ V6のOfficial/Freeze/モデルには変更を加えない。
 - `/api/practice` は引き続き配分だけを受け取り、ブラウザから予測・利益を受け取りません。結果の `companion_name` / `companion_revision` / `companion_created` / `approach` / `risk_percent` と実効モデル識別情報で保存設定の適用を確認できます。未作成時のapproachはnullです。計算中に相棒revisionが変わると409で結果と受取券を返しません。
 
 **V6の学習済みOfficialに一切影響しません。** 相棒設定による予測と損益は架空相場のゲーム練習専用で、実相場の本番実績には混ぜません。モデルの発注・自動売買も行いません。外部ユーザー認証や複数ユーザー・複数Nodeプロセスの同時書込みには未対応です。今後の課題は、複数相棒の管理、判断理由の説明、ユーザー単位の認証と保存分離です。
+
+## Sprint 30: ChatGPTプラグイン向けのNode版「自作相棒」接続口
+
+旧Pythonゲーム用MCP (`8766`) と分離して、
+`mcp/companion-chatgpt.mjs` に3ツールの私用MCPサーバーを新設。
+ChatGPTなどのMCPクライアントが
+`get_my_companion` で現在の相棒設定・revisionを読み、
+`save_my_companion` で本人が決めた5項目を保存すると、
+**NodeのWebゲーム(`8890`)と同じ保存データへ反映する**。
+逆方向の変更も読み取りに反映される。
+`get_my_creature_growth` は育成XPを読み取るだけ。
+
+ローカル入口: `http://127.0.0.1:8896/mcp`。
+stdio入口: `node mcp/companion-stdio.mjs`。
+既存MCP・旧Python・V6は変更しない。XP増加・モデル改変・
+仮想利益の偽装は受け付けない。
+一般公開の認証は未実装なので、非認証の公開トンネルは作らず
+**ChatGPTへの実際の接続にはOpenAI Secure MCP Tunnelと利用権限が必要**。
+詳しくは `mcp/README.md` を参照。

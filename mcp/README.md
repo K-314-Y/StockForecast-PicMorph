@@ -103,3 +103,85 @@ npm test
 `node stdio.mjs` は `server.mjs` と**同一のツールレジストリ**を使用。MCP SuperAssistantにはこのスクリプトをstdioサーバーとして1件登録する。Web版Geminiブラウザ拡張のローカル橋渡しとしてのみ使用する。API本体は `127.0.0.1:8765` が稼働必須。ブラウザやnodeの外部公開は不要。
 
 MCP SuperAssistantの公式手順では、**Geminiの新規チャットでMCPのInstructionsを挿入**してからツール実行を依頼する。新しいツールが拡張の接続一覧に表示されても、挿入用Instructionsが古いままのことがあるため、実際のArgon呼び出しが完了するまで接続完了と断定しない。
+
+## Sprint 30: ChatGPTから「自作した相棒」をWebゲームへ接続するMCP
+
+**旧ゲームのMCP (`8766`) とは別サーバー**。既存の旧Pythonモデルの
+`set_eye` やコード変更ツールを公開せず、以下の**3ツールのみ**を提供。
+
+| ツール | 説明 |
+|---|---|
+| `get_my_companion` | Webゲームと共有する自作相棒の名前・髪色・服色・得意分析・仮想資金比率とrevisionを確認（読み取り） |
+| `save_my_companion` | 本人が決めた上記5項目を、新しいNodeゲームに保存（書き込み。事前に取得したrevision必須） |
+| `get_my_creature_growth` | 新しいNodeゲームの育成XP・装備を確認（読み取り） |
+
+`save_my_companion` はNodeゲームの `POST /api/companion` へ送信するため、
+**ChatGPTで編集すればWebゲームに反映され、Webで変更すればChatGPTから読める**。
+自作キャラのファイルは今までどおり
+`local_state/node_game/companion.json`。このMCP独自の保存先はない。
+変更できるのはゲーム用キャラ設定だけ。
+実相場への注文、V6予測データ、Pythonゲームの古いモデルやXPを
+変更するツールは**追加しない**。キャラ画像をAI生成・保存する機能も未実装。
+
+### Linuxでの起動（新しいNodeゲーム8890が動作している場合）
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー
+npm --prefix mcp run start:chatgpt
+# http://127.0.0.1:8896/mcp  (Streamable HTTP、ローカル専用)
+# http://127.0.0.1:8896/health
+```
+
+代替のstdio起動（ローカルMCPクライアント／Secure MCP Tunnel向け）:
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー
+node mcp/companion-stdio.mjs
+```
+
+stdio起動はMCPプロトコルの読み書きを使うため、
+通常の端末に対話用文章は表示されない。
+
+### ChatGPTの「カスタムMCPプラグイン」として使うための次の接続作業
+
+**8896のローカルURLをChatGPTの接続欄へ直接貼っても使えない。**
+また、現状のMCPにはWeb公開向けユーザー認証がないので、
+`ngrok` やポート転送を用いて**無認証で公開しない**。
+
+公式の**Secure MCP Tunnel**を使う場合:
+
+1. OpenAI Platformでトンネル作成の権限 (`Tunnels Read + Manage`) と
+   対象ChatGPTワークスペースへの関連付けがあるか確認。
+   **個人アカウントのプランや権限によって利用できない**。
+2. OpenAI PlatformのTunnel設定でトンネルを作り、
+   `tunnel_id` と適切な権限を持つ実行用APIキーを用意する。
+   このリポジトリに**秘密鍵、キーの値、認証Cookieを保存しない**。
+3. OpenAI公式`tunnel-client`をLinuxにインストールし、
+   `tunnel-client help quickstart` で最新の設定方法を確認。
+   MCPターゲットは、ローカルHTTP `http://127.0.0.1:8896/mcp`
+   かstdio `node /home/yugo314/ドキュメント/14_予測クリーチャー/mcp/companion-stdio.mjs`。
+   `doctor`が成功して`run`が接続されることを確認。
+4. **ChatGPTの画面**で Plugins → ＋ → Add custom MCP server →
+   Connection: Tunnel → 作ったトンネルを選択し、接続を承認してインストール。
+   画面に項目がないときは、アカウント／ワークスペースにMCP作成権限がない可能性がある。
+5. `@Creature Lab`を選び「現在の相棒を教えて」「髪色を変えて相棒を保存して」
+   などを依頼し、Webゲーム画面 `127.0.0.1:8890/game` を更新して一致を確認。
+
+このリポジトリでは**ローカル接続と保存の双方向反映まで実証**する。
+外部のChatGPTにプラグイン登録済みだと誤認しない。
+ユーザーごとのOAuth・安全な一般公開・アイコン付きChatGPT画面などは未実装。
+
+公式:
+- https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
+
+### 回帰テスト
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー
+node --test mcp/tests/chatgpt-companion.test.mjs
+(cd mcp && npm test)
+```
+
+テストでは一時保存ファイルと別ポートのNodeゲームを使い、
+実ゲームの相棒を勝手に作成・更新しない。
