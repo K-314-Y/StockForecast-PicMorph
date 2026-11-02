@@ -64,13 +64,13 @@ const input={
   risk_percent:75
 };
 
-test('ChatGPT adapter exposes five authored-only tools, never legacy Python mutation tools',async t=>{
+test('ChatGPT adapter exposes seven authored-only tools, never legacy Python mutation tools',async t=>{
   await harness(t,async({bridgeUrl})=>{
     const client=await connect(bridgeUrl);
     try {
       const list=await client.listTools();
       const names=list.tools.map(x=>x.name);
-      assert.deepEqual(names.sort(),['get_my_companion','get_my_creature_growth','save_my_companion', 'preview_my_companion','list_my_trained_brains'].sort());
+      assert.deepEqual(names.sort(),['get_my_companion','get_my_creature_growth','save_my_companion', 'preview_my_companion','list_my_trained_brains','get_my_look','save_my_look'].sort());
       assert.equal(names.includes('set_model_parameters'),false);
       const writer=list.tools.find(x=>x.name==='save_my_companion');
       assert.equal(writer.annotations.readOnlyHint,false);

@@ -120,7 +120,7 @@ test('UI keeps draft visuals separate from saved companion rules, falls back on 
   get('portrait').onerror();
   assert.equal(get('chibi').hidden,false);
   assert.match(get('skinStatus').textContent,/初期外見に戻しました/);
-  assert.deepEqual(calls,['/api/growth','/api/companion','/api/appearance/drafts']);
+  assert.deepEqual(calls,['/api/growth','/api/looks','/api/companion','/api/appearance/drafts']);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
 });
 test('empty catalog and missing art keep default cosmetic avatar',async()=>{

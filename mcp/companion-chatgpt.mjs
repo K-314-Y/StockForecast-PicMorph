@@ -29,6 +29,12 @@ const draftSchema = z.object({
 }).strict();
 const pct = z.number().int().min(0).max(100);
 const trainedId = /^tv_[0-9a-f]{32}$/;
+const lookSchema=z.object({
+  hair_style:z.enum(['bob','long','twintails']),
+  expression:z.enum(['cheerful','calm','determined']),
+  accessory:z.enum(['ribbon','glasses','star','none']),
+}).strict();
+
 
 
 async function jsonFromGame(apiBase, path, body) {
@@ -57,7 +63,7 @@ function errorResult(error) {
 
 export function makeCompanionChatGptMcp({apiBase=API}={}) {
   const server = new McpServer(
-    {name:'creature-lab-companion',version:'1.1.0'},
+    {name:'creature-lab-companion',version:'1.2.0'},
     {instructions:
       'ユーザー自身がゲーム用相棒を設計する。まず get_my_companion で現在の設定を取得し、preview_my_companion で未保存の案を架空相場で試す。保存意図を確認してから save_my_companion で保存する。学習済みキャラは list_my_trained_brains で取得し、試遊時にIDを選べる。プレビューにXP・保存・実取引なし。V6変更・画像の自動作画もできない。'}
   );
@@ -144,6 +150,40 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         structuredContent:{result}};
     }catch(e){return errorResult(e);}
   });
+  server.registerTool('get_my_look',{
+    title:'Creature Lab: 自分が組み立てた2D外見パーツを確認',
+    description:'ゲームと同じ髪型・表情・アクセサリーの保存済み設定を取得する。画像生成ではなく2Dパーツの組み合わせ。読み取りだけで保存しない。',
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try{
+      const look=await jsonFromGame(apiBase,'/api/looks');
+      return {content:[{type:'text',text:look.created?
+        '保存済みの髪型・表情・飾りを読み取りました。revision='+look.revision :
+        'まだ外見は保存されていません。以下は初期パーツです。'}],
+        structuredContent:{...look,cosmetic_only:true}};
+    }catch(e){return errorResult(e);}
+  });
+  server.registerTool('save_my_look',{
+    title:'Creature Lab: 2Dキャラの髪型・表情・飾りを保存',
+    description:'本人が決めたパーツをゲーム内のchibiへ保存する。get_my_lookで現在のrevisionを取得してから明示的な編集依頼で呼ぶ。予測ルール・育成・V6は変更しない。',
+    inputSchema:z.object({
+      expected_revision:z.number().int().min(0).describe('get_my_lookで取得した現在のrevision'),
+      hair_style:z.enum(['bob','long','twintails']).describe('bob=ボブ, long=ロング, twintails=ツインテール'),
+      expression:z.enum(['cheerful','calm','determined']).describe('cheerful=にっこり, calm=おっとり, determined=きりっと'),
+      accessory:z.enum(['ribbon','glasses','star','none']).describe('ribbon=リボン, glasses=眼鏡, star=星, none=飾りなし'),
+    }).strict(),
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },async({expected_revision,hair_style,expression,accessory})=>{
+    try{
+      const value=await jsonFromGame(apiBase,'/api/looks',{
+        expected_revision,look:{hair_style,expression,accessory}
+      });
+      return {content:[{type:'text',text:
+        '自分の2Dキャラの外見を保存しました。ゲームの画面を再読み込みすると表示されます。予測ルールやXPは変更していません。'}],
+        structuredContent:{...value,cosmetic_only:true}};
+    }catch(e){return errorResult(e);}
+  });
   server.registerTool('get_my_creature_growth',{
     title:'Creature Lab: 育成レベル・装備を確認',
     description:'Nodeゲームの育成XP、レベル、現在の装備を読み取る。XPや装備の変更はしない。',
@@ -178,7 +218,7 @@ export function createCompanionChatGptHttpServer(options={}) {
     const url=new URL(req.url ?? '/', 'http://localhost');
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
-        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:5}));
+        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:7}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {
