@@ -218,3 +218,20 @@ MCPは5ツールに増えたが、ChatGPTへのカスタム登録や
 非公開トンネルの設定はまだ別途必要。
 **認証のない公開URLは作らない**。試遊の成績は固定の架空価格なので、
 実相場での優劣や投資成績の証拠に使わない。
+
+### Sprint 33：自分が決めた髪型・表情・アクセサリーをChatGPTから保存
+
+新しいMCPツールは以下です。
+
+- `get_my_look`：今の外見 `hair_style` / `expression` / `accessory` とrevisionを読み込む。未作成時の初期値は bob/cheerful/ribbon。
+- `save_my_look`：本人が指定した3パーツと `expected_revision` を `POST /api/looks` でNodeのWebゲームへ保存する。
+
+髪型: bob（ボブ）、long（ロング）、twintails（ツインテール）。
+表情: cheerful（にっこり）、calm（おっとり）、determined（きりっと）。
+飾り: ribbon（リボン）、glasses（眼鏡）、star（星）、none（なし）。
+
+使用例：「今の外見を教えて。ツインテール・きりっとした表情・星の飾りに変更して」。
+変更時は保存前に意思確認を行い、revisionの不一致は409として再取得します。
+見た目は専用 `local_state/node_game/looks.json` に保存するため、予測用の
+自作相棒、XP、旧Pythonゲーム、V6に影響しません。MCPは計7ツール。
+これは**CSSのパーツ選択**であり、画像生成・画像パーツの自動分離はまだ行いません。

@@ -8,6 +8,9 @@ let skipArmed = false;
 let result = null;
 let dayIndex = 0;
 let savedCompanion = null;
+let savedLook = null;
+let lookSaving = false;
+const lookIds = ['lookHair','lookExpression','lookAccessory'];
 let companionSaving = false;
 let handoffPending = false;
 let handoffInvalid = false;
@@ -35,6 +38,9 @@ function scene(mood, message) {
 }
 
 function refreshButtons() {
+  $('saveLook').disabled = busy || lookSaving || savedLook === null;
+  $('reloadLook').disabled = busy || lookSaving;
+  for (const id of lookIds) $(id).disabled = busy || lookSaving;
   $('play').disabled = busy || companionSaving || ticket !== null || handoffPending || handoffInvalid;
   $('saveCompanion').disabled = busy || companionSaving || savedCompanion === null;
   $('reloadCompanion').disabled = busy || companionSaving;
@@ -466,6 +472,67 @@ loadGrowth().catch(error => {
   refreshButtons();
 });
 refreshButtons();
+
+// The cosmetic parts have their own revision and never touch the model or XP.
+function lookValue() {
+  return {hair_style:$('lookHair').value,expression:$('lookExpression').value,
+    accessory:$('lookAccessory').value};
+}
+function previewLook() {
+  const value=lookValue();
+  const hair=['bob','long','twintails'].includes(value.hair_style)?value.hair_style:'bob';
+  const expression=['cheerful','calm','determined'].includes(value.expression)?value.expression:'cheerful';
+  const accessory=['ribbon','glasses','star','none'].includes(value.accessory)?value.accessory:'ribbon';
+  $('chibi').dataset.hairStyle=hair;
+  $('chibi').dataset.expression=expression;
+  $('chibi').dataset.accessory=accessory;
+}
+function displayLook(record) {
+  savedLook=record;
+  $('lookHair').value=record.look.hair_style;
+  $('lookExpression').value=record.look.expression;
+  $('lookAccessory').value=record.look.accessory;
+  previewLook();
+  refreshButtons();
+}
+async function loadLook() {
+  const record=await call('/api/looks');
+  displayLook(record);
+  $('lookStatus').textContent=record.created ?
+    '保存済みの見た目を復元しました（revision '+record.revision+'）。' :
+    'パーツは未保存です。自分で組み立てて保存できます。';
+}
+for(const id of lookIds) $(id).addEventListener('change',()=>{
+  $('skinSelect').value='';
+  defaultSkin('自分で組み立てた2Dパーツを表示しています。');
+  previewLook();
+  $('lookStatus').textContent='編集中の見た目です。保存するまで他の画面には反映されません。';
+});
+$('lookForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  if(busy || lookSaving || !savedLook)return;
+  lookSaving=true;refreshButtons();
+  try {
+    const value=await call('/api/looks',{expected_revision:savedLook.revision,look:lookValue()});
+    displayLook(value);
+    $('skinSelect').value='';
+    defaultSkin('自分で組み立てた2Dパーツを表示しています。');
+    $('lookStatus').textContent='見た目を保存しました。ゲームとChatGPTで同じパーツを使えます。';
+  }catch(error){
+    $('lookStatus').textContent='外見を保存できません: '+error.message+'。再読込すれば保存済みのパーツを確認できます。';
+  }finally{lookSaving=false;refreshButtons();}
+});
+$('reloadLook').addEventListener('click',async()=>{
+  if(busy || lookSaving)return;
+  lookSaving=true;refreshButtons();
+  try{await loadLook();}
+  catch(error){$('lookStatus').textContent='外見の再取得に失敗しました: '+error.message;}
+  finally{lookSaving=false;refreshButtons();}
+});
+loadLook().catch(error=>{
+  $('lookStatus').textContent='外見パーツを読み込めません: '+error.message;
+  refreshButtons();
+});
 
 function creatorValue() {
   return {name:$('creatorName').value, hair_color:$('creatorHair').value,

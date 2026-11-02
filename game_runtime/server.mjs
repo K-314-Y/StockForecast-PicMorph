@@ -6,6 +6,7 @@
 import {createServer} from 'node:http';
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
+import {createLookStore} from './looks.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -223,6 +224,7 @@ async function getBody(req) {
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, companionStore = createCompanionStore(),
+                                  lookStore = createLookStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -269,6 +271,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       try {return json(res, 200, await companionStore.read());}
       catch {return json(res, 503, {error:'相棒の保存情報を読み取れません'});}
     }
+    if (req.method === 'GET' && path === '/api/looks') {
+      try {return json(res,200,await lookStore.read());}
+      catch {return json(res,503,{error:'外見の保存情報を読み取れません'});}
+    }
     // Read-only appearance bridge: the browser never requests the Python origin directly.
     if (req.method === 'GET' && path === '/api/appearance/drafts') {
       try { return json(res, 200, await appearanceCatalog()); }
@@ -306,7 +312,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/training/complete','/api/growth/equip','/api/companion','/api/looks'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -317,6 +323,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         throw failure('JSONオブジェクトを指定してください', 400);
       }
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
+      if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/training/complete') {
         if (names !== 'expected_growth_revision|ticket' ||
