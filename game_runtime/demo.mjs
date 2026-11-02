@@ -1,107 +1,260 @@
 const $ = id => document.getElementById(id);
 const fmt = n => Number(n).toLocaleString('ja-JP', {maximumFractionDigits: 2});
-let growthRevision = null, ticket = null;
+let growthRevision = null;
+let currentGearId = null;
+let ticket = null;
+let busy = false;
+let skipArmed = false;
+let result = null;
+let dayIndex = 0;
+
 async function call(path, body) {
-  const response = await fetch(path, body ? {method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : undefined);
-  const value = await response.json();
+  const response = await fetch(path, body === undefined ? undefined : {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  let value;
+  try { value = await response.json(); }
+  catch { throw Error('サーバーの応答を読み込めません'); }
   if (!response.ok) throw Error(value.error || 'ゲームサーバーに接続できません');
   return value;
 }
+
+function scene(mood, message) {
+  $('scene').dataset.mood = mood;
+  $('speech').textContent = message;
+}
+
+function refreshButtons() {
+  $('play').disabled = busy || ticket !== null;
+  $('claim').disabled = busy || ticket === null || growthRevision === null;
+  $('discard').hidden = ticket === null;
+  $('discard').disabled = busy;
+  $('refreshGrowth').disabled = busy;
+  $('gear').disabled = busy || growthRevision === null;
+  $('equip').disabled = busy || growthRevision === null ||
+    !$('gear').value || $('gear').value === currentGearId;
+  $('next').disabled = busy || !result || dayIndex >= result.decisions.length - 1;
+}
+
 async function loadGrowth() {
   const growth = await call('/api/growth');
+  const mine = Array.isArray(growth.slots) && growth.slots.find(item => item.slot === 'mine');
+  if (!mine || !Array.isArray(mine.gear_options) || !Number.isSafeInteger(growth.revision)) {
+    throw Error('育成記録の形式が不正です');
+  }
   growthRevision = growth.revision;
-  const mine = growth.slots.find(x => x.slot === 'mine');
-  $('growthInfo').textContent = '現在 Lv.' + mine.level + ' / ' + mine.xp + ' XP（実績ごとに1回）';
-  const select = $('gear');
-  select.replaceChildren();
+  currentGearId = mine.gear;
+  $('growthInfo').textContent = 'Lv.' + mine.level + ' / ' + mine.xp + ' XP';
+  const options = $('gear');
+  options.replaceChildren();
   for (const item of mine.gear_options) {
     const option = document.createElement('option');
     option.value = item.id;
     option.disabled = !item.unlocked;
-    option.textContent = item.icon + ' ' + item.name + (item.unlocked ? '' : '（あと ' + (item.unlock_xp - mine.xp) + ' XP）');
-    select.append(option);
+    option.textContent = item.icon + ' ' + item.name +
+      (item.unlocked ? '' : '（解放まであと ' + (item.unlock_xp - mine.xp) + ' XP）');
+    options.append(option);
   }
-  select.value = mine.gear;
+  options.value = mine.gear;
+  const equipped = mine.gear_options.find(item => item.id === mine.gear);
+  $('currentGear').textContent = '現在の装備: ' + (equipped ? equipped.icon + ' ' + equipped.name : mine.gear);
+  refreshButtons();
   return growth;
 }
-$('claim').addEventListener('click', async () => {
-  if (!ticket || growthRevision === null) return;
-  $('claim').disabled = true;
-  try {
-    const result = await call('/api/training/complete', {
-      ticket, expected_growth_revision:growthRevision
-    });
-    ticket = null;
-    const gained = Object.entries(result.earned_xp).map(([k, v]) => k + ': +' + v + ' XP').join(' / ');
-    $('reward').textContent = gained + '。同じ実績の報酬は重複しません。';
-    await loadGrowth();
-  } catch(e) {
-    $('reward').textContent = e.message;
-    try { await loadGrowth(); } catch {}
-    $('claim').disabled = false;
-  }
-});
-$('equip').addEventListener('click', async () => {
-  $('equip').disabled = true;
-  try {
-    const growth = await call('/api/growth/equip', {
-      slot:'mine', gear_id:$('gear').value,expected_growth_revision:growthRevision
-    });
-    $('gearStatus').textContent = '装備を保存しました。現在revision ' + growth.revision;
-    await loadGrowth();
-  } catch(e) {
-    $('gearStatus').textContent = '変更できません: ' + e.message;
-    try { await loadGrowth(); } catch {}
-  } finally { $('equip').disabled = false; }
-});
-loadGrowth().catch(e => $('growthInfo').textContent = e.message);
 
-$('play').addEventListener('click', async () => {
-  $('play').disabled = true;
-  $('status').textContent = 'Pythonから予測を取得し、Node.jsで架空コインを計算しています…';
-  $('result').hidden = true;
-  ticket = null;
-  $('claim').disabled = true;
-  try {
-    const response = await fetch('/api/practice', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({allocations: {mine: 100, owl: 0, turtle: 0}}),
-    });
-    const value = await response.json();
-    if (!response.ok) throw Error(value.error || '練習に失敗しました');
-    if (value.mode !== 'PRACTICE_SYNTHETIC_ONLY') throw Error('結果の種類が不正です');
-    ticket = value.training_ticket;
-    $('claim').disabled = !ticket;
-    $('reward').textContent = '';
-    await loadGrowth();
-    $('final').textContent = fmt(value.final_coins) + ' C';
-    $('profit').textContent = (value.profit_coins >= 0 ? '+' : '') + fmt(value.profit_coins) + ' C';
-    $('drawdown').textContent = fmt(value.max_drawdown_pct) + '%';
-    const container = $('days');
-    container.replaceChildren();
-    const detail = index => {
-      const button = container.children[index];
-      for (const elem of container.children) elem.setAttribute('aria-pressed', String(elem === button));
-      const choice = value.decisions[index];
-      $('dayDetail').textContent = `${choice.step}日目: 架空価格 ${fmt(choice.price)} C、キャラの判断 ${choice.signals.mine}。累積 ${fmt(value.equity_path[index + 1])} C`;
-    };
-    for (let index = 0; index < value.decisions.length; index++) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = String(index + 1);
-      button.setAttribute('aria-label', `${index + 1}日目の結果`);
-      button.setAttribute('aria-pressed', String(index === 0));
-      button.addEventListener('click', () => detail(index));
-      container.appendChild(button);
-    }
-    if (value.decisions.length) detail(0);
-    $('result').hidden = false;
-    $('status').textContent = '完了：架空12ステップの練習結果。予測実績・XPには反映していません。';
-  } catch (error) {
-    $('status').textContent = '練習に失敗しました: ' + error.message;
-  } finally {
-    $('play').disabled = false;
+function chooseDay(index) {
+  if (!result || index < 0 || index >= result.decisions.length) return;
+  dayIndex = index;
+  for (const [i, button] of [...$('days').children].entries()) {
+    button.setAttribute('aria-pressed', String(i === index));
   }
+  const choice = result.decisions[index];
+  const signal = choice.signals.mine;
+  $('dayCount').textContent = (index + 1) + ' / ' + result.decisions.length + ' 日目';
+  $('dayDetail').textContent = (index + 1) + '日目: 架空価格 ' +
+    fmt(choice.price) + ' C / 判断 ' + signal +
+    ' / 仮想コイン残高 ' + fmt(result.equity_path[index + 1]) + ' C';
+  if (signal === 'CASH') {
+    scene('cautious', '今日は現金で待機。動かない判断も大切だよ。');
+  } else if (signal === 'LONG') {
+    scene('thinking', '今日は上昇を狙う判断。どうなったかな？');
+  } else {
+    scene('thinking', '今日の判断は「' + signal + '」。結果を確かめよう。');
+  }
+  $('next').textContent = index === result.decisions.length - 1 ?
+    '12日間を確認しました' : '次の日を見る';
+  refreshButtons();
+}
+
+function showResult(value) {
+  if (value.mode !== 'PRACTICE_SYNTHETIC_ONLY' ||
+      !Array.isArray(value.decisions) || value.decisions.length !== 12 ||
+      !Array.isArray(value.equity_path) || value.equity_path.length !== 13 ||
+      !value.decisions.every(item => item && item.signals &&
+        typeof item.signals.mine === 'string' && Number.isFinite(item.price)) ||
+      !value.equity_path.every(n => Number.isFinite(n)) ||
+      !Number.isFinite(value.final_coins) ||
+      !Number.isFinite(value.profit_coins) || !Number.isFinite(value.max_drawdown_pct)) {
+    throw Error('練習結果の形式が不正です');
+  }
+  result = value;
+  $('final').textContent = fmt(value.final_coins) + ' C';
+  $('profit').textContent = (value.profit_coins >= 0 ? '+' : '') + fmt(value.profit_coins) + ' C';
+  $('drawdown').textContent = fmt(value.max_drawdown_pct) + '%';
+  const container = $('days');
+  container.replaceChildren();
+  for (let i = 0; i < value.decisions.length; i++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = String(i + 1);
+    button.setAttribute('aria-label', (i + 1) + '日目の結果');
+    button.setAttribute('aria-pressed', 'false');
+    button.addEventListener('click', () => chooseDay(i));
+    container.append(button);
+  }
+  $('result').hidden = false;
+  $('play').textContent = '↻ もう一度練習する';
+  chooseDay(0);
+}
+
+async function play() {
+  if (busy || ticket !== null) return;
+  busy = true; skipArmed = false;
+  $('reward').textContent = '';
+  $('result').hidden = true;
+  result = null;
+  refreshButtons();
+  scene('thinking', '未来は見ないで、今日の判断を考えているよ…');
+  $('status').textContent = 'Pythonで予測判断を作成し、Node.jsで架空コインを計算しています…';
+  try {
+    const value = await call('/api/practice', {
+      allocations: {mine: 100, owl: 0, turtle: 0},
+    });
+    showResult(value);
+    ticket = typeof value.training_ticket === 'string' ? value.training_ticket : null;
+    $('status').textContent = '練習完了！ 12日間を振り返り、XPを受け取って装備を変えよう。';
+    if (ticket) $('reward').textContent = '受取前のXPがあります。次の練習の前に受け取ってください。';
+    else $('reward').textContent = '受取可能なXPはありません。';
+    try { await loadGrowth(); }
+    catch (error) {
+      growthRevision = null;
+      $('growthInfo').textContent = '育成を読み込めません: ' + error.message;
+      $('reward').textContent += ' 育成の取得に失敗しました。再読込して確認してください。';
+    }
+  } catch (error) {
+    result = null;
+    ticket = null;
+    $('result').hidden = true;
+    $('status').textContent = '練習に失敗しました: ' + error.message;
+    scene('ready', 'まだ練習は始まっていないよ。もう一度挑戦しよう。');
+  } finally {
+    busy = false;
+    refreshButtons();
+  }
+}
+
+async function claim() {
+  if (busy || ticket === null || growthRevision === null) return;
+  busy = true; skipArmed = false; refreshButtons();
+  $('discard').textContent = '報酬を辞退して再挑戦';
+  $('reward').textContent = 'XPを受け取っています…';
+  const requestedTicket = ticket;
+  try {
+    const response = await call('/api/training/complete', {
+      ticket: requestedTicket, expected_growth_revision: growthRevision,
+    });
+    const earned = Object.entries(response.earned_xp || {}).map(
+      ([name, amount]) => name + ': +' + amount + ' XP'
+    ).join(' / ');
+    ticket = null;
+    $('reward').textContent = earned ?
+      earned + '。同じ実績からのXPは一度だけです。' : 'この実績のXPはすでに受け取り済みです。';
+    try { await loadGrowth(); }
+    catch (error) {
+      $('growthInfo').textContent = 'XP受取は成功しました。育成表示の再読込が必要です: ' + error.message;
+    }
+    scene('growth', '冒険の記録が増えたね！装備を選んで再挑戦しよう。');
+  } catch (error) {
+    $('reward').textContent = '受取結果を確定できません: ' + error.message +
+      '。育成を再確認してから再試行してください。';
+    try { await loadGrowth(); }
+    catch (refreshError) {
+      growthRevision = null;
+      $('growthInfo').textContent = '育成確認に失敗: ' + refreshError.message;
+    }
+  } finally {
+    busy = false;
+    refreshButtons();
+  }
+}
+
+async function equip() {
+  if (busy || growthRevision === null || !$('gear').value ||
+      $('gear').value === currentGearId) return;
+  busy = true; refreshButtons();
+  $('gearStatus').textContent = '装備を保存しています…';
+  try {
+    await call('/api/growth/equip', {
+      slot: 'mine', gear_id: $('gear').value,
+      expected_growth_revision: growthRevision,
+    });
+    $('gearStatus').textContent = '装備を変更しました。次の練習で効果を試そう。';
+    try { await loadGrowth(); }
+    catch (error) {
+      growthRevision = null;
+      $('growthInfo').textContent = '装備変更は成功しました。育成表示は再読込してください: ' + error.message;
+    }
+    scene('happy', '新しい装備、似合ってる？次の冒険に行こう！');
+  } catch (error) {
+    $('gearStatus').textContent = '装備を確認できません: ' + error.message;
+    try { await loadGrowth(); }
+    catch {
+      growthRevision = null;
+      $('growthInfo').textContent = '育成を読み込めません。画面を再読込してください。';
+    }
+  } finally {
+    busy = false;
+    refreshButtons();
+  }
+}
+
+function discard() {
+  if (busy || ticket === null) return;
+  if (!skipArmed) {
+    skipArmed = true;
+    $('discard').textContent = '本当にXPを辞退する（再度押す）';
+    $('reward').textContent = 'この練習の受取券を破棄します。取り消す場合は「XPを受け取る」を押してください。';
+    return;
+  }
+  ticket = null; skipArmed = false;
+  $('discard').textContent = '報酬を辞退して再挑戦';
+  $('reward').textContent = '受取券を破棄しました。練習はもう一度できます。';
+  scene('ready', 'もう一度、12日間を試してみよう！');
+  refreshButtons();
+}
+
+$('play').addEventListener('click', play);
+$('claim').addEventListener('click', claim);
+$('equip').addEventListener('click', equip);
+$('discard').addEventListener('click', discard);
+$('gear').addEventListener('change', refreshButtons);
+$('refreshGrowth').addEventListener('click', async () => {
+  if (busy) return;
+  busy = true; refreshButtons();
+  try {
+    await loadGrowth();
+    $('gearStatus').textContent = '育成情報を更新しました。';
+  } catch (error) {
+    growthRevision = null;
+    $('growthInfo').textContent = '育成を再取得できません: ' + error.message;
+  } finally { busy = false; refreshButtons(); }
 });
+$('next').addEventListener('click', () => chooseDay(dayIndex + 1));
+loadGrowth().catch(error => {
+  growthRevision = null;
+  $('growthInfo').textContent = '育成情報を読み込めません: ' + error.message;
+  refreshButtons();
+});
+refreshButtons();
