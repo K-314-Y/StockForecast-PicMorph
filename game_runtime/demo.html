@@ -44,9 +44,9 @@ button,select{font:inherit}button{border:0;border-radius:12px;padding:12px 16px;
 select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;border-radius:10px;padding:11px;min-height:44px}
 .gearline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.details{margin-top:16px}.details summary{cursor:pointer}
 .appearance-controls label,.brain-controls label{display:block;margin:12px 0 6px;font-weight:650}.appearance-controls a{color:#b1d9ff}
-.creator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.creator-grid label{display:grid;gap:5px;font-size:13px}.creator-grid input{min-width:0;max-width:100%;font:inherit;border:1px solid #6c809c;border-radius:8px;padding:8px;background:#111c31;color:#fff;min-height:44px}.creator-grid input[type=color]{width:100%}.creator-note{font-size:13px;color:var(--soft)}
+.arena-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.arena-grid label{display:grid;gap:7px;font-weight:700;font-size:13px}.arena-grid select{width:100%}.arena-chart{width:100%;height:auto;display:block;border:1px solid #455877;border-radius:12px;background:#101d34;margin:12px 0}.arena-standings{display:grid;gap:11px;margin:16px 0}.arena-fighter{border:1px solid #455877;border-radius:15px;padding:15px;background:#101d34}.arena-fighter strong{font-size:18px}.arena-metrics{display:flex;gap:12px;flex-wrap:wrap;margin:9px 0}.arena-metrics span{font-size:13px}.arena-days{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.arena-days button{min-width:42px;padding:9px}.arena-days button[aria-pressed=true]{background:var(--mint);color:#12303b}.arena-day-detail{border:1px solid var(--line);border-radius:13px;padding:13px;background:#101d34}.arena-day-detail p{margin:6px 0}.arena-note{font-size:13px;color:#cbdced}.creator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.creator-grid label{display:grid;gap:5px;font-size:13px}.creator-grid input{min-width:0;max-width:100%;font:inherit;border:1px solid #6c809c;border-radius:8px;padding:8px;background:#111c31;color:#fff;min-height:44px}.creator-grid input[type=color]{width:100%}.creator-note{font-size:13px;color:var(--soft)}
 [hidden]{display:none!important}
-@media(max-width:680px){main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
+@media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
 @media(prefers-reduced-motion:reduce){.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
 </style>
 </head>
@@ -111,6 +111,26 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
 </section>
+<section class="panel" id="arenaSection" aria-labelledby="arenaTitle">
+ <span class="eyebrow">MODEL ARENA · 同条件比較</span><h2 id="arenaTitle">3モデルで予測対決</h2>
+ <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。装備補正は全員オフ、手数料は同一。こちらの比較ではXPは発生しません。</p>
+ <div class="arena-grid">
+  <label for="arenaMine">自分のモデル<select id="arenaMine"><option value="self">保存した相棒（なければ標準）</option></select></label>
+  <label for="arenaOwl">相手①<select id="arenaOwl"><option value="preset">フクロウ（既存）</option></select></label>
+  <label for="arenaTurtle">相手②<select id="arenaTurtle"><option value="preset">カメ（既存）</option></select></label>
+ </div>
+ <div class="actions"><button id="arenaLoad" type="button">保存済み練習版を読み込む</button><button id="arenaRun" type="button" class="primary">3体を同時に比較</button></div>
+ <p id="arenaStatus" role="status" aria-live="polite">学習版がなくても、作った相棒と既存2体を比較できます。</p>
+ <div id="arenaOutput" hidden>
+  <p id="arenaSummary" class="brain-note"></p>
+  <svg id="arenaChart" class="arena-chart" viewBox="0 0 640 210" role="img" aria-label="3モデルの12日間の仮想コイン残高推移。具体的な数値は日ごとの比較を参照"></svg>
+  <div id="arenaStandings" class="arena-standings"></div>
+  <h3>12日間の判断を比較</h3><p class="arena-note">同じ日の価格に対して、モデルごとに何を判断したかを確認できます。</p>
+  <div id="arenaDays" class="arena-days" aria-label="比較する日"></div>
+  <div id="arenaDayDetail" class="arena-day-detail" role="status" aria-live="polite"></div>
+  <p class="arena-note">順位はこの固定架空シナリオの仮想損益順です。実際の投資成績・未来の予測能力・公式ランキングではありません。</p>
+ </div>
+</section>
 <section id="result" class="panel" hidden aria-labelledby="resultTitle">
  <span class="eyebrow">STEP 02 / ふり返り</span><h2 id="resultTitle">12日間の練習結果</h2><p id="resultCompanion" class="brain-note"></p>
  <div class="statgrid"><div class="stat">最終コイン<strong id="final">--</strong></div><div class="stat">仮想損益<strong id="profit">--</strong></div><div class="stat">最大下落率<strong id="drawdown">--</strong></div></div>
@@ -135,4 +155,4 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
 <p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
-</main><script type="module" src="/demo.mjs"></script></body></html>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/arena-ui.mjs"></script></body></html>

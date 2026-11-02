@@ -11,6 +11,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
+import {makeFairComparison, validateContenders} from './arena.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -18,6 +19,7 @@ const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
+const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
@@ -61,7 +63,7 @@ export async function loadLocalSnapshot(store) {
     growth_revision: growth.revision};
 }
 
-function withGear(source, trainedModel = null) {
+function withGear(source, trainedModel = null, includeGear = true) {
   const lineup = new Map(source.lineup.slots.map(x => [x.slot, x.model]));
   const gears = new Map(source.growth.slots.map(x => [x.slot, x.gear]));
   if (lineup.size !== 2 || gears.size !== 3 || !gears.has('mine') ||
@@ -80,7 +82,7 @@ function withGear(source, trainedModel = null) {
     }
     const strengths = {...original.plugin_strengths};
     const gear = GEAR[gearName];
-    if (gear) {
+    if (gear && includeGear) {
       if (!Number.isInteger(strengths[gear.key])) throw failure('装備感度が不正です');
       strengths[gear.key] = Math.min(150, strengths[gear.key] + gear.bonus);
     }
@@ -296,9 +298,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs')) {
-      const script = path === '/demo.mjs';
-      const body = await readFile(script ? DEMO_JS : DEMO);
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs')) {
+      const script = path === '/demo.mjs' || path === '/arena-ui.mjs';
+      const body = await readFile(path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
@@ -306,7 +308,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/training/complete','/api/growth/equip','/api/companion'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -318,6 +320,66 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
+      if (path === '/api/compare') {
+        if (names !== 'contenders') throw failure('比較する3モデルだけ指定してください',400);
+        const choices = validateContenders(payload.contenders);
+        const selected = [...new Set(Object.values(choices).filter(x => TRAINED_ID.test(x)))];
+        const versions = new Map();
+        for (const id of selected) {
+          const found = await trainedVersion(id);
+          if (found?.version_id !== id || found?.kind !== 'trained_practice_only' ||
+              !/^bp_[0-9a-f]{32}$/.test(found?.source_draft_id) ||
+              !/^[a-f0-9]{64}$/.test(found?.parameters_sha256) ||
+              !found?.model) {
+            throw failure('比較用の学習版を検証できません',409);
+          }
+          versions.set(id, found);
+        }
+        const companion = await companionStore.read();
+        const snapshot = await loadSnapshot();
+        let models = withGear(snapshot, null, false);
+        if (choices.mine === 'self') models = applyCompanion(models, companion);
+        const metadata = {};
+        for (const slot of SLOTS) {
+          const choice = choices[slot];
+          const trained = versions.get(choice);
+          if (trained) {
+            models.models[slot] = trained.model;
+            metadata[slot] = {
+              kind:'trained_practice_only', name:'学習版 ' + choice.slice(0,11),
+              version_id:choice, source_draft_id:trained.source_draft_id,
+              parameters_sha256:trained.parameters_sha256,
+            };
+          } else if (slot === 'mine') {
+            metadata[slot] = companion.created ?
+              {kind:'authored_companion',name:companion.companion.name} :
+              {kind:'standard_mine',name:'標準モデル'};
+          } else {
+            metadata[slot] = {kind:'preset_rival',
+              name:slot === 'owl' ? 'フクロウ（既存）' : 'カメ（既存）'};
+          }
+        }
+        const plan = await predict(models);
+        const after = await loadSnapshot();
+        for (const key of REVISIONS) {
+          if (snapshot[key] !== after[key]) {
+            throw failure('比較中に既存モデルが変更されました。再実行してください',409);
+          }
+        }
+        if (companion.revision !== (await companionStore.read()).revision) {
+          throw failure('比較中に相棒が変更されました。再実行してください',409);
+        }
+        for (const id of selected) {
+          const latest = await trainedVersion(id);
+          const previous = versions.get(id);
+          if (latest?.version_id !== id ||
+              latest?.parameters_sha256 !== previous.parameters_sha256 ||
+              latest?.source_draft_id !== previous.source_draft_id) {
+            throw failure('比較中に学習版が変更されました。再実行してください',409);
+          }
+        }
+        return json(res,200,makeFairComparison(plan,choices,metadata));
+      }
       if (path === '/api/training/complete') {
         if (names !== 'expected_growth_revision|ticket' ||
             typeof payload.ticket !== 'string' ||
