@@ -1,0 +1,12 @@
+{
+  "name": "creature-lab-game-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run typecheck && node --test ../mcp/tests/game-runtime.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
