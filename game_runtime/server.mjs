@@ -10,6 +10,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
+import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
@@ -160,7 +161,9 @@ async function getBody(req) {
 }
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
-                                  predict = pythonPredict} = {}) {
+                                  predict = pythonPredict,
+                                  appearanceCatalog = readAppearanceCatalog,
+                                  appearanceImage = readAppearanceImage} = {}) {
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
   const tickets = new Map();
@@ -194,6 +197,33 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     if (req.method === 'GET' && path === '/api/growth') {
       try {return json(res, 200, await store.public());}
       catch {return json(res, 503, {error:'育成情報を読み取れません'});}
+    }
+    // Read-only appearance bridge: the browser never requests the Python origin directly.
+    if (req.method === 'GET' && path === '/api/appearance/drafts') {
+      try { return json(res, 200, await appearanceCatalog()); }
+      catch (error) {
+        return json(res, [404, 413].includes(error?.status) ? error.status : 503,
+          {error: '保存キャラの一覧を取得できません'});
+      }
+    }
+    if (req.method === 'GET' && path.startsWith('/api/appearance/image/')) {
+      const id = path.slice('/api/appearance/image/'.length);
+      if (!isValidAppearanceId(id)) return json(res, 404, {error:'イラストが見つかりません'});
+      try {
+        const {mime, bytes} = await appearanceImage(id);
+        if (!['image/png','image/jpeg','image/webp'].includes(mime) ||
+            !Buffer.isBuffer(bytes) || bytes.length > 1048576) {
+          return json(res, 415, {error:'イラストの形式が不正です'});
+        }
+        res.writeHead(200, {'Content-Type':mime, 'Content-Length':bytes.length,
+          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+          'Content-Security-Policy':"default-src 'none'; sandbox",
+          'X-Frame-Options':'DENY'});
+        return res.end(bytes);
+      } catch (error) {
+        return json(res, error?.status === 404 ? 404 : error?.status === 415 ? 415 : 503,
+          {error: 'イラストを読み込めません'});
+      }
     }
     if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs')) {
       const script = path === '/demo.mjs';
