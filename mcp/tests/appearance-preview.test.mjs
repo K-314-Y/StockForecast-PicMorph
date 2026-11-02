@@ -104,8 +104,8 @@ async function mount(drafts=catalog().drafts) {
   await new Promise(resolve=>setImmediate(resolve));
   return {get:$,calls,click:async(id,evt='click')=>$(id).click(evt)};
 }
-test('UI keeps visual separate from fixed brain, falls back on deleted image, never contacts Python directly',async()=>{
-  assert.match(html,/予測：標準モデル mine（固定）/);
+test('UI keeps draft visuals separate from saved companion rules, falls back on deleted image, never contacts Python directly',async()=>{
+  assert.match(html,/予測：標準モデル mine（未作成）/);
   assert.match(html,/DRAFTの予測ルールは未適用/);
   const {get,click,calls}=await mount();
   await click('loadSkins');
@@ -116,11 +116,11 @@ test('UI keeps visual separate from fixed brain, falls back on deleted image, ne
   assert.equal(get('chibi').hidden,false,'old sprite remains until image onload');
   get('portrait').onload();
   assert.equal(get('chibi').hidden,true);
-  assert.match(get('skinStatus').textContent,/予測は標準モデルmine/);
+  assert.match(get('skinStatus').textContent,/予測は保存済み相棒のルール/);
   get('portrait').onerror();
   assert.equal(get('chibi').hidden,false);
   assert.match(get('skinStatus').textContent,/初期外見に戻しました/);
-  assert.deepEqual(calls,['/api/growth','/api/appearance/drafts']);
+  assert.deepEqual(calls,['/api/growth','/api/companion','/api/appearance/drafts']);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
 });
 test('empty catalog and missing art keep default cosmetic avatar',async()=>{

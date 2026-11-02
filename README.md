@@ -501,3 +501,16 @@ V6のOfficial/Freeze/モデルには変更を加えない。
 ネットワーク越しの入力・不正データを無条件で信用する機能ではない。
 従来の実行時の配分・モデル・シグナル検証は残す。
 型がそろった次の段階で、画面側・ゲーム処理側を徐々にTypeScript化する。
+
+### Sprint29：私の相棒を作る（Nodeゲーム専用）
+
+`/game` の「私の相棒を作る」では、名前・髪色・服色・重視する予測方法・資金使用率を自分で指定できます。これは **自分で設計した予測ルールのゲーム練習用キャラ** です。編集するたびカスタムchibiを一時プレビューし、「この相棒を保存する」で確定した設定だけを次の架空12日間の練習に反映します。名前は1〜16 Unicode文字、HTMLタグも文字として表示します。色は `#rrggbb`、資金使用率は5〜100%の5刻みです。
+
+保存した得意方法（`trend` / `momentum` / `reversion` / `volatility`）だけを mine の `plugin_weights` で100、他を0にし、資金使用率を `risk_fraction` に適用して Python の予測を呼び出します。上昇判断時にその割合の仮想資金を使い、残りは現金待機します。既存の装備感度は併用し、元の `base_model` と owl・turtle の意味は維持します。未作成時は従来の標準モデルで動きます。色と読み込みDRAFT画像は外見だけです。画像表示からカスタムchibiに戻せます。
+
+- `GET /api/companion`：`{revision, created, companion}`。未作成時はrevision 0とdefaultを返し、GETだけでファイルは作りません。
+- `POST /api/companion`：`{expected_revision, companion: {name, hair_color, clothing_color, approach, risk_percent}}` のみ。古いrevisionは409、不正入力は400。同一Nodeプロセス内で保存を直列化し、専用ファイルへ原子的に保存します。
+- 保存先はignoredの `local_state/node_game/companion.json`。旧 `growth.json`、Python版保存データ、V6別repoは変更しません。テストは一時ディレクトリを使います。
+- `/api/practice` は引き続き配分だけを受け取り、ブラウザから予測・利益を受け取りません。結果の `companion_name` / `companion_revision` / `companion_created` / `approach` / `risk_percent` と実効モデル識別情報で保存設定の適用を確認できます。未作成時のapproachはnullです。計算中に相棒revisionが変わると409で結果と受取券を返しません。
+
+**V6の学習済みOfficialに一切影響しません。** 相棒設定による予測と損益は架空相場のゲーム練習専用で、実相場の本番実績には混ぜません。モデルの発注・自動売買も行いません。外部ユーザー認証や複数ユーザー・複数Nodeプロセスの同時書込みには未対応です。今後の課題は、複数相棒の管理、判断理由の説明、ユーザー単位の認証と保存分離です。
