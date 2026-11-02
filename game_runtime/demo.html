@@ -41,7 +41,7 @@ button,select{font:inherit}button{border:0;border-radius:12px;padding:12px 16px;
 .growth{display:grid;grid-template-columns:minmax(180px,1fr) minmax(190px,1fr);gap:15px;align-items:start}
 select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;border-radius:10px;padding:11px;min-height:44px}
 .gearline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.details{margin-top:16px}.details summary{cursor:pointer}
-.appearance-controls label{display:block;margin:12px 0 6px;font-weight:650}.appearance-controls a{color:#b1d9ff}
+.appearance-controls label,.brain-controls label{display:block;margin:12px 0 6px;font-weight:650}.appearance-controls a{color:#b1d9ff}
 [hidden]{display:none!important}
 @media(max-width:680px){main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
 @media(prefers-reduced-motion:reduce){.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
@@ -68,7 +68,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <p class="notice">架空相場・12日間・仮想コイン・換金不可</p>
   <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
   <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
-  <p id="brainStatus" class="brain-note"><strong>予測：標準モデル mine（固定）</strong> · 保存したDRAFTの予測ルールは未適用。外見を変えても予測結果は変わりません。</p>
+  <p id="brainStatus" class="brain-note"><strong>予測：標準モデル mine（固定）</strong> · 保存したDRAFTの予測ルールは未適用。学習済み練習版は別途選択可能です。外見を変えても予測結果は変わりません。</p>
   <details class="appearance-controls">
    <summary>🎨 保存したキャラの外見を選ぶ</summary>
    <p>ゲーム画面に外見だけ表示。未学習のキャラ下書きが売買判断するわけではありません。選択はページを閉じると解除されます。</p>
@@ -78,6 +78,14 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <p id="skinStatus" role="status" aria-live="polite">保存済みキャラを確認する場合は一覧を読み込んでください。</p>
    <a href="http://127.0.0.1:8884/create">別画面でキャラを制作する（Python版）</a>
   </details>
+  <details class="appearance-controls brain-controls">
+   <summary>🧠 練習に使う予測モデルを選ぶ</summary>
+   <p>学習済み練習版は、固定の架空40点で作られたモデルです。実際の株価に対する精度は未検証で、対戦には使えません。</p>
+   <button id="loadBrains" type="button">保存した練習版を確認する</button>
+   <label for="brainSelect">次の練習で使用する予測モデル</label>
+   <select id="brainSelect" aria-label="練習で使う予測モデル"><option value="">標準モデル mine</option></select>
+   <p id="brainNotice" role="status" aria-live="polite">まだ標準モデルを使用します。</p>
+  </details>
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
 </section>
@@ -85,7 +93,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <span class="eyebrow">STEP 02 / ふり返り</span><h2 id="resultTitle">12日間の練習結果</h2>
  <div class="statgrid"><div class="stat">最終コイン<strong id="final">--</strong></div><div class="stat">仮想損益<strong id="profit">--</strong></div><div class="stat">最大下落率<strong id="drawdown">--</strong></div></div>
  <div class="review">
-  <h3>日ごとに標準モデルの判断を見よう</h3><p class="progress" id="dayCount"></p>
+  <h3 id="modelJudgmentHeading">日ごとに標準モデルの判断を見よう</h3><p id="brainResult" class="brain-note">実行に使ったモデル：標準モデル mine</p><details id="brainProof" hidden><summary>実行モデルの検証情報</summary><p id="brainProofText" class="progress"></p></details><p class="progress" id="dayCount"></p>
   <div id="days" class="steps" aria-label="12日間の練習ステップ"></div>
   <p id="dayDetail" role="status" aria-live="polite"></p>
   <button id="next" type="button">次の日を見る</button>
@@ -103,6 +111,6 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <small>装備は次の練習の予測判断に影響します。外見と学習済みモデルは別管理です。XPはNode専用保存先を使用します。</small>
 </section>
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
-<p>JavaScriptゲームエンジン実験版です。画面上のキャラは外見だけで、現在の頭脳は標準モデルmineです。架空12ステップの練習結果だけを扱います。実相場データの未来情報を予測した成績ではありません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
+<p>JavaScriptゲームエンジン実験版です。画面上のキャラは独立した外見で、予測の頭脳は「標準モデルmine」または「保存した学習済み練習版」から選択できます。架空12ステップの練習結果だけを扱います。実相場データの未来情報を予測した成績ではありません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
 </main><script type="module" src="/demo.mjs"></script></body></html>
