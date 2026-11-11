@@ -84,14 +84,34 @@ function buildAvatar(fighter){
   const bangs=document.createElement('div');bangs.className='av-bangs';
   const ribbon=document.createElement('div');ribbon.className='av-ribbon';
   root.append(hair,outfit,face,bangs,ribbon);
-  if(fighter.kind==='trained_practice_only' &&
-     /^bp_[a-f0-9]{32}$/.test(fighter.source_draft_id||'')){
+  // Only the user's own authored model can wear their uploaded artwork.
+  // A trained version uses its own blueprint image, never the global artwork.
+  const ownArtwork=fighter.slot==='mine' && fighter.choice==='self' &&
+    (fighter.kind==='authored_companion' || fighter.kind==='standard_mine');
+  const trainedArtwork=fighter.kind==='trained_practice_only' &&
+    /^bp_[a-f0-9]{32}$/.test(fighter.source_draft_id||'');
+  if(ownArtwork || trainedArtwork){
     const portrait=document.createElement('img');
     portrait.className='av-image';
-    portrait.alt='学習版の元キャラに保存したイラスト';
+    // The parent already has role=img and an accessible name.
+    portrait.alt='';
     portrait.loading='lazy';
-    portrait.onerror=()=>{portrait.remove();};
-    portrait.src='/api/appearance/image/'+fighter.source_draft_id;
+    portrait.decoding='async';
+    portrait.width=106;
+    portrait.height=146;
+    portrait.onload=()=>{
+      root.dataset.artwork='loaded';
+      root.setAttribute('aria-label',fighter.name+'。'+persona.label+
+        'の予測モデル。保存したイラストを表示中');
+    };
+    portrait.onerror=()=>{
+      portrait.remove();
+      root.dataset.artwork='fallback';
+      root.setAttribute('aria-label',fighter.name+'。'+persona.label+
+        'の予測モデル。イラスト未登録のため簡易2Dキャラを表示中');
+    };
+    portrait.src=ownArtwork ? '/api/artwork/image/base' :
+      '/api/appearance/image/'+fighter.source_draft_id;
     root.append(portrait);
   }
   return root;
