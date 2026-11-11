@@ -289,3 +289,9 @@ port-forwarding workaround or put secrets in Git.
 Official docs:
 - https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
 - https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+
+Security note: this branch also updates its **own** MCP workspace dependency
+to `zod@4.6.7` to address the high-severity validation DoS advisory
+`GHSA-mrhx-c7xc-m3w5`. Verified against all Node and Python regression
+tests and `npm audit --audit-level=high` (zero findings). The original
+`main` workspace and its running server were not modified or restarted.
