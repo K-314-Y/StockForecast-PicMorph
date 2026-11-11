@@ -65,6 +65,15 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #artworkBase{z-index:0}#artworkOutfit{z-index:1}#artworkFace{z-index:2}#artworkHair{z-index:3}
 .artwork-slot{border-top:1px solid var(--line);padding:10px 0}.artwork-slot label{display:block;font-weight:650}
 .artwork-slot input{display:block;width:100%;max-width:100%;margin:8px 0}.artwork-slot .actions{gap:6px}
+.crop-controls{margin:15px 0;padding:12px;border:1px solid #526a83;border-radius:12px}
+.crop-controls summary{cursor:pointer;font-weight:700}
+.crop-workspace{display:flex;justify-content:center;padding:12px 0;background:#14243a;border-radius:12px;overflow:hidden}
+.crop-workspace canvas:not([hidden]){display:block;max-width:100%;height:auto;touch-action:none;cursor:crosshair;border:1px solid #6684ac}
+.crop-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.crop-grid label{display:grid;gap:5px;font-size:13px}
+.crop-grid input,.crop-grid select{width:100%;min-width:0;max-width:100%;min-height:43px;box-sizing:border-box;color:#fff;background:#111c31;border:1px solid #6c809c;border-radius:9px;padding:8px}
+.crop-grid input:focus-visible,.crop-workspace canvas:focus-visible{outline:3px solid #ffdf96;outline-offset:2px}
+@media(max-width:640px){.crop-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 #skinSelect{max-width:100%;width:100%;margin:8px 0}.appearance-controls{margin:14px 0}.appearance-controls summary{cursor:pointer;font-weight:700}.brain-note{padding:9px 12px;background:#121d33;border-left:3px solid #ffdc94;border-radius:0 9px 9px 0;font-size:13px}
 button,select{font:inherit}button{border:0;border-radius:12px;padding:12px 16px;font-weight:750;background:#3b5274;color:white;cursor:pointer;min-height:44px}button.primary{background:var(--mint);color:#12303b}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}
 .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:16px 0}.notice{border-left:3px solid #a1f1d1;padding:8px 13px;background:#182f43;font-size:13px;border-radius:0 8px 8px 0}
@@ -190,6 +199,22 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <label for="artworkFileOutfit">服（outfit・任意）</label><input id="artworkFileOutfit" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoOutfit">
     <small id="artworkInfoOutfit">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
    </div>
+   <details id="cropControls" class="crop-controls">
+    <summary>✂️ 完成イラストから手動でパーツを切り出す</summary>
+    <p class="creator-note">好きな範囲をドラッグするか、下のX・Y・幅・高さを数字で指定できます。<strong>四角形の外側だけ</strong>が透明になります。範囲の中にある背景は消えず、髪などを自動判別しません。元の完成イラストは変更しません。</p>
+    <div class="actions"><button id="cropLoad" type="button">完成イラストを編集台に読み込む</button><button id="cropReset" type="button" disabled>選択を解除</button></div>
+    <p id="cropCanvasSize" class="creator-note">完成イラストを選択または保存してから読み込んでください。</p>
+    <div class="crop-workspace"><canvas id="cropCanvas" width="420" height="300" aria-label="切り出す範囲をドラッグして選択する編集画像" hidden></canvas></div>
+    <div class="crop-grid">
+     <label for="cropX">左 X (px)<input id="cropX" type="number" step="1" min="0" value="0" disabled></label>
+     <label for="cropY">上 Y (px)<input id="cropY" type="number" step="1" min="0" value="0" disabled></label>
+     <label for="cropWidth">幅 (px)<input id="cropWidth" type="number" step="1" min="0" value="0" disabled></label>
+     <label for="cropHeight">高さ (px)<input id="cropHeight" type="number" step="1" min="0" value="0" disabled></label>
+     <label for="cropTarget">反映先<select id="cropTarget" disabled><option value="hair">髪</option><option value="face">顔</option><option value="outfit">服</option></select></label>
+    </div>
+    <div class="actions"><button id="cropCreate" type="button" class="primary" disabled>未保存レイヤーを作る</button><a id="cropDownload" hidden>生成したPNGをダウンロード</a></div>
+    <p id="cropStatus" role="status" aria-live="polite">編集台は未読込です。透明PNGはSAVEするまでは保存されません。</p>
+   </details>
    <div class="actions"><button id="showArtwork" type="button">自分のイラストに切り替える</button><button id="showChibi" type="button">カスタムchibiに切り替える</button><button id="reloadArtwork" type="button">未保存を破棄して再取得</button></div>
    <p id="artworkStatus" role="status" aria-live="polite">イラストの保存状況を読み込んでいます…</p>
   </details>
@@ -258,4 +283,4 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
 <p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
-</main><script type="module" src="/demo.mjs"></script><script type="module" src="/arena-ui.mjs"></script></body></html>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script></body></html>
