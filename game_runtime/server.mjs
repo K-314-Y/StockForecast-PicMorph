@@ -22,6 +22,7 @@ const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
+const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
@@ -327,9 +328,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs')) {
-      const script = path === '/demo.mjs' || path === '/arena-ui.mjs';
-      const body = await readFile(path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs')) {
+      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs';
+      const body = await readFile(path === '/crop-editor.mjs' ? CROP_JS :
+        path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
