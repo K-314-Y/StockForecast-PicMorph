@@ -295,3 +295,35 @@ to `zod@4.6.7` to address the high-severity validation DoS advisory
 `GHSA-mrhx-c7xc-m3w5`. Verified against all Node and Python regression
 tests and `npm audit --audit-level=high` (zero findings). The original
 `main` workspace and its running server were not modified or restarted.
+
+### Local plugin packaging + repeatable one-command verification (November 2026)
+
+This branch now includes a portable root `plugin.json`, `mcp.json`
+(`stdio` launch of the existing private 10-tool bridge), and a focused
+`skills/creature-lab/SKILL.md`. These follow the documented Agent Plugins
+local / desktop layout; the package is **not yet registered in ChatGPT**.
+
+Run all isolated checks on Linux, including a real MCP Inspector CLI handshake:
+
+```bash
+cd '/home/yugo314/ドキュメント/14_予測クリーチャー_chatgpt-plugin'
+bash scripts/test-plugin.sh
+```
+
+The script checks manifest metadata, runs Node tests without the older
+`mcp.test.mjs` test that can affect the legacy state, checks TypeScript,
+runs Python unit tests, audits dependencies, and calls MCP Inspector CLI
+`tools/list` against the `stdio` service. It doesn't modify live
+companion, image, XP, or frozen V6 data.
+
+GitHub Actions definition: `.github/workflows/creature-lab-plugin-check.yml`.
+It can run automatically on branch pushes/PRs **after the branch is pushed**.
+The current creation does not push it, register the server, install a
+ChatGPT plugin, or approve any account permissions.
+
+A supported ChatGPT account must **separately** register a private Secure
+MCP Tunnel or authenticated HTTPS connection (user action), receive its
+`plugin_asdk_app...` identity, and perform an end-to-end ChatGPT tool
+selection/confirmation test. A local-only stdio package can be used for
+local development and supported desktop-only surfaces, not as a substitute
+for a registered cloud-side connection.

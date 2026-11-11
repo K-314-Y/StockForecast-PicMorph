@@ -1,0 +1,26 @@
+/** Offline package contract checks; safe to run before enabling any plugin. */
+import assert from 'node:assert/strict';
+import {readFile,stat} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {resolve,dirname,join} from 'node:path';
+const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const json=async path=>JSON.parse(await readFile(join(root,path),'utf8'));
+const plugin=await json('plugin.json');
+assert.equal(plugin.$schema,'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json');
+assert.equal(plugin.name,'creature-lab');
+assert.match(plugin.version,/^\d+\.\d+\.\d+$/);
+assert.ok(plugin.extensions['com.openai'].interface.defaultPrompt.length>=3);
+const server=await json('mcp.json');
+assert.equal(server.$schema,'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json');
+assert.deepEqual(Object.keys(server.mcpServers),['creature-lab']);
+const config=server.mcpServers['creature-lab'];
+assert.equal(config.type,'stdio');
+assert.equal(config.command,'node');
+assert.deepEqual(config.args,['${PLUGIN_ROOT}/mcp/companion-stdio.mjs']);
+assert.equal(config.cwd,'${PLUGIN_ROOT}');
+assert.ok((await stat(join(root,'mcp/companion-stdio.mjs'))).isFile());
+const skill=await readFile(join(root,'skills/creature-lab/SKILL.md'),'utf8');
+assert.ok(skill.startsWith('---\nname: creature-lab\n'));
+assert.match(skill,/synthetic game outcomes/);
+assert.doesNotMatch(JSON.stringify(server),/tunnel_id|api_key|sk-proj|ngrok/i);
+console.log('PASS portable plugin package: manifest + MCP stdio + skill + privacy constraints');

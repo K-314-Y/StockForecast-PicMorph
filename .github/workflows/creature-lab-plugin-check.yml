@@ -1,0 +1,35 @@
+name: Creature Lab private plugin checks
+on:
+  push:
+    branches: ['feat/chatgpt-plugin-images-v1']
+  pull_request:
+    paths:
+      - 'mcp/**'
+      - 'game_runtime/**'
+      - 'plugin.json'
+      - 'mcp.json'
+      - 'skills/creature-lab/**'
+      - 'scripts/test-plugin.sh'
+      - 'scripts/verify-plugin-*.mjs'
+      - '.github/workflows/creature-lab-plugin-check.yml'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+          cache-dependency-path: |
+            mcp/package-lock.json
+            game_runtime/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --prefix mcp --ignore-scripts
+      - run: npm ci --prefix game_runtime --ignore-scripts
+      - run: python -m pip install 'Pillow>=11,<13'
+      - run: bash scripts/test-plugin.sh
