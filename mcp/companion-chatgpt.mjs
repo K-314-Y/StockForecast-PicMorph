@@ -13,11 +13,13 @@ import {resolve} from 'node:path';
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {z} from 'zod';
+import {validateArtworkImage,MAX_ARTWORK_FILE} from '../game_runtime/artwork.mjs';
 
 export const CHATGPT_MCP_PORT = 8896;
 const API = 'http://127.0.0.1:8890';
 const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 65536;
+const ARTWORK_READER_LIMIT = MAX_ARTWORK_FILE + 2048;
 const approaches = ['trend','momentum','reversion','volatility'];
 const modelLabels = {trend:'流れ',momentum:'勢い',reversion:'反転',volatility:'値動きの大きさ'};
 const draftSchema = z.object({
@@ -54,6 +56,42 @@ async function jsonFromGame(apiBase, path, body) {
   }
   return value;
 }
+/** Read at most one image from the trusted fixed Node URL; no arbitrary URI input. */
+async function imageFromGame(apiBase,slot) {
+  const response=await fetch(apiBase+'/api/artwork/image/'+slot,{
+    headers:{Accept:'image/png, image/jpeg, image/webp'},
+    redirect:'error',signal:AbortSignal.timeout(4500),
+  });
+  if (!response.ok) {
+    if(response.status===404) throw Error('この画像スロットはまだ保存されていません');
+    throw Error('画像の取得に失敗しました: HTTP '+response.status);
+  }
+  const mime=response.headers.get('content-type')?.split(';')[0]?.trim();
+  if (!['image/png','image/jpeg','image/webp'].includes(mime) ||
+      (slot!=='base' && mime==='image/jpeg')) throw Error('未対応の画像形式です');
+  const declared=response.headers.get('content-length');
+  if(declared!==null && (!/^\d+$/.test(declared) || Number(declared)>ARTWORK_READER_LIMIT)) {
+    await response.body?.cancel();
+    throw Error('画像データが大きすぎます');
+  }
+  const reader=response.body?.getReader();
+  if(!reader) throw Error('画像の読み込みストリームがありません');
+  const chunks=[];
+  let size=0;
+  try {
+    while(true) {
+      const {done,value}=await reader.read();
+      if(done)break;
+      size+=value.byteLength;
+      if(size>MAX_ARTWORK_FILE)throw Error('画像は450KBまでです');
+      chunks.push(Buffer.from(value));
+    }
+  }finally{await reader.cancel().catch(()=>{});}
+  const data=Buffer.concat(chunks,size).toString('base64');
+  validateArtworkImage(slot,{mime,base64:data}); // MIME and magic bytes are checked.
+  return {mime,size,data};
+}
+
 function errorResult(error) {
   return {
     isError:true,
@@ -63,9 +101,9 @@ function errorResult(error) {
 
 export function makeCompanionChatGptMcp({apiBase=API}={}) {
   const server = new McpServer(
-    {name:'creature-lab-companion',version:'1.2.0'},
+    {name:'creature-lab-companion',version:'1.3.0'},
     {instructions:
-      'ユーザー自身がゲーム用相棒を設計する。まず get_my_companion で現在の設定を取得し、preview_my_companion で未保存の案を架空相場で試す。保存意図を確認してから save_my_companion で保存する。学習済みキャラは list_my_trained_brains で取得し、試遊時にIDを選べる。プレビューにXP・保存・実取引なし。V6変更・画像の自動作画もできない。'}
+      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はユーザーと相談する推測であり自動認識・自動分割ではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。実取引・V6変更・XP操作なし。'}
   );
   server.registerTool('get_my_companion',{
     title:'Creature Lab: 自分の相棒を確認',
@@ -195,6 +233,47 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       return {content:[{type:'text',text:'保存済みの育成XP・装備を読み取りました。'}],structuredContent:{growth}};
     }catch(e){return errorResult(e);}
   });
+  server.registerTool('get_my_character_sheet',{
+    title:'Creature Lab: キャラ制作の現在地を一覧で確認',
+    description:'自分の相棒の予測設定、見た目のパーツ、アップロード済みの画像の有無をまとめて取得する。読み取りだけ。画像本体は view_my_artwork_image で個別取得する。',
+    inputSchema:{},
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async()=>{
+    try {
+      const [companion,look,artwork]=await Promise.all([
+        jsonFromGame(apiBase,'/api/companion'),
+        jsonFromGame(apiBase,'/api/looks'),
+        jsonFromGame(apiBase,'/api/artwork'),
+      ]);
+      return {
+        content:[{type:'text',text:'現在の自作キャラの設定・外見・画像登録状況をまとめました。画像をChatGPTで確認するときは view_my_artwork_image を呼び、本人が決めた内容のみ保存してください。未保存の内容を自動確定しません。'}],
+        structuredContent:{companion,look,artwork,read_only:true,
+          preview_only_until_explicit_save:true,real_market_trading:false},
+      };
+    }catch(e){return errorResult(e);}
+  });
+  server.registerTool('view_my_artwork_image',{
+    title:'Creature Lab: 保存済みの自作イラストをChatGPTで見る',
+    description:'Nodeゲームに保存された完成イラスト（base）または髪・顔・服のレイヤーを画像としてChatGPTへ返す。AIの画像理解で外見を相談する用途。ユーザーの絵を認識して自動分割したわけではない。保存やアップロードは行わない。',
+    inputSchema:z.object({
+      slot:z.enum(['base','hair','face','outfit']).describe(
+        'base=完成イラスト、hair=髪、face=顔、outfit=服。保存済みスロットのみ表示')
+    }).strict(),
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async({slot})=>{
+    try {
+      const image=await imageFromGame(apiBase,slot);
+      const labels={base:'完成イラスト',hair:'髪レイヤー',face:'顔レイヤー',outfit:'服レイヤー'};
+      return {
+        content:[
+          {type:'text',text:labels[slot]+'を表示します。画像からの提案は推測であり、自動的な正しい部位分割ではありません。書き込みやユーザー以外への共有は行っていません。'},
+          {type:'image',mimeType:image.mime,data:image.data},
+        ],
+        structuredContent:{slot,mime:image.mime,bytes:image.size,source:'user_saved_artwork',
+          read_only:true,automatic_segmentation:false},
+      };
+    }catch(e){return errorResult(e);}
+  });
   server.registerTool('get_my_artwork',{
     title:'Creature Lab: 自分のイラストの保存状況を確認',
     description:'完成イラスト・髪・顔・服の保存状況（revision、存在、MIME、サイズ）だけを読み取る。画像バイトはChatGPTに送らない。ChatGPTからの画像バイナリ転送は未実装。画像はローカルゲーム画面のファイル入力で選び、SAVEする。自動切り抜きは行わない。',
@@ -231,7 +310,7 @@ export function createCompanionChatGptHttpServer(options={}) {
     const url=new URL(req.url ?? '/', 'http://localhost');
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
-        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:8}));
+        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:10}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {

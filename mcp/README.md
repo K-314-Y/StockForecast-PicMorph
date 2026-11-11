@@ -244,3 +244,48 @@ ChatGPT MCPに読み取り専用 `get_my_artwork` を追加（合計8ツール�
 アップロード自体はLinuxのローカルNodeゲーム `127.0.0.1:8890/game` で行う。
 `/api/artwork` は元画像を独立保存し、予測・XP・旧Python・V6には影響しない。
 透過パーツは別途用意する必要がある。現状は自動切り抜き・画像のChatGPT側アップロードには非対応。
+
+### Independent branch: ChatGPT image-aware creator tools
+
+Branch: `feat/chatgpt-plugin-images-v1`; **not merged into main and not installed
+in the ChatGPT product**. Local tests use disposable files and an isolated
+Node game so no user artwork, XP, companion or V6 data is changed.
+
+Two new MCP tools are available on this branch (10 total):
+
+- `get_my_character_sheet` (read-only): one call returns saved companion,
+  cosmetic chibi parts and artwork metadata. Useful before discussing edits.
+- `view_my_artwork_image` (read-only): `{slot:"base"|"hair"|"face"|"outfit"}`
+  returns the **actual saved PNG/JPEG/WebP** as a standard MCP `image`
+  content item so ChatGPT can visually inspect the illustration. Image input is
+  only read from the fixed local Node game API. Max 450 KB, strict MIME + binary
+  signature checks, no arbitrary image URLs, no file system, no upload, no XP,
+  and no modifications. Viewing an image is not automatically recognizing or
+  cutting its hair/face/clothes. ChatGPT's visual analysis may be mistaken.
+
+Local test:
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー_chatgpt-plugin
+(cd mcp && npm test)
+node mcp/companion-chatgpt.mjs
+```
+
+The CLI will bind to `127.0.0.1:8896` only when that port is free; the
+existing server already uses that port. To test while the existing server
+is running, use an isolated ephemeral port with
+`createCompanionChatGptHttpServer({apiBase:gameUrl})`, as tests do.
+The browser game must already have a saved artwork slot for image retrieval.
+
+**Actual ChatGPT plugin installation is not completed.** The published
+ChatGPT documentation (checked November 11, 2026) says custom MCP server
+creation is supported on Business and Enterprise/Edu, subject to workspace
+permissions, rather than being guaranteed on individual Plus. A local
+`127.0.0.1` endpoint is unreachable from ChatGPT. In a supported workspace,
+use **Plugins → + → Add custom MCP server** with a Secure MCP Tunnel or an
+**authenticated public HTTPS** endpoint. Do not use a public unauthenticated
+port-forwarding workaround or put secrets in Git.
+
+Official docs:
+- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
+- https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
