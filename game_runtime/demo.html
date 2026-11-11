@@ -119,6 +119,25 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 [hidden]{display:none!important}
 @media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
 @media(prefers-reduced-motion:reduce){.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
+.lab-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;margin:12px 0}
+.lab-grid label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:650}
+.lab-grid input{box-sizing:border-box;width:100%;min-width:0;min-height:48px;border:1px solid #748db4;border-radius:9px;background:#101a2f;color:#fff;padding:10px;font:inherit;font-size:max(1rem,1em)}
+#modelLabSection button{min-height:48px}
+.lab-grid input:focus-visible{outline:3px solid #ffdf96;outline-offset:2px}
+.lab-grid input[aria-invalid="true"]{border-color:#ffb1aa}
+.lab-hint{font-size:13px;color:#cbdaed;line-height:1.6;margin:7px 0}
+.lab-fieldset{min-width:0;border:1px solid #4b6381;border-radius:12px;margin:16px 0;padding:12px}
+.lab-fieldset legend{font-weight:700;padding:0 5px}
+.lab-advanced{margin:16px 0;border:1px solid #465e79;border-radius:11px;padding:12px}
+.lab-advanced summary{font-weight:700;cursor:pointer}
+.lab-score-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;margin:14px 0}
+.lab-score-grid article{border-radius:12px;border:1px solid #415878;background:#12223b;padding:12px}
+.lab-score-grid h4{margin:0 0 8px}.lab-score-grid p{margin:0;line-height:1.8}
+.lab-table-container{max-width:100%;overflow-x:auto}
+.lab-table-container table{width:100%;border-collapse:collapse;font-size:13px;min-width:340px}
+.lab-table-container th,.lab-table-container td{border-bottom:1px solid #526a86;text-align:left;padding:9px}
+.lab-table-container th{font-weight:700}
+.lab-table-container tr[data-different="true"]{background:#283851}
 </style>
 </head>
 <body><main>
@@ -239,6 +258,68 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
 </section>
+<section class="panel" id="modelLabSection" aria-labelledby="modelLabTitle">
+ <span class="eyebrow">MODEL LAB / 変数の実験室</span><h2 id="modelLabTitle">相棒の予測ルールを調整して試す</h2>
+ <p>基準の相棒と、数字を変えた相棒が<strong>同じ架空12日間・同じ1万コイン・同じ手数料</strong>でどう動くか比較します。この画面では学習も保存もXP取得も行いません。</p>
+ <p class="notice">株価予測V7で扱っている「予測」と「資金管理」を区別しました。短期・長期や分析の重みは予測判断、仮想投資比率は資金の使い方です。固定12日間で勝っても実力の証明にはなりません。</p>
+ <div class="actions"><button id="labLoad" type="button">今の相棒から変数を読み込む</button><span id="labBasis" class="arena-note">まだ読み込んでいません</span></div>
+ <form id="labForm" aria-labelledby="modelLabTitle" novalidate>
+  <div class="lab-grid">
+   <label for="labFast">短期：直近何日を見るか
+    <input id="labFast" name="fast_window" type="number" min="2" max="19" step="1" required aria-describedby="labWindowHint"></label>
+   <label for="labSlow">長期：何日間の流れを見るか
+    <input id="labSlow" name="slow_window" type="number" min="3" max="20" step="1" required aria-describedby="labWindowHint"></label>
+   <label for="labRisk">仮想投資比率（％）
+    <input id="labRisk" name="risk_percent" type="number" min="5" max="100" step="1" required aria-describedby="labRiskHint"></label>
+  </div>
+  <p class="lab-hint" id="labWindowHint">短期は長期より小さく。短いほど直近に反応しやすくなりますが、正確になるとは限りません。</p>
+  <p class="lab-hint" id="labRiskHint">投資比率は予測の確率を変えず、仮想資金の使用量だけ変えます。</p>
+  <fieldset class="lab-fieldset">
+   <legend>分析パーツの配分（合計100％）</legend>
+   <p class="lab-hint">複数の分析方法を組み合わせます。配分の合計は100％にしてください。</p>
+   <div class="lab-grid lab-weights">
+    <label for="labWeightTrend">流れを追う
+     <input id="labWeightTrend" name="weight_trend" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightMomentum">勢いを追う
+     <input id="labWeightMomentum" name="weight_momentum" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightVolatility">値動きの大きさ
+     <input id="labWeightVolatility" name="weight_volatility" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightReversion">平均への戻り
+     <input id="labWeightReversion" name="weight_reversion" type="number" min="0" max="100" step="1" required></label>
+   </div>
+   <p id="labWeightTotal" class="lab-hint" role="status" aria-live="polite">合計：--</p>
+   <div class="actions">
+    <button id="labPresetTrend" type="button">流れ重視</button>
+    <button id="labPresetReversion" type="button">反転重視</button>
+    <button id="labPresetBalanced" type="button">均等</button>
+   </div>
+  </fieldset>
+  <details class="lab-advanced">
+   <summary>詳細設定：各分析の感度（50〜150）</summary>
+   <p class="lab-hint">100が標準。感度を変えても結果が改善する保証はありません。</p>
+   <div class="lab-grid">
+    <label for="labStrengthTrend">流れの感度<input id="labStrengthTrend" name="strength_trend" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthMomentum">勢いの感度<input id="labStrengthMomentum" name="strength_momentum" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthVolatility">値動きの感度<input id="labStrengthVolatility" name="strength_volatility" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthReversion">反転の感度<input id="labStrengthReversion" name="strength_reversion" type="number" min="50" max="150" step="1" required></label>
+   </div>
+  </details>
+  <div class="actions"><button id="labRun" type="submit" class="primary" disabled>変更前と変更後を比較する（保存しない）</button></div>
+ </form>
+ <p id="labStatus" role="status" aria-live="polite">変数を読み込むと比較できます。</p>
+ <div id="labResult" hidden>
+  <h3>同じ条件での比較結果</h3>
+  <div class="lab-score-grid">
+   <article><h4>変更前</h4><p id="labOriginalSummary"></p></article>
+   <article><h4>変更後</h4><p id="labCandidateSummary"></p></article>
+  </div>
+  <p id="labDifference" class="brain-note"></p>
+  <details class="lab-advanced"><summary>12日間の判断を見比べる</summary>
+   <div id="labDayTable" class="lab-table-container"></div>
+  </details>
+  <p class="arena-note">注意：この比較は固定された架空相場だけです。複数設定を試すほど結果に合わせた調整になりやすく、未知の相場や実際の株価での有効性は検証していません。</p>
+ </div>
+</section>
 <section class="panel" id="arenaSection" aria-labelledby="arenaTitle">
  <span class="eyebrow">MODEL ARENA · 同条件比較</span><h2 id="arenaTitle">3モデルで予測対決</h2>
  <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。装備補正は全員オフ、手数料は同一。こちらの比較ではXPは発生しません。</p>
@@ -283,4 +364,4 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
 <p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
-</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script></body></html>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script></body></html>
