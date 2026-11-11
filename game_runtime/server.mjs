@@ -14,6 +14,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
+import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -22,6 +23,7 @@ const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
+const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
@@ -275,6 +277,20 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       try {return json(res, 200, await store.public());}
       catch {return json(res, 503, {error:'育成情報を読み取れません'});}
     }
+    if (req.method === 'GET' && path === '/api/model-lab/baseline') {
+      try {
+        const snapshot=await loadSnapshot();
+        const companion=await companionStore.read();
+        const base=applyCompanion(withGear(snapshot,null,false),companion).models.mine;
+        return json(res,200,{
+          model:validateLabModel(base),revisions:labRevisions(snapshot,companion),
+          source:companion.created?'authored_companion':'standard_mine',
+          notice:'自分の標準・保存相棒モデルを読み取りました。装備補正は適用しません。実験は保存されません。',
+        });
+      }catch(error){
+        return json(res,error?.status||503,{error:'基準モデルを読み込めません'});
+      }
+    }
     if (req.method === 'GET' && path === '/api/companion') {
       try {return json(res, 200, await companionStore.read());}
       catch {return json(res, 503, {error:'相棒の保存情報を読み取れません'});}
@@ -328,9 +344,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs')) {
-      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs';
-      const body = await readFile(path === '/crop-editor.mjs' ? CROP_JS :
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs')) {
+      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs';
+      const body = await readFile(path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
@@ -339,7 +355,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -353,6 +369,26 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
+      if (path === '/api/model-lab/compare') {
+        if(names!=='candidate|revisions')throw failure('試す変数と読込時の版数だけ指定してください',400);
+        // Reject malformed changes before calling an external predictor.
+        const candidate=validateLabModel(payload.candidate);
+        const expected=validateLabRevisions(payload.revisions);
+        const snapshot=await loadSnapshot();
+        const companion=await companionStore.read();
+        if(!sameLabRevisions(expected,labRevisions(snapshot,companion)))
+          throw failure('実験中に基準モデルが変更されました。再読込してください',409);
+        const baseline=validateLabModel(
+          applyCompanion(withGear(snapshot,null,false),companion).models.mine);
+        // The third slot is an unused protocol placeholder, not a third result.
+        const plan=await predict({base_model:snapshot.state.model,
+          models:{mine:candidate,owl:baseline,turtle:baseline}});
+        const after=await loadSnapshot();
+        const currentCompanion=await companionStore.read();
+        if(!sameLabRevisions(expected,labRevisions(after,currentCompanion)))
+          throw failure('実験中にモデルの版数が変更されました。再読込してください',409);
+        return json(res,200,compareLabPlan(plan,baseline,candidate));
+      }
       if (path === '/api/compare') {
         if (names !== 'contenders') throw failure('比較する3モデルだけ指定してください',400);
         const choices = validateContenders(payload.contenders);
