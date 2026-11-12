@@ -150,16 +150,16 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <span class="eyebrow">EASY MODE · はじめての投資</span>
  <h2 id="simpleHomeTitle">AIにコインを任せてみよう</h2>
  <p class="simple-hint">架空相場の試算です。実際の株式売買や所持コインの増減は行いません。</p>
- <p>練習用の資金 <span class="simple-balance">10,000 C</span></p>
+ <p>練習用の仮想コイン（消費されません） <span class="simple-balance">10,000 C</span></p>
  <form id="quickForm" novalidate>
   <div class="simple-fields">
    <label for="quickModel">① 運用するAIを選択
-    <select id="quickModel" name="model" required><option value="self">自分のAI（無料）</option></select>
+    <select id="quickModel" name="model" required><option value="self">自分のAI（未作成なら標準AI）</option></select>
    </label>
-   <label for="quickAmount">② 任せるコイン額（1〜10,000 C）</label>
+   <label for="quickAmount">② 投資する額を入力（練習用：1〜10,000 C）</label>
    <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError"><button id="quickAll" type="button">全額</button></div>
-   <p id="quickHelp" class="simple-hint">残りのコインは現金として待機。予測AIが株を買わない場合もあります。</p>
-   <p id="quickRemaining" class="simple-hint">現金待機：9,000 C</p>
+   <p id="quickHelp" class="simple-hint">入力した分だけを仮想運用。AIが購入せずに待機する場合もあります。</p>
+   <p id="quickRemaining" class="simple-hint">使わずに残すコイン：9,000 C</p>
    <p id="quickError" class="simple-error" role="status" aria-live="polite"></p>
   </div>
   <button id="quickConfirm" class="primary" type="submit">③ 内容を確認する</button>
