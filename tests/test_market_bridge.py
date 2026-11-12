@@ -9,7 +9,7 @@ from datetime import date, timedelta
 
 from game_runtime.market_bridge import (
     CODES, checked_rows, candidate_windows, generate, load_local,
-    sample_window, fetch_jquants,
+    sample_window, fetch_jquants, load_jquants_key,
 )
 
 
@@ -24,6 +24,44 @@ def simple_model(risk=.35):
 
 
 class HistoricalMarketTests(unittest.TestCase):
+    def setUp(self):
+        # All forecast fixtures must be offline even when V7 has a live key.
+        setting = patch.dict(os.environ, {"CREATURE_MARKET_SOURCE": "local"})
+        setting.start()
+        self.addCleanup(setting.stop)
+
+    def test_credential_override_never_needs_v7_file(self):
+        with patch.dict(os.environ, {"CREATURE_JQUANTS_API_KEY": "dummy-test-key"}):
+            self.assertEqual(load_jquants_key(), "dummy-test-key")
+
+    def test_auto_mode_uses_v7_loader_without_saving_credentials(self):
+        with patch.dict(os.environ, {
+            "CREATURE_MARKET_SOURCE": "auto", "CREATURE_JQUANTS_API_KEY": ""
+        }), patch("game_runtime.market_bridge.load_jquants_key",
+                  return_value="test-key-from-v7") as read_key, \
+             patch("game_runtime.market_bridge.fetch_jquants") as get_remote:
+            get_remote.return_value = {
+                "origin": "JQUANTS_API_V2_CACHE", "adjusted": True,
+                "source": "J-Quants V2 offline test", "warning": "test",
+                "series": {"40050": [
+                    ((date(2025, 1, 1) + timedelta(days=offset)).isoformat(),
+                     100.0 + index, False)
+                    for index, offset in enumerate(
+                        [day for day in range(55)
+                         if (date(2025, 1, 1) + timedelta(days=day)).weekday() < 5][:36])
+                ]}
+            }
+            from game_runtime.market_bridge import generate
+            data = {"base_model": simple_model(),
+                    "models": {slot: simple_model()
+                               for slot in ("mine", "owl", "turtle")},
+                    "selection": {}}
+            # The fixture uses consecutive days; avoids relying on V7's real key.
+            result = generate(data)
+            self.assertEqual(result["source_origin"], "JQUANTS_API_V2_CACHE")
+            read_key.assert_called_once_with()
+            get_remote.assert_called_once_with("test-key-from-v7")
+
     def test_read_only_local_source_random_unique_and_replay(self):
         with TemporaryDirectory() as folder:
             path = Path(folder) / "original_source.json"

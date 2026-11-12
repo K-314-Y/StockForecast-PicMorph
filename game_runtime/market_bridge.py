@@ -84,9 +84,34 @@ def load_local():
     }
 
 
-def fetch_jquants():
+def load_jquants_key():
+    """Reuse V7's existing git-ignored .env loader, never copying the key.
+
+    Environment-only override CREATURE_JQUANTS_API_KEY takes precedence.
+    The V7 loader verifies its .env is ignored by git before reading.
+    Neither repo content nor the credential file is modified.
+    """
+    explicit = os.environ.get("CREATURE_JQUANTS_API_KEY", "").strip()
+    if explicit:
+        return explicit
+    v7_root = ROOT.parent / "13_株価予測"
+    if not v7_root.is_dir():
+        return ""
+    sys.path.insert(0, str(v7_root))
+    try:
+        from research.scanner.jquants_ingest import load_env
+        return load_env()
+    except (RuntimeError, ImportError) as error:
+        if str(error) == "JQUANTS_API_KEY_NOT_SET":
+            return ""
+        raise ValueError("v7_jquants_credential_loader_unavailable") from None
+    finally:
+        sys.path.remove(str(v7_root))
+
+
+def fetch_jquants(key=None):
     """Optional one-code API V2 read, reused from a one-day local cache."""
-    key = os.environ.get("CREATURE_JQUANTS_API_KEY", "").strip()
+    key = (key if key is not None else load_jquants_key())
     if not key:
         raise ValueError("jquants_key_not_configured")
     cache = ROOT / "local_state" / "jquants_daily_v2_creature_cache.json"
@@ -205,7 +230,16 @@ def generate(data):
         raise ValueError("invalid_model_slots")
     models = {slot: model_from_record(data["models"][slot]) for slot in SLOTS}
     base = model_from_record(data["base_model"])
-    source = fetch_jquants() if os.environ.get("CREATURE_JQUANTS_API_KEY") else load_local()
+    mode = os.environ.get("CREATURE_MARKET_SOURCE", "auto").strip().lower()
+    if mode not in ("auto", "local", "jquants"):
+        raise ValueError("invalid_market_source_mode")
+    if mode == "local":
+        source = load_local()
+    else:
+        key = load_jquants_key()
+        if mode == "jquants" and not key:
+            raise ValueError("jquants_key_not_configured")
+        source = fetch_jquants(key) if key else load_local()
     windows = candidate_windows(source)
     wid, code, selected = sample_window(windows, data["selection"])
     # Convert to a 100-based price index using only the final *observed* day.
