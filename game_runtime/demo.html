@@ -304,7 +304,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <label for="labStrengthReversion">反転の感度<input id="labStrengthReversion" name="strength_reversion" type="number" min="50" max="150" step="1" required></label>
    </div>
   </details>
-  <p class="lab-hint">過去株価の取得元：J-Quants API V2（APIキー設定時のみ）またはローカルの2024年履歴。前者は調整済み終値、後者は未調整終値の参考値です。どちらを使ったか結果に表示します。</p>
+  <p class="lab-hint">過去株価の取得元：V7のGit除外済み .env にあるJ-Quants APIキーを読み取り専用で参照します。キーがない場合のみローカルの2024年履歴を使います。APIエラー時は黙って切り替えず取得失敗を通知します。J-Quantsは調整済み終値、ローカル履歴は未調整の参考値です。どちらを使ったか結果に表示します。</p>
   <div class="actions">
    <button id="labMarketRun" type="button" class="primary" disabled>別の過去相場を選んで比較する</button>
    <button id="labMarketReplay" type="button" hidden disabled>同じ過去相場で再検証</button>
