@@ -18,8 +18,8 @@ function validAmount() {
 }
 function renderValidation(showError=false) {
   const amount = validAmount();
-  element('quickRemaining').textContent = amount===null ? '使わずに残すコイン：入力を確認してください' :
-    '使わずに残すコイン：'+money(BALANCE-amount)+' C';
+  element('quickRemaining').textContent = amount===null ? '試算に使わないコイン：入力を確認してください' :
+    '試算に使わないコイン：'+money(BALANCE-amount)+' C';
   if (showError && amount===null) {
     errorField.textContent='1〜10,000の整数を入力してください。';
     amountField.setAttribute('aria-invalid','true');
@@ -32,7 +32,28 @@ function resetReview() {
   pending=null;
   element('quickReview').hidden=true;
   element('quickResult').hidden=true;
+  element('quickNext').hidden=true;
   renderValidation(touched);
+}
+function scrollAndFocus(sectionId,focusId) {
+  element(sectionId).scrollIntoView?.({block:'start'});
+  const target=element(focusId);
+  if(focusId==='modelShopTitle'||focusId==='companionEditorTitle')
+    target.setAttribute('tabindex','-1');
+  target.focus?.({preventScroll:true});
+}
+function openShop() {
+  element('advancedEntry').open=true;
+  scrollAndFocus('modelShopSection','modelShopTitle');
+}
+function openEditor() {
+  element('advancedEntry').open=true;
+  element('companionControls').open=true;
+  scrollAndFocus('companionEditorTitle','companionEditorTitle');
+}
+async function returnHome() {
+  scrollAndFocus('simpleHome','quickModel');
+  await loadModels();
 }
 async function request(url,body) {
   const response=await fetch(url,body ? {
@@ -43,7 +64,6 @@ async function request(url,body) {
   return value;
 }
 async function loadModels() {
-  const prior=modelField.value;
   try {
     const data=await request('/api/model-shop');
     const next=[{id:'self',name:'自分のAI（未作成なら標準AI）'}];
@@ -51,6 +71,7 @@ async function loadModels() {
       if(model.owned && typeof model.id==='string' && typeof model.name==='string')
         next.push({id:model.id,name:model.name+'（解放済み）'});
     }
+    const prior=modelField.value;
     modelField.replaceChildren();
     for(const item of next){
       const option=document.createElement('option');
@@ -82,10 +103,11 @@ element('quickForm').addEventListener('submit',event=>{
   if(!option) return;
   pending={amount,model_id:modelField.value,model_name:option.textContent};
   element('quickReviewText').textContent=
-    'AI：'+pending.model_name+' ／ 練習の試算額：'+money(amount)+' C ／ 使わずに残す：'+
+    'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 試算に使わないコイン：'+
     money(BALANCE-amount)+' C。実際の注文ではなく12日間の練習です。';
   element('quickReview').hidden=false;
   element('quickResult').hidden=true;
+  element('quickNext').hidden=true;
   statusField.textContent='内容を確認してから練習を実行できます。';
 });
 element('quickAll').addEventListener('click',()=>{
@@ -101,11 +123,23 @@ element('quickEdit').addEventListener('click',()=>{
 amountField.addEventListener('input',()=>{resetReview();});
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
 modelField.addEventListener('change',resetReview);
+element('quickShop').addEventListener('click',openShop);
+element('quickNextShop').addEventListener('click',openShop);
+element('quickCustomize').addEventListener('click',openEditor);
+element('shopReturn').addEventListener('click',returnHome);
+element('companionReturn').addEventListener('click',returnHome);
+element('quickAgain').addEventListener('click',()=>{
+  if(busy)return;
+  resetReview();
+  scrollAndFocus('simpleHome','quickAmount');
+});
 element('quickRun').addEventListener('click',async()=>{
   if(busy||!pending)return;
   const ordered=pending;
   pending=null;
   element('quickReview').hidden=true;
+  element('quickResult').hidden=true;
+  element('quickNext').hidden=true;
   setBusy(true);
   statusField.textContent='AIの判断と架空12日間の損益を計算しています…';
   try{
@@ -118,20 +152,23 @@ element('quickRun').addEventListener('click',async()=>{
     const panel=element('quickResult');
     panel.replaceChildren();
     const heading=document.createElement('h3');
-    heading.textContent='12日間の練習結果';
+    heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='投資：'+money(ordered.amount)+' C ／ 損益：'+
+    summary.textContent='試算額：'+money(ordered.amount)+' C ／ 損益：'+
       (value.profit_coins>=0?'+':'')+money(value.profit_coins)+' C ／ 終了時：'+
-      money(value.final_balance)+' C（現金待機分を含む）';
+      money(value.final_balance)+' C（試算に使わないコインを含む）';
     const footnote=document.createElement('p');
     footnote.textContent='最大下落率 '+money(value.max_drawdown_pct)+
-      '%。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
+      '%。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
     footnote.className='simple-hint';
     panel.append(heading,summary,footnote);
     panel.hidden=false;
-    statusField.textContent='練習が完了しました。金額を変えてもう一度試せます。';
+    element('quickNext').hidden=false;
+    statusField.textContent='試算が完了しました。AI・試算額を変えてもう一度試せます。';
   }catch(error){
-    statusField.textContent='練習できませんでした：'+error.message;
+    element('quickResult').hidden=true;
+    element('quickNext').hidden=true;
+    statusField.textContent='試算できませんでした：'+error.message;
   }finally{setBusy(false);}
 });
 renderValidation();
