@@ -18,8 +18,8 @@ function validAmount() {
 }
 function renderValidation(showError=false) {
   const amount = validAmount();
-  element('quickRemaining').textContent = amount===null ? '現金待機：入力を確認してください' :
-    '現金待機：'+money(BALANCE-amount)+' C';
+  element('quickRemaining').textContent = amount===null ? '使わずに残すコイン：入力を確認してください' :
+    '使わずに残すコイン：'+money(BALANCE-amount)+' C';
   if (showError && amount===null) {
     errorField.textContent='1〜10,000の整数を入力してください。';
     amountField.setAttribute('aria-invalid','true');
@@ -46,7 +46,7 @@ async function loadModels() {
   const prior=modelField.value;
   try {
     const data=await request('/api/model-shop');
-    const next=[{id:'self',name:'自分のAI（無料）'}];
+    const next=[{id:'self',name:'自分のAI（未作成なら標準AI）'}];
     for(const model of data.models || []) {
       if(model.owned && typeof model.id==='string' && typeof model.name==='string')
         next.push({id:model.id,name:model.name+'（解放済み）'});
@@ -82,7 +82,7 @@ element('quickForm').addEventListener('submit',event=>{
   if(!option) return;
   pending={amount,model_id:modelField.value,model_name:option.textContent};
   element('quickReviewText').textContent=
-    'AI：'+pending.model_name+' ／ 投資：'+money(amount)+' C ／ 現金待機：'+
+    'AI：'+pending.model_name+' ／ 練習の試算額：'+money(amount)+' C ／ 使わずに残す：'+
     money(BALANCE-amount)+' C。実際の注文ではなく12日間の練習です。';
   element('quickReview').hidden=false;
   element('quickResult').hidden=true;
