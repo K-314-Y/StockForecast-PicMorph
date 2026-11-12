@@ -28,6 +28,7 @@ const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
+const QUICK_HOME_JS = new URL('./quick-home.mjs', import.meta.url);
 const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
@@ -383,9 +384,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs')) {
-      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs';
-      const body = await readFile(path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
+      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
+      const body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
@@ -394,7 +395,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -408,6 +409,44 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
+      if (path === '/api/quick-practice') {
+        if (names !== 'amount|model_id' ||
+            !Number.isSafeInteger(payload.amount) || payload.amount < 1 ||
+            payload.amount > 10000 ||
+            typeof payload.model_id !== 'string' ||
+            !/^(self|demo_[a-z_]{1,40})$/.test(payload.model_id)) {
+          throw failure('AIと1〜10,000の整数コイン額を指定してください',400);
+        }
+        const snapshot = await loadSnapshot();
+        const companion = await companionStore.read();
+        const originals = withGear(snapshot,null,false);
+        const mine = payload.model_id === 'self' ?
+          applyCompanion(originals,companion).models.mine :
+          await modelShopStore.licensedModel(payload.model_id);
+        const plan = await predict({...originals,models:{...originals.models,mine}});
+        const after = await loadSnapshot();
+        const currentCompanion = await companionStore.read();
+        if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
+           companion.revision !== currentCompanion.revision) {
+          throw failure('練習中にモデルが変更されました。再度お試しください',409);
+        }
+        // Unallocated coins remain in cash; only the entered amount is simulated.
+        // This practice does not mutate either shop currency or XP.
+        const result = runSyntheticGame({...plan,initial_coins:payload.amount,
+          allocations:{mine:100,owl:0,turtle:0}});
+        return json(res,200,{
+          mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
+          model_id:payload.model_id, initial_balance:10000,
+          invested_coins:payload.amount, cash_held:10000-payload.amount,
+          profit_coins:result.profit_coins,
+          final_balance:Math.round((10000+result.profit_coins)*100)/100,
+          max_drawdown_pct:result.max_drawdown_pct,
+          steps:result.decisions.length,
+          real_market:false, persisted:false, order_placed:false,
+          xp_awarded:false,
+          notice:'架空相場の12日間だけを試算しました。ゲームの所持コインや実市場の株式注文は変更していません。',
+        });
+      }
       if (path === '/api/model-shop/buy') {
         return json(res,200,await modelShopStore.purchase(payload));
       }
