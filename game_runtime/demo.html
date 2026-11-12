@@ -9,6 +9,7 @@
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 75% 0,#31365b 0,transparent 45%),#101624}
 main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px,5vw,43px);margin:6px 0 10px}h2{font-size:21px;margin:0 0 12px}h3{margin:0 0 8px;font-size:17px}p{line-height:1.65}.sub,small{color:var(--soft)}small{line-height:1.6;display:block}.eyebrow{color:var(--mint);font-size:12px;letter-spacing:.12em;font-weight:800}
 .panel{border:1px solid var(--line);border-radius:20px;background:#1b2540;padding:21px;margin:19px 0;box-shadow:0 10px 35px #0002}
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;margin:16px 0}.shop-item{border:1px solid #526b87;border-radius:13px;padding:13px;background:#162039}.shop-item p{font-size:13px;color:#c9d9e9}.shop-item .actions{margin:9px 0 0}
 .hero{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(0,1.2fr);gap:24px;align-items:center}
 .scene{min-height:320px;position:relative;display:flex;align-items:center;justify-content:flex-end;flex-direction:column;overflow:hidden;border-radius:18px;background:radial-gradient(ellipse at 50% 85%,#5977a880,transparent 62%),linear-gradient(145deg,#342e63,#213b59);padding:15px 12px}
 .scene:after{content:"";position:absolute;bottom:23px;width:175px;height:24px;border-radius:50%;background:#0004}
@@ -338,6 +339,16 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <p class="arena-note">注意：この比較は固定された架空相場だけです。複数設定を試すほど結果に合わせた調整になりやすく、未知の相場や実際の株価での有効性は検証していません。</p>
  </div>
 </section>
+<section class="panel" id="modelShopSection" aria-labelledby="modelShopTitle">
+ <span class="eyebrow">MODEL SHOP · コインで他作AIを解放</span>
+ <h2 id="modelShopTitle">ほかの人のAIを使う（ローカル試作）</h2>
+ <p>自作モデルは無料。他人のモデルはコインで一度解放すると、何度でも使えます。作者が公開した更新は次の練習から自動反映し、再購入は不要です。</p>
+ <p class="notice">現在の出品者・モデルはすべて<strong>架空のサンプル</strong>です。実在するユーザー同士の売買や広告によるコイン付与は未実装。勝率・利益は保証されません。</p>
+ <p>モデル解放用の残高：<strong id="shopBalance">読み込み中…</strong>。通常の仮想投資用コインとは別で、運用成績やランキングには加算しません。</p>
+ <div class="shop-grid" id="shopCatalog"></div>
+ <p id="shopStatus" class="arena-note" role="status" aria-live="polite">ショップ情報を読み込んでいます…</p>
+ <small>モデルは解放したIDで管理し、版ごとの購入は不要です。実行途中に判断が変わることはありません。作者へのコイン送金・現金化・第三者への譲渡はありません。実株価の一般公開利用には別途許諾が必要です。</small>
+</section>
 <section class="panel" id="arenaSection" aria-labelledby="arenaTitle">
  <span class="eyebrow">MODEL ARENA · 同条件比較</span><h2 id="arenaTitle">3モデルで予測対決</h2>
  <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。装備補正は全員オフ、手数料は同一。こちらの比較ではXPは発生しません。</p>
@@ -380,6 +391,6 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <small>装備は次の練習の予測判断に影響します。外見と学習済みモデルは別管理です。XPはNode専用保存先を使用します。</small>
 </section>
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
-<p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
+<p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。練習中の仮想投資コインは保存されません。モデルショップの使用権とコイン残高は別管理で保存されます。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
-</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script></body></html>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script><script type="module" src="/model-shop-ui.mjs"></script></body></html>
