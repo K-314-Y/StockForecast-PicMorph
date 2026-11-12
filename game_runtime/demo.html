@@ -304,9 +304,27 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <label for="labStrengthReversion">反転の感度<input id="labStrengthReversion" name="strength_reversion" type="number" min="50" max="150" step="1" required></label>
    </div>
   </details>
-  <div class="actions"><button id="labRun" type="submit" class="primary" disabled>変更前と変更後を比較する（保存しない）</button></div>
+  <p class="lab-hint">過去株価の取得元：J-Quants API V2（APIキー設定時のみ）またはローカルの2024年履歴。前者は調整済み終値、後者は未調整終値の参考値です。どちらを使ったか結果に表示します。</p>
+  <div class="actions">
+   <button id="labMarketRun" type="button" class="primary" disabled>別の過去相場を選んで比較する</button>
+   <button id="labMarketReplay" type="button" hidden disabled>同じ過去相場で再検証</button>
+   <button id="labRun" type="submit" disabled>固定架空12日で比較する（従来版）</button>
+  </div>
  </form>
  <p id="labStatus" role="status" aria-live="polite">変数を読み込むと比較できます。</p>
+ <section id="labMarketResult" class="lab-market-result" aria-label="実際の過去株価での比較結果" hidden>
+  <h3>実際の過去株価から選んだ12営業日</h3>
+  <p id="labMarketSource" class="lab-hint"></p>
+  <div class="lab-score-grid">
+   <article><h4>元の相棒</h4><p id="labMarketOriginal"></p></article>
+   <article><h4>変数を変えた相棒</h4><p id="labMarketChanged"></p></article>
+  </div>
+  <p id="labMarketDifference" class="brain-note"></p>
+  <p id="labMarketWarning" class="arena-note"></p>
+  <details class="lab-advanced"><summary>12日間の判断の違いを確認</summary>
+   <div id="labMarketDays" class="lab-table-container"></div>
+  </details>
+ </section>
  <div id="labResult" hidden>
   <h3>同じ条件での比較結果</h3>
   <div class="lab-score-grid">

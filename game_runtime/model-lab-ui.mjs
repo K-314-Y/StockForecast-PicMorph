@@ -7,6 +7,7 @@ const INPUTS=['labFast','labSlow','labRisk',...INDICATORS.flatMap(k=>[
 let baseline=null;
 let processing=false;
 const visited=new Set();
+let lastMarketId=null;
 
 function msg(value){$('labStatus').textContent=value;}
 function num(id){const field=$(id);return field.value.trim()===''?NaN:Number(field.value);}
@@ -36,6 +37,8 @@ function validate(show=false){
   const valid=baseline!==null && !processing && invalid.length===0 &&
     !windowInvalid && !weightInvalid;
   $('labRun').disabled=!valid;
+  $('labMarketRun').disabled=!valid;
+  $('labMarketReplay').disabled=!valid||lastMarketId===null;
   for(const id of ['labPresetTrend','labPresetReversion','labPresetBalanced'])
     $(id).disabled=processing||baseline===null;
   for(const id of INPUTS)$(id).disabled=processing||baseline===null;
@@ -67,7 +70,11 @@ async function api(path,body){
 async function loadBaseline(){
   if(processing)return;
   processing=true;baseline=null;visited.clear();
-  $('labResult').hidden=true;validate();
+  $('labResult').hidden=true;
+  $('labMarketResult').hidden=true;
+  lastMarketId=null;
+  $('labMarketReplay').hidden=true;
+  validate();
   msg('相棒の変数を読み込んでいます…');
   try{
     const data=await api('/api/model-lab/baseline');
@@ -93,6 +100,7 @@ function setPreset(weights){
 }
 function onEdit(){
   $('labResult').hidden=true;
+  $('labMarketResult').hidden=true;
   const result=validate();
   if(result.valid)msg('比較する準備ができました。結果は未保存の一時実験です。');
   else if(result.weightInvalid)msg('4つの分析の配分合計を100％にしてください。');
@@ -176,6 +184,100 @@ async function compare(event){
     processing=false;validate();
   }
 }
+function marketReaction(params,market){
+  const weights=params.plugin_weights;
+  const top=Object.keys(weights).sort((a,b)=>weights[b]-weights[a])[0];
+  const styles={trend:'流れを追う子',momentum:'動きに敏感な子',
+    volatility:'値動きを警戒する子',reversion:'反転を待つ子'};
+  const word=styles[top]||'複合型の子';
+  return word+'。今回の過去12日間だけでは得意・不得意を断定できません。';
+}
+function renderMarket(data){
+  const valid=data?.mode==='HISTORICAL_MARKET_REPLAY_ONLY'&&
+    data.scope==='MODEL_VARIABLES_HISTORICAL_REPLAY_12'&&
+    data.comparison_only===true&&data.save_performed===false&&
+    data.xp_awarded===false&&data.holdout_evaluated===false&&
+    typeof data.market?.id==='string'&&/^mkt_[0-9a-f]{24}$/.test(data.market.id)&&
+    typeof data.market?.code==='string'&&
+    Number.isFinite(data.baseline?.brier)&&Number.isFinite(data.candidate?.brier)&&
+    Array.isArray(data.baseline?.signals)&&data.baseline.signals.length===12&&
+    Array.isArray(data.candidate?.signals)&&data.candidate.signals.length===12;
+  if(!valid)throw Error('過去相場の比較結果が不正です');
+  $('labMarketSource').textContent='銘柄 '+data.market.code+
+    ' ／ 観測終了 '+data.market.history_end+
+    ' ／ 検証終了 '+data.market.period_end+
+    ' ／ 過去期間ID '+data.market.id+
+    ' ／ 候補期間 '+data.market.eligible_windows+'件'+
+    ' ／ データ元 '+data.market.source+
+    (data.market.adjusted?'（調整済み終値）':'（未調整終値）');
+  $('labMarketOriginal').textContent='予測確率の誤差（Brier）：'+
+    data.baseline.brier.toFixed(4)+'（小さいほど良い）／ '+summary(data.baseline);
+  $('labMarketChanged').textContent='予測確率の誤差（Brier）：'+
+    data.candidate.brier.toFixed(4)+'（小さいほど良い）／ '+summary(data.candidate);
+  $('labMarketDifference').textContent='変数変更による差：Brier '+
+    signed(data.difference.brier)+'（負なら改善）、仮想損益 '+
+    signed(data.difference.profit_coins,' C')+'、最大下落率 '+
+    signed(data.difference.drawdown_pct,'%')+'、判断が異なる日 '+
+    data.difference.different_signals+'/12日。'+
+    ' 変更後キャラの分析傾向：'+marketReaction(data.candidate.parameters,data.market);
+  const inactive=data.baseline.trades===0&&data.candidate.trades===0;
+  $('labMarketWarning').textContent=(inactive?
+    '両モデルとも売買0回です。損益が同じでも、予測能力が同等とは限りません。Brierの差を確認してください。 ':'')+
+    data.market.warning+
+    ' 予測誤差では価格変化が±0.3％以内なら横ばいと判定します。選択区間は重なり得るため独立した検証にはなりません。実際の過去価格を使用したローカル仮想売買で、未来の能力を証明せず、XPも保存しません。';
+  const table=document.createElement('table');
+  const head=document.createElement('thead');
+  const row=document.createElement('tr');
+  for(const label of ['日','元のモデル','調整後','差']){
+    const th=appendText(row,'th',label);th.scope='col';
+  }
+  head.append(row);table.append(head);
+  const tbody=document.createElement('tbody');
+  for(let i=0;i<12;i++){
+    const o=data.baseline.signals[i],c=data.candidate.signals[i];
+    if(!['LONG','CASH'].includes(o)||!['LONG','CASH'].includes(c))
+      throw Error('過去相場の判断が不正です');
+    const tr=document.createElement('tr');
+    tr.dataset.different=String(o!==c);
+    appendText(tr,'th',String(i+1)).scope='row';
+    appendText(tr,'td',o==='LONG'?'保有':'待機');
+    appendText(tr,'td',c==='LONG'?'保有':'待機');
+    appendText(tr,'td',o===c?'同じ':'異なる');
+    tbody.append(tr);
+  }
+  table.append(tbody);$('labMarketDays').replaceChildren(table);
+  lastMarketId=data.market.id;
+  $('labMarketReplay').hidden=false;
+  $('labMarketResult').hidden=false;
+}
+async function compareMarket(replay=false){
+  if(processing||!baseline)return;
+  const status=validate(true);
+  if(!status.valid){
+    msg('変数を確認してください。短期・長期と分析配分の合計が重要です。');
+    return;
+  }
+  const tested=candidate();
+  processing=true;validate();
+  $('labMarketResult').hidden=true;
+  $('labResult').hidden=true;
+  msg(replay?'同じ過去相場の期間で再計算しています…':
+    '別の実際の過去株価から、同条件の12日間を選んでいます…');
+  try{
+    const selection=replay&&lastMarketId?{replay_id:lastMarketId}:
+      lastMarketId?{exclude_id:lastMarketId}:{};
+    const output=await api('/api/model-lab/historical',{
+      candidate:tested,revisions:baseline.revisions,...selection,
+    });
+    renderMarket(output);
+    msg('過去相場の比較完了。確率の誤差と仮想損益は別々に判断してください。');
+  }catch(error){
+    msg('過去相場の比較に失敗しました: '+error.message+
+      '。データ元やAPIキーの設定を確認してください。');
+  }finally{processing=false;validate();}
+}
+$('labMarketRun').addEventListener('click',()=>compareMarket(false));
+$('labMarketReplay').addEventListener('click',()=>compareMarket(true));
 $('labForm').addEventListener('submit',compare);
 $('labLoad').addEventListener('click',loadBaseline);
 for(const id of INPUTS){

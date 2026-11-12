@@ -15,11 +15,13 @@ import {resolve} from 'node:path';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
+import {compareHistoricalMarket} from './historical-market.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
+const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
@@ -29,6 +31,7 @@ const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
+const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
 const GEAR = Object.freeze({
   none: null,
@@ -121,6 +124,34 @@ export async function pythonPredict(models) {
       catch {rejectResult(failure('予測結果が不正です'));}
     });
     child.stdin.end(JSON.stringify(models));
+  });
+}
+
+export async function pythonHistoricalPredict(input) {
+  const {spawn}=await import('node:child_process');
+  return new Promise((resolveResult,rejectResult)=>{
+    const child=spawn('python3',['-B',MARKET_BRIDGE],
+      {cwd:ROOT,stdio:['pipe','pipe','pipe']});
+    const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
+    let output='',failed=false,settled=false;
+    const finish=(err,result)=>{
+      if(settled)return;
+      settled=true;clearTimeout(timeout);
+      if(err)rejectResult(err);else resolveResult(result);
+    };
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data',part=>{
+      output+=part;
+      if(output.length>65536){failed=true;child.kill('SIGKILL');}
+    });
+    child.stderr.resume();
+    child.on('error',()=>finish(failure('過去株価の予測処理を開始できません')));
+    child.on('close',code=>{
+      if(failed||code!==0)return finish(failure('過去株価データを読み込めません。取得元・APIキー・レート制限を確認してください'));
+      try{finish(null,JSON.parse(output));}
+      catch{finish(failure('過去株価の予測結果が不正です'));}
+    });
+    child.stdin.end(JSON.stringify(input));
   });
 }
 
@@ -232,7 +263,8 @@ async function getBody(req, limit = MAX_REQUEST) {
 }
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
-                                  predict = pythonPredict, companionStore = createCompanionStore(),
+                                  predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
+                                  companionStore = createCompanionStore(),
                                   lookStore = createLookStore(),
                                   artworkStore = createArtworkStore(),
                                   appearanceCatalog = readAppearanceCatalog,
@@ -355,7 +387,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -369,6 +401,36 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
+      if (path === '/api/model-lab/historical') {
+        if(!['candidate|revisions','candidate|exclude_id|revisions',
+             'candidate|replay_id|revisions'].includes(names)) {
+          throw failure('変数・版数と再現用の期間IDだけ指定してください',400);
+        }
+        const candidate=validateLabModel(payload.candidate);
+        const expected=validateLabRevisions(payload.revisions);
+        for(const field of ['replay_id','exclude_id']) {
+          if(Object.hasOwn(payload,field) &&
+             (typeof payload[field]!=='string'||!MARKET_ID.test(payload[field])))
+            throw failure('相場期間IDが不正です',400);
+        }
+        const snapshot=await loadSnapshot();
+        const companion=await companionStore.read();
+        if(!sameLabRevisions(expected,labRevisions(snapshot,companion)))
+          throw failure('実験中に基準モデルが変更されました。再読込してください',409);
+        const baseline=validateLabModel(
+          applyCompanion(withGear(snapshot,null,false),companion).models.mine);
+        const raw=await historicalPredict({
+          base_model:validateLabModel(snapshot.state.model),
+          models:{mine:candidate,owl:baseline,turtle:baseline},
+          selection:{...(payload.replay_id?{replay_id:payload.replay_id}:{}),
+                     ...(payload.exclude_id?{exclude_id:payload.exclude_id}:{})},
+        });
+        const after=await loadSnapshot();
+        const current=await companionStore.read();
+        if(!sameLabRevisions(expected,labRevisions(after,current)))
+          throw failure('予測中に元モデルの版数が変わりました。再読込してください',409);
+        return json(res,200,compareHistoricalMarket(raw,baseline,candidate));
+      }
       if (path === '/api/model-lab/compare') {
         if(names!=='candidate|revisions')throw failure('試す変数と読込時の版数だけ指定してください',400);
         // Reject malformed changes before calling an external predictor.
