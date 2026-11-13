@@ -327,3 +327,22 @@ MCP Tunnel or authenticated HTTPS connection (user action), receive its
 selection/confirmation test. A local-only stdio package can be used for
 local development and supported desktop-only surfaces, not as a substitute
 for a registered cloud-side connection.
+
+### Follow-up validation after main sync (323b11f)
+
+The package verifier now validates both manifests with the official Agent Plugins
+1.0.0 JSON Schemas, vendored unchanged from their `$id` URLs under
+`scripts/schemas/agent-plugins-1.0.0/` for offline reproducibility. It uses the MCP
+SDK's existing Ajv 2020 validator (no additional dependency), then expands
+`${PLUGIN_ROOT}` in the actual manifest cwd/args and performs a bounded stdio
+initialize/tools-list smoke check without calling the game. This verifies local
+launch semantics, not a particular ChatGPT host's discovery/installation or the
+opaque `com.openai` extension semantics.
+
+The lockfile updates only `@hono/node-server` 2.1.5 to compatible patch 2.1.8;
+Zod remains 4.6.7. Image tests use disposable dynamic localhost ports and cover
+bad MIME/signatures, declared/streamed size limits, HTTP errors, redirects and a
+deterministic aborted timeout signal. The latter verifies error handling rather
+than waiting for the real 4500ms timer. No public listener or new authorization
+mechanism is added: Host/Origin/peer checks remain the browser boundary;
+untrusted processes on the same host remain outside that protection.

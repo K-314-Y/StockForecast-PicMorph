@@ -1,3 +1,5 @@
+import {createServer} from 'node:http';
+import {MAX_ARTWORK_FILE} from '../../game_runtime/artwork.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readdir,rm} from 'node:fs/promises';
@@ -114,5 +116,58 @@ test('MCP returns only the requested saved layer, not an unrelated image',async 
     assert.equal(base.isError,true);
     assert.equal(base.content.length,1);
     assert.equal(base.content[0].type,'text');
+  });
+});
+
+// Fake game never accesses stores, upstream services or a live fixed port.
+async function fakeGameFixture(t,handler,run) {
+  const requests=[];
+  const game=createServer((req,res)=>{requests.push(req.url);handler(req,res);});
+  const gameUrl=await serve(game);
+  const bridge=createCompanionChatGptHttpServer({apiBase:gameUrl});
+  const bridgeUrl=await serve(bridge);
+  const client=new Client({name:'bad-image-test',version:'1.0.0'});
+  t.after(async()=>{
+    await client.close();
+    for(const server of [bridge,game]) {
+      server.closeAllConnections();
+      await new Promise(resolve=>server.close(resolve));
+    }
+  });
+  await client.connect(new StreamableHTTPClientTransport(new URL(bridgeUrl+'/mcp')));
+  await run(client,requests);
+}
+const png=Buffer.from(sampleImage.base64,'base64');
+for(const [name,handler] of [
+  ['invalid Content-Type',(_req,res)=>res.writeHead(200,{'Content-Type':'text/html'}).end(png)],
+  ['binary MIME spoof',(_req,res)=>res.writeHead(200,{'Content-Type':'image/png'}).end('private-not-an-image')],
+  ['oversized Content-Length',(_req,res)=>res.writeHead(200,{'Content-Type':'image/png','Content-Length':MAX_ARTWORK_FILE+2049}).end()],
+  ['streamed oversized body',(_req,res)=>{res.writeHead(200,{'Content-Type':'image/png'});res.write(Buffer.alloc(MAX_ARTWORK_FILE));res.end(Buffer.alloc(1));}],
+  ['missing slot',(_req,res)=>res.writeHead(404).end()],
+  ['game failure',(_req,res)=>res.writeHead(500).end('private-not-an-image')],
+  ['redirect to arbitrary URL',(_req,res)=>res.writeHead(302,{Location:'http://attacker.invalid/image'}).end()],
+]) {
+  test('image rejects '+name,async t=>{
+    await fakeGameFixture(t,handler,async(client,requests)=>{
+      const result=await client.callTool({name:'view_my_artwork_image',arguments:{slot:'base'}});
+      assert.equal(result.isError,true);
+      assert.ok(result.content.every(item=>item.type==='text'));
+      assert.equal(result.structuredContent,undefined);
+      assert.equal(JSON.stringify(result).includes(sampleImage.base64),false);
+      assert.equal(JSON.stringify(result).includes('private-not-an-image'),false);
+      assert.deepEqual(requests,['/api/artwork/image/base']);
+    });
+  });
+}
+test('image timeout signal rejects fetch without returning bytes',async t=>{
+  // Replace only the timeout factory: immediately abort with the real timeout
+  // reason, avoiding a 4.5s timer and any dependence on scheduler timing.
+  t.mock.method(AbortSignal,'timeout',()=>AbortSignal.abort(new DOMException('Timed out','TimeoutError')));
+  await fakeGameFixture(t,(_req,res)=>{res.writeHead(200,{'Content-Type':'image/png'});res.flushHeaders();},async client=>{
+    const result=await client.callTool({name:'view_my_artwork_image',arguments:{slot:'base'}});
+    assert.equal(result.isError,true);
+    assert.ok(result.content.every(item=>item.type==='text'));
+    assert.equal(result.structuredContent,undefined);
+    assert.match(result.content[0].text,/Timed out/);
   });
 });
