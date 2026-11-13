@@ -10,7 +10,7 @@ Codexのプロジェクト設定 `.codex/config.toml` は Codex CLI の権限保
 cd '/home/yugo314/ドキュメント/14_予測クリーチャー'
 curl -fsS http://127.0.0.1:8896/health
 ./scripts/codex-creature-lab.sh mcp list
-./scripts/codex-creature-lab.sh exec --sandbox read-only 'Creature Labのget_my_character_sheetを1回呼んで、設定の概要だけを日本語で教えて。画像本体は取得せず、ファイル変更や保存はしない。'
+./scripts/codex-creature-lab.sh exec --sandbox read-only 'Creature Labのget_my_character_sheetを1回呼んで、設定の概要だけを日本語で教えて。画像本体は取得せず、ファイル変更や保存はしない。' </dev/null
 ```
 
 ラッパーが公開するのは次の6つの**読み取り専用**ツールだけです。
@@ -25,6 +25,8 @@ curl -fsS http://127.0.0.1:8896/health
 | `list_my_trained_brains` | 学習済みモデル一覧 |
 
 **保存操作、画像本体の送信、練習プレイ操作は許可していません。** `scripts/codex-creature-lab.sh` の `enabled_tools` が制限の対象です。Codexのファイル編集コマンドそのものを禁止するものではないので、読み取り確認時は `exec --sandbox read-only` を使用します。
+
+Codex CLI の非対話実行で追加入力を待って止まる場合は、上記のように `</dev/null` で標準入力を閉じます。2026年11月14日、実際のCodex CLIから `get_my_artwork` を1回呼んで、画像データなしで4スロットのメタデータを取得できたことを確認しています。
 
 自動テスト:
 
