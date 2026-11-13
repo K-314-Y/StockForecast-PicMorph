@@ -38,7 +38,8 @@ async function mount(models=[]) {
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
   const state={models,practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
-    invested_coins:body.amount,final_balance:10025,profit_coins:25,max_drawdown_pct:1,
+    invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
+    final_balance:10025,profit_coins:25,max_drawdown_pct:1,
   })};
   const fetch=async(path,options)=>{
     const body=options?.body?JSON.parse(options.body):undefined;
@@ -97,7 +98,7 @@ test('both return buttons refresh owned AI choices and preserve the current sele
   assert.equal(calls.filter(call=>call.path==='/api/model-shop').length,3);
   await fire('quickForm','submit');
   await fire('quickRun');
-  assert.deepEqual(calls.at(-1),{path:'/api/quick-practice',body:{model_id:locked.id,amount:2345}});
+  assert.deepEqual(calls.at(-1),{path:'/api/quick-practice',body:{model_id:locked.id,amount:2345,leverage:1}});
   state.models=[owned];
   await fire('shopReturn');
   assert.equal(get('quickModel').value,'self');
@@ -117,7 +118,7 @@ test('successful practice shows next actions and retry keeps the amount and mode
   assert.doesNotMatch(result,/現金待機|投資：/);
   assert.match(result,/実際の注文は行いません/);
   assert.match(result,/結果は保存されず/);
-  assert.deepEqual(calls.at(-1).body,{model_id:'demo',amount:1234});
+  assert.deepEqual(calls.at(-1).body,{model_id:'demo',amount:1234,leverage:1});
   await fire('quickAgain');
   assert.equal(get('quickNext').hidden,true);
   assert.equal(get('quickResult').hidden,true);
@@ -153,6 +154,25 @@ test('new practice clears previous results immediately and errors leave next act
   await fire('quickRun');
   assert.equal(get('quickNext').hidden,true);
   assert.match(get('quickStatus').textContent,/結果の形式が不正/);
+});
+
+test('25x is selectable, displayed before confirmation, and locked for the request',async()=>{
+  const {get,fire,calls}=await mount();
+  assert.equal(get('quickLeverage').value,'1');
+  assert.equal(get('quickLeverage').children.at(-1).value,'25');
+  get('quickLeverage').value='25';
+  await fire('quickLeverage','change');
+  assert.match(get('quickLeverageHelp').textContent,/試算額が0/);
+  await fire('quickForm','submit');
+  assert.match(get('quickReviewText').textContent,/倍率：×25/);
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:25});
+  assert.match(get('quickResult').children[1].textContent,/倍率：×25/);
+  get('quickLeverage').value='26';
+  await fire('quickLeverage','change');
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
 });
 
 test('invalid amounts cannot trigger practice requests',async()=>{

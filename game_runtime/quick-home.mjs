@@ -7,7 +7,28 @@ let busy = false;
 let touched = false;
 const amountField = element('quickAmount');
 const modelField = element('quickModel');
+const leverageField = element('quickLeverage');
 const errorField = element('quickError');
+// Native dropdown: all integer settings, without adding another slider.
+for (let n=2; n<=25; n++) {
+  const option=document.createElement('option');
+  option.value=String(n);
+  option.textContent='×'+n+(n===25?'（最大）':'');
+  leverageField.append(option);
+}
+leverageField.value='1';
+function validLeverage(){
+  const value=Number(leverageField.value);
+  return /^\d+$/.test(leverageField.value) && Number.isInteger(value) &&
+    value>=1 && value<=25 ? value : null;
+}
+function showLeverageInfo(){
+  const n=validLeverage();
+  element('quickLeverageHelp').textContent=n===null ? '倍率を1〜25から選んでください。' :
+    n>=10 ? '×'+n+'：利益も損失も大きくなります。試算額が0になればその時点で終了し、後から回復しても復活しません。' :
+    '利益・損失の両方に×'+n+'を適用。最大損失は試算額まで。実際の信用・FX取引とは異なります。';
+}
+showLeverageInfo();
 const statusField = element('quickStatus');
 
 function validAmount() {
@@ -89,7 +110,7 @@ async function loadModels() {
 }
 function setBusy(next) {
   busy=next;
-  for(const id of ['quickConfirm','quickRun','quickEdit','quickAll','quickModel','quickAmount'])
+  for(const id of ['quickConfirm','quickRun','quickEdit','quickAll','quickModel','quickAmount','quickLeverage'])
     element(id).disabled=next;
 }
 element('quickForm').addEventListener('submit',event=>{
@@ -99,12 +120,15 @@ element('quickForm').addEventListener('submit',event=>{
   renderValidation(true);
   const amount=validAmount();
   if(amount===null){amountField.focus();return;}
+  const leverage=validLeverage();
+  if(leverage===null){errorField.textContent='倍率は1〜25の整数を選んでください。';leverageField.focus();return;}
   const option=modelField.selectedOptions[0];
   if(!option) return;
-  pending={amount,model_id:modelField.value,model_name:option.textContent};
+  pending={amount,leverage,model_id:modelField.value,model_name:option.textContent};
   element('quickReviewText').textContent=
-    'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 試算に使わないコイン：'+
-    money(BALANCE-amount)+' C。実際の注文ではなく12日間の練習です。';
+    'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
+    ' ／ 試算に使わないコイン：'+money(BALANCE-amount)+
+    ' C。最大損失は'+money(amount)+' C。実際の注文ではなく12日間の練習です。';
   element('quickReview').hidden=false;
   element('quickResult').hidden=true;
   element('quickNext').hidden=true;
@@ -123,6 +147,7 @@ element('quickEdit').addEventListener('click',()=>{
 amountField.addEventListener('input',()=>{resetReview();});
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
 modelField.addEventListener('change',resetReview);
+leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();});
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
 element('quickCustomize').addEventListener('click',openEditor);
@@ -144,27 +169,35 @@ element('quickRun').addEventListener('click',async()=>{
   statusField.textContent='AIの判断と架空12日間の損益を計算しています…';
   try{
     const value=await request('/api/quick-practice',{
-      model_id:ordered.model_id,amount:ordered.amount});
+      model_id:ordered.model_id,amount:ordered.amount,leverage:ordered.leverage});
     if(value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY'||value.real_market!==false||
        value.persisted!==false||value.invested_coins!==ordered.amount||
-       !Number.isFinite(value.final_balance)||!Number.isFinite(value.profit_coins))
+       value.leverage!==ordered.leverage ||
+       !Number.isFinite(value.final_balance)||!Number.isFinite(value.profit_coins)||
+       value.final_balance<0 || value.profit_coins < -ordered.amount ||
+       !(value.liquidated_at_step===null ||
+         (Number.isInteger(value.liquidated_at_step) && value.liquidated_at_step>=1 &&
+          value.liquidated_at_step<=12)))
       throw Error('練習結果の形式が不正です');
     const panel=element('quickResult');
     panel.replaceChildren();
     const heading=document.createElement('h3');
     heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='試算額：'+money(ordered.amount)+' C ／ 損益：'+
-      (value.profit_coins>=0?'+':'')+money(value.profit_coins)+' C ／ 終了時：'+
+    summary.textContent='試算額：'+money(ordered.amount)+' C ／ 損益倍率：×'+
+      ordered.leverage+' ／ 損益：'+(value.profit_coins>=0?'+':'')+
+      money(value.profit_coins)+' C ／ 終了時：'+
       money(value.final_balance)+' C（試算に使わないコインを含む）';
     const footnote=document.createElement('p');
-    footnote.textContent='最大下落率 '+money(value.max_drawdown_pct)+
-      '%。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
+    footnote.textContent='試算した資金の最大下落率 '+money(value.max_drawdown_pct)+
+      '%。'+(value.liquidated_at_step===null ? '' :
+        '第'+value.liquidated_at_step+'日で資金が尽き、以降は強制終了。')+
+      '強制終了は日足終値だけの近似です。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
     footnote.className='simple-hint';
     panel.append(heading,summary,footnote);
     panel.hidden=false;
     element('quickNext').hidden=false;
-    statusField.textContent='試算が完了しました。AI・試算額を変えてもう一度試せます。';
+    statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
   }catch(error){
     element('quickResult').hidden=true;
     element('quickNext').hidden=true;
