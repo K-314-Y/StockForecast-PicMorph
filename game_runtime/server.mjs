@@ -14,6 +14,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
+import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket} from './historical-market.mjs';
@@ -410,13 +411,18 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/quick-practice') {
-        if (names !== 'amount|model_id' ||
+        if ((names !== 'amount|leverage|model_id' && names !== 'amount|model_id') ||
             !Number.isSafeInteger(payload.amount) || payload.amount < 1 ||
             payload.amount > 10000 ||
+            (payload.leverage !== undefined && (
+              !Number.isSafeInteger(payload.leverage) || payload.leverage < 1 ||
+              payload.leverage > 25
+            )) ||
             typeof payload.model_id !== 'string' ||
             !/^(self|demo_[a-z_]{1,40})$/.test(payload.model_id)) {
-          throw failure('AIと1〜10,000の整数コイン額を指定してください',400);
+          throw failure('AI、1〜10,000の整数コイン額、1〜25の整数倍率を指定してください',400);
         }
+        const leverage = payload.leverage ?? 1;
         const snapshot = await loadSnapshot();
         const companion = await companionStore.read();
         const originals = withGear(snapshot,null,false);
@@ -434,17 +440,22 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         // This practice does not mutate either shop currency or XP.
         const result = runSyntheticGame({...plan,initial_coins:payload.amount,
           allocations:{mine:100,owl:0,turtle:0}});
+        const settled = settleLeveragedPractice({
+          equityPath:result.equity_path,amount:payload.amount,leverage,
+        });
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
           model_id:payload.model_id, initial_balance:10000,
-          invested_coins:payload.amount, cash_held:10000-payload.amount,
-          profit_coins:result.profit_coins,
-          final_balance:Math.round((10000+result.profit_coins)*100)/100,
-          max_drawdown_pct:result.max_drawdown_pct,
+          invested_coins:settled.invested_coins, cash_held:settled.cash_held,
+          leverage:settled.leverage,
+          profit_coins:settled.profit_coins,
+          final_balance:settled.final_balance,
+          max_drawdown_pct:settled.max_drawdown_pct,
+          liquidated_at_step:settled.liquidated_at_step,
           steps:result.decisions.length,
           real_market:false, persisted:false, order_placed:false,
           xp_awarded:false,
-          notice:'架空相場の12日間だけを試算しました。ゲームの所持コインや実市場の株式注文は変更していません。',
+          notice:'架空相場の終値ベースで損益倍率を試算しています。資金が0になれば途中終了し復活しません。実際の強制決済とは異なり、所持コインも注文も変更しません。',
         });
       }
       if (path === '/api/model-shop/buy') {
