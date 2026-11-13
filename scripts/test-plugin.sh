@@ -12,7 +12,7 @@ npm --prefix game_runtime run typecheck
 echo "[4/6] Python model tests"
 python3 -B -m unittest discover -s tests -q
 echo "[5/6] Dependency audit"
-(cd mcp && npm audit --audit-level=high)
+(cd mcp && npm audit --audit-level=moderate)
 echo "[6/6] Live protocol check via MCP Inspector CLI"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

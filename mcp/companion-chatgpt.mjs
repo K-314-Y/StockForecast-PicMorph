@@ -254,7 +254,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
   });
   server.registerTool('view_my_artwork_image',{
     title:'Creature Lab: 保存済みの自作イラストをChatGPTで見る',
-    description:'Nodeゲームに保存された完成イラスト（base）または髪・顔・服のレイヤーを画像としてChatGPTへ返す。AIの画像理解で外見を相談する用途。ユーザーの絵を認識して自動分割したわけではない。保存やアップロードは行わない。',
+    description:'ユーザーが自分の作品の閲覧・画像分析を明示的に求めた時だけ使用。Nodeゲームに保存された完成イラスト（base）または髪・顔・服を画像データとしてChatGPTへ送って表示する。ローカル以外への画像送信が発生するため、単なる設定確認では呼ばない。自動分割は行わず、ローカルの画像保存内容も変更しない。',
     inputSchema:z.object({
       slot:z.enum(['base','hair','face','outfit']).describe(
         'base=完成イラスト、hair=髪、face=顔、outfit=服。保存済みスロットのみ表示')

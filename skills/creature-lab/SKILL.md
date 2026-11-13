@@ -8,11 +8,13 @@ description: Use when the user wants to inspect, design, preview, compare or upd
 The user controls their character. The plugin only talks to an authorized
 private local Creature Lab Node game. It has no real-trading capability.
 
-1. To learn the current state, use `get_my_character_sheet`. If images
-   matter, use `get_my_artwork` and `view_my_artwork_image` with exactly
-   one slot from `base/hair/face/outfit`. The last tool returns the actual
-   saved illustration; interpret cautiously. Image recognition is uncertain
-   and it does not automatically separate hair, face or clothing.
+1. To learn the current state, use `get_my_character_sheet`. Use
+   `get_my_artwork` for image metadata only. **Only when the user explicitly
+   requests to see or analyze their artwork**, call `view_my_artwork_image`
+   with exactly one slot from `base/hair/face/outfit`. That call sends the
+   actual saved illustration to ChatGPT for analysis; do not retrieve images
+   merely because metadata mentions they exist. Interpret cautiously. Image
+   recognition is uncertain and it does not automatically separate parts.
 2. To explore a proposed prediction approach, use `preview_my_companion`
    before saving. Explicitly call results **synthetic game outcomes**, not
    real market backtests or investment returns. The preview must not issue XP.
