@@ -47,6 +47,8 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       assert.equal(status,200,JSON.stringify(data));
       assert.equal(data.mode,'SIMPLE_SYNTHETIC_PRACTICE_ONLY');
       assert.equal(data.invested_coins,amount);
+      assert.equal(data.leverage,1,'legacy requests remain x1');
+      assert.equal(data.liquidated_at_step,null);
       assert.equal(data.initial_balance,10000);
       assert.equal(data.cash_held,10000-amount);
       assert.equal(data.steps,12);
@@ -60,6 +62,23 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
     assert.equal((await fetch(base+'/quick-home.mjs')).status,200);
   });
 });
+test('25x server integration is read-only and never creates a negative balance',async()=>{
+  await withServer(async({base,read})=>{
+    const out=await post(base,{amount:1000,model_id:'self',leverage:25});
+    assert.equal(out.status,200,JSON.stringify(out.data));
+    assert.equal(out.data.leverage,25);
+    assert.equal(out.data.cash_held,9000);
+    assert.ok(out.data.final_balance>=9000);
+    assert.ok(out.data.profit_coins>=-1000);
+    assert.equal(out.data.real_market,false);
+    assert.equal(out.data.persisted,false);
+    assert.equal(out.data.order_placed,false);
+    assert.equal(out.data.xp_awarded,false);
+    assert.equal(out.data.steps,12);
+    assert.deepEqual(read(),{writes:0,predictions:1});
+  });
+});
+
 test('reject malformed amount or model before forecast and cross-origin',async()=>{
   await withServer(async({base,read})=>{
     const bad=[
@@ -67,6 +86,8 @@ test('reject malformed amount or model before forecast and cross-origin',async()
       {amount:1.2,model_id:'self'}, {amount:'1000',model_id:'self'},
       {amount:1000,model_id:'../evil'}, {amount:1000,model_id:'self',order:true},
       {amount:1000}, {amount:1000,model_id:123},
+      ...[0,26,-1,1.5,'25',null].map(leverage=>({amount:1000,model_id:'self',leverage})),
+      {amount:1000,model_id:'self',leverage:25,extra:true},
     ];
     for(const item of bad){
       const {status}=await post(base,item);

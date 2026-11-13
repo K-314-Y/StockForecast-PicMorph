@@ -150,7 +150,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <section class="panel simple-home" id="simpleHome" aria-labelledby="simpleHomeTitle">
  <span class="eyebrow">EASY MODE · はじめての練習</span>
  <h2 id="simpleHomeTitle">AIにコインを任せてみよう</h2>
- <p class="simple-hint">架空相場の12ステップ（12日間）だけを試算します。コインの引き落とし・実際の注文はなく、実際の株価も使いません。練習用残高・結果は保存されません。</p>
+ <p class="simple-hint">架空相場の12ステップ（12日間）だけを試算します。コインの引き落とし・実際の注文はなく、実際の株価も使いません。練習用残高・結果は保存されません。倍率の強制終了判定は各日の終値のみで行う簡易方式です。</p>
  <p>練習用の仮想コイン（消費されません） <span class="simple-balance">10,000 C</span></p>
  <form id="quickForm" novalidate>
   <div class="simple-fields">
@@ -163,16 +163,20 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError"><button id="quickAll" type="button">全額</button></div>
    <p id="quickHelp" class="simple-hint">入力した額だけを試算。AIが購入せずに待機する場合もあります。</p>
    <p id="quickRemaining" class="simple-hint">試算に使わないコイン：9,000 C</p>
+   <label for="quickLeverage">③ 損益倍率（1〜25倍）
+    <select id="quickLeverage" name="leverage" aria-describedby="quickLeverageHelp" required><option value="1">×1（通常）</option></select>
+   </label>
+   <p id="quickLeverageHelp" class="simple-hint">倍率は利益だけでなく損失にもかかります。最大損失は試算額までです。</p>
    <p id="quickError" class="simple-error" role="status" aria-live="polite"></p>
   </div>
-  <button id="quickConfirm" class="primary" type="submit">③ 内容を確認する</button>
+  <button id="quickConfirm" class="primary" type="submit">④ 内容を確認する</button>
  </form>
  <div id="quickReview" class="simple-confirm" hidden>
   <h3>練習内容の確認</h3><p id="quickReviewText"></p>
-  <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額を修正</button></div>
+  <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額・倍率を修正</button></div>
  </div>
  <div id="quickResult" class="simple-result" role="status" aria-live="polite" hidden></div>
- <div id="quickNext" hidden><p>次はAIや試算額を変えて、同じ架空12日間で試せます。</p><div class="actions"><button id="quickAgain" class="primary" type="button">AI・試算額を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div></div>
+ <div id="quickNext" hidden><p>次はAI・試算額・倍率を変えて、同じ架空12日間で試せます。再挑戦は練習専用です。</p><div class="actions"><button id="quickAgain" class="primary" type="button">AI・金額・倍率を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div></div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
 <details class="advanced-entry" id="advancedEntry">
