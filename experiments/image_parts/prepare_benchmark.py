@@ -105,6 +105,8 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
     for part in PART_COLORS:
         truth, prediction = masks.get(part + '_truth'), masks.get(part + '_prediction')
         require(prediction is None or truth is not None, 'Prediction requires truth')
+        require(truth is None or not truth.lower().startswith('creature_prediction_'),
+                'Predicted browser output must not be used as truth')
         names.extend(n for n in (truth, prediction) if n is not None)
     require(len(names) > 1, 'At least one truth required')
     paths = [local_png(root, filename(n)) for n in names]

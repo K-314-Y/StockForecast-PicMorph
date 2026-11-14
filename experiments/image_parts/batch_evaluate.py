@@ -131,6 +131,9 @@ def preflight(manifest):
         item = {key: case[key] for key in ("method", "part")}
         for key in ("source", "truth") + (() if method in ("seeded", "adaptive-seeded") else ("prediction",)):
             item[key] = local_png(root, case[key])
+            if key == "truth":
+                require(not item[key].name.lower().startswith("creature_prediction_"),
+                        "Predicted output is not independent ground truth")
         if method in ("seeded", "adaptive-seeded"):
             item.update({key: case[key] for key in ("seed_x", "seed_y") + tuple(key for key, _ in parameters)})
         item["seed_selection"] = data.get("seed_selection", "truth_assisted")
