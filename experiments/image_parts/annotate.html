@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creature Lab — 手動正解マスク</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1100px; padding: 20px; font: 16px/1.6 system-ui, sans-serif; background: #f4f6fa; color: #182333; }
+h1 { font-size: 1.6rem; } section { margin: 16px 0; padding: 16px; background: white; border-radius: 10px; }
+label, button { margin: 4px; } button, input, select { font: inherit; } button { padding: 7px 12px; cursor: pointer; }
+button:disabled { cursor: default; } :focus-visible { outline: 3px solid #305bce; outline-offset: 3px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+#stage { padding: 0; overflow: hidden; background: repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 0 / 20px 20px; }
+#editor { display: block; width: 100%; height: auto; margin: 0; padding: 0; border: 0; touch-action: none; cursor: crosshair; }
+#radius { width: 6em; } #status { min-height: 2em; } .note { font-size: .9rem; }
+</style>
+<script src="annotate.js" defer></script>
+</head>
+<body>
+<h1>手で描く正解マスク（実験用・オフライン）</h1>
+<p>本人が髪・顔・服を塗る補助画面です。AI画像認識は行いません。</p>
+<section aria-label="権利確認と画像選択">
+<label><input id="rights" type="checkbox"> 自作画像、または正解マスク作成を含む正当なローカル処理許可のある画像だけを選びます。</label>
+<p class="note">誤った申告自体は検証できません。著作権・許諾条件の確認はユーザー自身が行ってください。正解マスクにも元画像に準じた権利・再配布条件が及び、この画面で条件は変わりません。</p>
+<label>ローカルPNGを選択 <input id="source" type="file" accept=".png,image/png" disabled></label>
+<p class="note">PNGのみ・8 MiB以下・各辺4096px以下・総画素4,000,000以下。アニメーションPNG不可。別画像を開く前には未保存の編集を確認します。再読み込みすると編集内容は破棄されます。</p>
+</section>
+<section aria-label="編集ツール">
+<fieldset id="tools" disabled>
+<legend>元画像のピクセル単位で塗る</legend>
+<div class="row">
+<label>部位 <select id="part"><option value="hair">髪 hair（赤）</option><option value="face">顔 face（青）</option><option value="outfit">服 outfit（緑）</option></select></label>
+<label>ブラシ半径 <input id="radius" type="number" min="2" max="70" step="1" value="12"> px</label>
+<label><input id="erase" type="checkbox">消しゴム</label>
+<button id="undo" type="button" disabled>元に戻す</button>
+<button id="clear" type="button">選択部位をクリア</button>
+</div>
+<div class="row">
+<label><input id="all" type="checkbox" checked>全ての部位を重ねて表示</label>
+<label><input id="preview" type="checkbox">選択マスクだけをプレビュー</label>
+</div>
+<p class="note">マウスまたは指でドラッグ。部位は独立しており重ねて塗れます。保存PNGは透明背景と不透明な白だけ。Undoは全体で32 MiB・最大12操作（最大画像では2操作）です。</p>
+<p id="saveRights" class="note">保存時の権限宣言：正解マスクにも元画像に準じた権利が及びます。許可されたローカル利用のみ行い、再配布条件を守ってください。</p>
+<div class="row"><button type="button" data-save="hair">髪のマスクを保存</button><button type="button" data-save="face">顔のマスクを保存</button><button type="button" data-save="outfit">服のマスクを保存</button></div>
+</fieldset>
+</section>
+<p id="status" role="status" aria-live="polite">権利を確認してからPNGを選んでください。</p>
+<section id="stage" aria-label="描画領域"><canvas id="editor" width="1" height="1" aria-label="マスク描画領域。マウスまたはタッチで描画"></canvas></section>
+<p class="note">画像はこのタブのメモリ内だけで処理します。Web送信・外部スクリプト・永続保存・自動バックアップはありません。保存ボタンと確認操作の後だけブラウザのダウンロードを開始します。既存ファイルを置換しないよう、新しい保存先を選んでください。再読み込みで全て破棄されます。</p>
+</body>
+</html>
