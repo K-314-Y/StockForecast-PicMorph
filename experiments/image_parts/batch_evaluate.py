@@ -85,7 +85,12 @@ def preflight(manifest):
         raw = stream.read(MAX_MANIFEST_BYTES + 1)
     require(len(raw) <= MAX_MANIFEST_BYTES, "Manifest exceeds 128 KiB")
     data = json.loads(raw, object_pairs_hook=unique_object)
-    exact_keys(data, ("schema_version", "dataset_type", "cases"))
+    fields = {"schema_version", "dataset_type", "cases"}
+    if "seed_selection" in data:
+        require(data["seed_selection"] in ("image_only_manual", "truth_assisted"),
+                "Invalid seed provenance")
+        fields.add("seed_selection")
+    exact_keys(data, fields)
     require(type(data["schema_version"]) is int and data["schema_version"] == 1,
             "Unsupported schema version")
     require(data["dataset_type"] in ("synthetic_original", "permissioned_art"), "Invalid dataset type")
@@ -128,6 +133,7 @@ def preflight(manifest):
             item[key] = local_png(root, case[key])
         if method in ("seeded", "adaptive-seeded"):
             item.update({key: case[key] for key in ("seed_x", "seed_y") + tuple(key for key, _ in parameters)})
+        item["seed_selection"] = data.get("seed_selection", "truth_assisted")
         validated.append(item)
     return data["dataset_type"], validated
 
@@ -155,15 +161,27 @@ def batch_evaluate(manifest):
         truth = binary_mask(read_png(case["truth"]))
         require(source.size == truth.size, "Truth dimensions must match source")
         segmentation_ms = None
+        rejected_seed = False
         if case["method"] in ("seeded", "adaptive-seeded"):
             extraction_started = perf_counter()
-            if case["method"] == "adaptive-seeded":
-                cutout, _ = extract_region_adaptive(source, case["seed_x"], case["seed_y"],
-                    case["step_tolerance"], case["drift_tolerance"])
-            else:
-                cutout, _ = extract_region(source, case["seed_x"], case["seed_y"], case["tolerance"])
+            try:
+                if case["method"] == "adaptive-seeded":
+                    cutout, _ = extract_region_adaptive(source, case["seed_x"], case["seed_y"],
+                        case["step_tolerance"], case["drift_tolerance"])
+                else:
+                    cutout, _ = extract_region(source, case["seed_x"], case["seed_y"], case["tolerance"])
+                prediction = binary_mask(cutout)
+            except ValueError as error:
+                # Real user's image-only clicks may hit a wide background or a
+                # transparent pixel. That must count as failure, not silently
+                # remove a difficult sample from the benchmark.
+                if (case["seed_selection"] != "image_only_manual"
+                        or not ("covers too much" in str(error)
+                                or "transparent" in str(error))):
+                    raise
+                prediction = truth.point(lambda _: 0)
+                rejected_seed = True
             segmentation_ms = round((perf_counter() - extraction_started) * 1000, 3)
-            prediction = binary_mask(cutout)
         else:
             image = read_png(case["prediction"])
             prediction = (semantic_mask(image, case["part"]) if case["method"] == "anime-seg-rgb"
@@ -177,11 +195,14 @@ def batch_evaluate(manifest):
                         **metrics, "elapsed_ms": round(elapsed, 3)})
         if segmentation_ms is not None:
             results[-1]["segmentation_ms"] = segmentation_ms
+            results[-1]["segmentation_rejected"] = rejected_seed
     groups = []
     for method, part in sorted({(c["method"], c["part"]) for c in results}):
         groups.append({"method": method, "part": part,
                        **aggregate([c for c in results if (c["method"], c["part"]) == (method, part)])})
     return {"schema_version": 1, "dataset_type": dataset_type,
+            "seed_selection": cases[0]["seed_selection"],
+            "seed_protocol_notice": "Self-reported protocol; cannot prove honesty. Hash binds file, not creation time. Manual seeds rejected by extraction guards are scored as zero-selected pixels, not dropped.",
             "interpretation": ("synthetic_only_not_real_art_accuracy" if dataset_type == "synthetic_original"
                                else "permission_declared_not_legally_verified"),
             "rights_notice": "Rights holder must independently confirm permissions; no legal verification.",

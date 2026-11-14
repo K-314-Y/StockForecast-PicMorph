@@ -221,3 +221,43 @@ python3 experiments/image_parts/batch_evaluate.py --manifest /ABS/PRIVATE/DATA_D
 出力JSONの segmentation_ms は切り抜き処理の計測値です。既存の batch_evaluate.py の elapsed_ms は画素の正誤を計算した時間で、画像の読み込みやAIモデル推論時間を含みません。実際に操作する時のCPU負荷・メモリも別に測定する必要があります。
 
 著作権ルールは前節を引き継ぎます。使用許可が不明な作品画像を取得せず、モデル重みをダウンロードせず、画像を外部送信せず、実験Branchを本番ゲームにはまだ統合しません。
+
+## 2026-11-14: 正解マスクを見ずに点を選ぶブラインド比較
+
+以前の prepare_benchmark.py は、正解マスク内のピクセルを探して開始点にしていたため、実利用より簡単な条件での比較でした。新しい choose_seeds.html は **元画像だけを読み込む画面**で、髪・顔・服の点を作者自身が指定できます。これは意味を自動理解するAIではありません。
+
+### 使い方
+
+1. 権利が確認できた自作・許諾済みの元画像を準備。先に Chrome で experiments/image_parts/choose_seeds.html を開きます。ローカルPNGだけを選択し、部位を選んで元画像の上をクリックします。正解マスクはこの画面では**一切読み込めません**。
+2. 点を選択したあと、ダウンロードを明示的に承認して seeds_...json を保存。JSONは元画像のファイル名、幅・高さ、ファイルSHA-256、髪・顔・服の座標だけを持ち、画像そのものや権利者の情報は含まれません。
+3. その後、別の「手で描く正解マスク」画面 annotate.html などで正解を用意します。**元画像、各マスク、seedのJSONを同じ非公開のGit管理外フォルダ**に配置します。ファイル名は変更しないでください。本人がダウンロードしたseed JSONの名前を --seeds-file にそのまま渡します。
+4. ローカル処理の権利が確認済みであることを宣言して評価用JSONを生成します。seedが不正な場合・別のPNGに紐づく場合・権限が不足する場合は拒否します。元画像とマスクは変更せず、評価用JSONのみ0600で新規作成します。
+
+    python3 experiments/image_parts/prepare_benchmark.py \
+      --folder /ABS/PRIVATE/DATA_DIR --source original.png \
+      --hair-truth original_hair.png --face-truth original_face.png \
+      --basis self_created \
+      --evidence "Creator verified original artwork and derived masks for local scoring" \
+      --dataset-type permissioned_art --seeds-file seeds_...json \
+      --tolerance 20 --adaptive --step-tolerance 18 --drift-tolerance 90 \
+      --confirm-local-evaluation --output blind_benchmark.json
+
+    python3 experiments/image_parts/batch_evaluate.py \
+      --manifest /ABS/PRIVATE/DATA_DIR/blind_benchmark.json
+
+**注意:** 例の dataset_type=permissioned_art は自作の実イラストを含む実画像用です。許可された実画像の準備がないうちは synthetic_original と自作の単純な図形だけを使ってください。--basis の self_created / author_permission / licensed も利用許諾を自動検証するものではありません。正解マスクと予測マスクにも権利条件が及びます。証拠の文書自体や個人情報はコマンドに書かず、私的な照合用の短い記録を残してください（シェル履歴に残り得ます）。
+
+### 自己申告の限界と正しい読み方
+
+- 出力には seed_selection=image_only_manual と明記します。従来の正解から選ぶ方式では truth_assisted と表示します。古いmanifestの seed_selection が無い場合は truth_assisted とみなします。
+- クリック位置が正解マスクの外側でも、勝手に正解へ移動させません。透明ピクセルや広すぎる背景で抽出停止した場合も、**手動選択の評価では空の抽出結果として数え、失敗を除外しません**。各ケースに segmentation_rejected=true を出します。これは精度を都合よく上げないためです。
+- 両方式はまったく同じ画像・同じ座標を使い、別々の閾値を事前に決めて比較します。正解を見て閾値を調整しないでください。
+- **ユーザーが本当に正解を見ずに点を選んだかは自己申告**です。SHA-256は同じPNGかどうかを照合するだけで、点を選んだ時刻や順番を証明するものではありません。
+- 外部通信やAIモデル重みのダウンロードを必要としません。評価の実用性を主張する前には権利確認済みの実イラストで、見逃し・誤抽出・CPU時間・修正に必要な作業量を別に測定してください。
+
+UIの静的確認と評価ツールのテスト:
+
+    node --check experiments/image_parts/choose_seeds.js
+    python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -q
+
+画面は独立したローカル実験ツールで、Creature Labの通常ゲーム画面や保存データには接続しません。

@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
+import stat
 import json
 import os
 from pathlib import Path
 import sys
 
 if __package__:
-    from .batch_evaluate import require, validate_rights, local_png, MAX_MANIFEST_BYTES
+    from .batch_evaluate import require, validate_rights, local_png, MAX_MANIFEST_BYTES, exact_keys, unique_object
     from .evaluate_masks import read_png, binary_mask, PART_COLORS
 else:
-    from batch_evaluate import require, validate_rights, local_png, MAX_MANIFEST_BYTES
+    from batch_evaluate import require, validate_rights, local_png, MAX_MANIFEST_BYTES, exact_keys, unique_object
     from evaluate_masks import read_png, binary_mask, PART_COLORS
 
 
@@ -21,6 +24,38 @@ def filename(value):
             and not any(ord(c) < 32 or ord(c) == 127 for c in value),
             'Simple filename required')
     return value
+
+
+def load_seeds(root, name, source, size, paths):
+    path = root / filename(name)
+    info = path.lstat()
+    require(path.suffix.lower() == '.json' and stat.S_ISREG(info.st_mode)
+            and not path.is_symlink() and info.st_size <= 16 * 1024,
+            'Bounded plain seed JSON required')
+    require((info.st_dev, info.st_ino) not in
+            {(p.stat().st_dev, p.stat().st_ino) for p in paths}, 'Seed input alias forbidden')
+    with path.open('rb') as stream:
+        raw = stream.read(16 * 1024 + 1)
+    require(len(raw) <= 16 * 1024, 'Seed JSON too large')
+    data = json.loads(raw, object_pairs_hook=unique_object)
+    exact_keys(data, ('schema_version', 'source', 'width', 'height', 'sha256', 'points'))
+    require(type(data['schema_version']) is int and data['schema_version'] == 1,
+            'Invalid seed schema')
+    require(data['source'] == source, 'Seed source mismatch')
+    require(all(type(data[k]) is int and data[k] == v
+                for k, v in zip(('width', 'height'), size)), 'Seed dimensions mismatch')
+    digest = data['sha256']
+    require(isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest)
+            and digest == hashlib.sha256(paths[0].read_bytes()).hexdigest(), 'Seed hash mismatch')
+    exact_keys(data['points'], PART_COLORS)
+    for point in data['points'].values():
+        if point is None:
+            continue
+        exact_keys(point, ('x', 'y'))
+        require(all(type(point[k]) is int and 0 <= point[k] < limit
+                    for k, limit in zip(('x', 'y'), size)), 'Invalid seed coordinates')
+    require(any(p is not None for p in data['points'].values()), 'At least one seed required')
+    return data['points']
 
 
 def seed_inside(mask):
@@ -43,7 +78,7 @@ def seed_inside(mask):
 
 def prepare(folder, source, basis, evidence, dataset_type, tolerance,
             confirm_local_evaluation, output, adaptive=False, step_tolerance=18,
-            drift_tolerance=90, **masks):
+            drift_tolerance=90, seeds_file=None, **masks):
     require(confirm_local_evaluation is True, 'Explicit local evaluation confirmation required')
     root = Path(folder)
     require(root.is_absolute() and root.is_dir(), 'Existing absolute folder required')
@@ -77,6 +112,8 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
     require(len({(p.stat().st_dev, p.stat().st_ino) for p in paths}) == len(paths),
             'Duplicate inputs forbidden')
     size = read_png(paths[0]).size
+    points = (load_seeds(root, seeds_file, source, size, paths)
+              if seeds_file is not None else None)
     normalized = {}
     for name, path in zip(names[1:], paths[1:]):
         image = read_png(path)
@@ -87,7 +124,11 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
         truth, prediction = masks.get(part + '_truth'), masks.get(part + '_prediction')
         if truth is None:
             continue
-        seed = seed_inside(normalized[truth])
+        if points is not None:
+            require(points[part] is not None, 'Truth requires manual point')
+            seed = (points[part]['x'], points[part]['y'])
+        else:
+            seed = seed_inside(normalized[truth])
         if seed is None:
             skipped.append(part)
             continue
@@ -103,7 +144,8 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
             cases.append(dict(common, id=part + '_mask', method='mask', prediction=prediction,
                               rights=dict(rights, covered_files=['source', 'truth', 'prediction'])))
     require(bool(cases), 'All truth masks empty')
-    payload = json.dumps(dict(schema_version=1, dataset_type=dataset_type, cases=cases),
+    payload = json.dumps(dict(schema_version=1, dataset_type=dataset_type, cases=cases,
+                              seed_selection=('image_only_manual' if points is not None else 'truth_assisted')),
                          ensure_ascii=True, indent=2) + '\n'
     require(len(payload.encode('utf-8')) <= MAX_MANIFEST_BYTES, 'Manifest too large')
     # Exclusive 0600 creation: permission evidence is private local metadata.
@@ -128,6 +170,7 @@ def main(argv=None):
     for name in ('folder', 'source', 'basis', 'evidence', 'dataset-type', 'output'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--tolerance', type=int, default=20)
+    parser.add_argument('--seeds-file')
     parser.add_argument('--adaptive', action='store_true')
     parser.add_argument('--step-tolerance', type=int, default=18)
     parser.add_argument('--drift-tolerance', type=int, default=90)
@@ -137,7 +180,7 @@ def main(argv=None):
             parser.add_argument('--' + part + '-' + kind)
     try:
         count, skipped = prepare(**vars(parser.parse_args(argv)))
-    except (ValueError, OSError, TypeError):
+    except (ValueError, OSError, TypeError, RecursionError):
         print('Rejected: invalid permission, arguments, path or PNG.', file=sys.stderr)
         return 2
     for part in skipped:
