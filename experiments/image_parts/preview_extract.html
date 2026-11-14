@@ -7,6 +7,7 @@
 <title>Creature Lab — 予測マスクの試作</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:960px;margin:auto;padding:1rem;line-height:1.7;background:#f6f8fc;color:#182339}h1{font-size:1.6rem}fieldset{margin:1rem 0;border:1px solid #8290a6;border-radius:8px}label{display:inline-block;margin:.4rem}input[type=number]{width:5rem}button,input,select{font:inherit}button{padding:.5rem}canvas{display:block;width:auto;max-width:100%;height:auto;background:repeating-conic-gradient(#ddd 0% 25%,#fff 0% 50%) 0/20px 20px;cursor:crosshair}canvas:focus{outline:3px solid #2464b9}.warning{border-left:4px solid #b45600;padding:.6rem;background:#fff1d9}#status{min-height:3.4em;white-space:pre-line}small{display:block}
+.comparison-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:.7rem}.comparison-grid figure{margin:0;min-width:0}.comparison-grid canvas{background:#ddd;cursor:default}.legend span{display:inline-block;margin-right:1rem}.legend b{display:inline-block;width:1em;height:1em;margin-right:.3em}#comparisonStats{white-space:pre-line}
 </style>
 <script src="preview_extract.js" defer></script>
 </head>
@@ -27,7 +28,18 @@ body{font-family:system-ui,sans-serif;max-width:960px;margin:auto;padding:1rem;l
 </fieldset>
 <p>表示された元画像の点をクリックしてください。キーボード操作では下の元画素座標を指定して実行できます。4方向連結、元のalpha ≥ 16、最大RGBチャンネル差を使用。全体の70%を超えたら選択全体を拒否します。</p>
 <canvas id="preview" width="1" height="1" aria-label="元画像と推測領域の色付きプレビュー"></canvas>
-<fieldset id="seedControls" disabled><legend>元画像の画素座標（左上は0,0）</legend><label>X <input id="seedX" type="number" min="0" step="1" value="0"></label><label>Y <input id="seedY" type="number" min="0" step="1" value="0"></label><button id="run" type="button">この点で予測</button></fieldset>
+<fieldset id="seedControls" disabled><legend>元画像の画素座標（左上は0,0）</legend><label>X <input id="seedX" type="number" min="0" step="1" value="0"></label><label>Y <input id="seedY" type="number" min="0" step="1" value="0"></label><button id="run" type="button">この点で予測</button><button id="compare" type="button">両方式を同じ点で比較</button></fieldset>
+<section id="comparison" hidden aria-label="同じ開始点による方式比較">
+<p>方式間の一致度であり、正解との精度ではありません。背景への漏出も確認してください。最良の方式を自動選択しません。</p>
+<p class="legend"><span><b style="background:#a050d0"></b>紫：両方式（重なり）</span><span><b style="background:#ef8800"></b>橙：固定のみ</span><span><b style="background:#00bed2"></b>シアン：適応型のみ</span>無選択部分：元画像を中立な灰色で表示</p>
+<div class="comparison-grid">
+<figure><figcaption>固定 selected mask</figcaption><canvas id="fixedPreview" width="1" height="1" aria-label="固定方式の選択領域"></canvas></figure>
+<figure><figcaption>適応型 selected mask</figcaption><canvas id="adaptivePreview" width="1" height="1" aria-label="適応型の選択領域"></canvas></figure>
+<figure><figcaption>方式間の差・重なり（元画像上）</figcaption><canvas id="differencePreview" width="1" height="1" aria-label="両方式の差と重なり"></canvas></figure>
+</div>
+<p id="comparisonStats" role="status" aria-live="polite"></p>
+<label>比較から保存する方式（自動選択なし） <select id="comparisonExport" disabled><option value="">選択してください</option><option value="seeded">固定</option><option value="adaptive-seeded">適応型</option></select></label>
+</section>
 <p id="dimensions">元画像未読込</p>
 <p id="status" role="status" aria-live="polite">権利確認後、元PNGを選んでください。</p>
 <button id="cancel" type="button" disabled>処理・予測を取り消す</button>
