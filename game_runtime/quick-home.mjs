@@ -25,8 +25,8 @@ function validLeverage(){
 function showLeverageInfo(){
   const n=validLeverage();
   element('quickLeverageHelp').textContent=n===null ? '倍率を1〜25から選んでください。' :
-    n>=10 ? '×'+n+'：利益も損失も大きくなります。試算額が0になればその時点で終了し、後から回復しても復活しません。' :
-    '利益・損失の両方に×'+n+'を適用。最大損失は試算額まで。実際の信用・FX取引とは異なります。';
+    n===25 ? '×25：通常のAI運用成績が開始時から約-4%で試算に使う資金が全損し、その後も戻りません。倍率でAIの売買は変わらず、実株価や日中の値動きは使いません。' :
+    '利益・損失の両方に×'+n+'を適用し、最大損失は試算額まで。倍率でAIの売買は変わらず、試算額が0になるとその後も戻りません。';
 }
 showLeverageInfo();
 const statusField = element('quickStatus');
@@ -174,6 +174,9 @@ element('quickRun').addEventListener('click',async()=>{
        value.persisted!==false||value.invested_coins!==ordered.amount||
        value.leverage!==ordered.leverage ||
        !Number.isFinite(value.final_balance)||!Number.isFinite(value.profit_coins)||
+       !Number.isFinite(value.normal_profit_coins)||
+       !Number.isFinite(value.normal_final_balance)||
+       !Number.isFinite(value.normal_max_drawdown_pct)||
        value.final_balance<0 || value.profit_coins < -ordered.amount ||
        !(value.liquidated_at_step===null ||
          (Number.isInteger(value.liquidated_at_step) && value.liquidated_at_step>=1 &&
@@ -184,10 +187,14 @@ element('quickRun').addEventListener('click',async()=>{
     const heading=document.createElement('h3');
     heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='試算額：'+money(ordered.amount)+' C ／ 損益倍率：×'+
-      ordered.leverage+' ／ 損益：'+(value.profit_coins>=0?'+':'')+
-      money(value.profit_coins)+' C ／ 終了時：'+
-      money(value.final_balance)+' C（試算に使わないコインを含む）';
+    summary.textContent='試算額：'+money(ordered.amount)+' C ／ '+
+      (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
+        '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
+        (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
+        ' C ／ ×'+ordered.leverage+'の損益：')+
+      (value.profit_coins>=0?'+':'')+money(value.profit_coins)+
+      ' C。練習の終了時残高：'+money(value.final_balance)+
+      ' C（試算に使わないコインを含む）。';
     const footnote=document.createElement('p');
     footnote.textContent='試算した資金の最大下落率 '+money(value.max_drawdown_pct)+
       '%。'+(value.liquidated_at_step===null ? '' :

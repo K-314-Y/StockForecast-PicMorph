@@ -443,6 +443,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const settled = settleLeveragedPractice({
           equityPath:result.equity_path,amount:payload.amount,leverage,
         });
+        // Compare the same capital and already simulated trades; never predict again.
+        const normal = settleLeveragedPractice({
+          equityPath:result.equity_path,amount:payload.amount,leverage:1,
+        });
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
           model_id:payload.model_id, initial_balance:10000,
@@ -451,6 +455,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           profit_coins:settled.profit_coins,
           final_balance:settled.final_balance,
           max_drawdown_pct:settled.max_drawdown_pct,
+          normal_profit_coins:normal.profit_coins,
+          normal_final_balance:normal.final_balance,
+          normal_max_drawdown_pct:normal.max_drawdown_pct,
           liquidated_at_step:settled.liquidated_at_step,
           steps:result.decisions.length,
           real_market:false, persisted:false, order_placed:false,
