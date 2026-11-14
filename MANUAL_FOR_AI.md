@@ -162,3 +162,14 @@ Sprint 16 の外見は2Dが基本。`/create` の保存DRAFT →「2D 着せ替�
 - 保存絵の一覧はボタンでGETし、画像は明示選択時のみ表示。下書きと使用中モデルの対応は推測しない。画像なし・取得失敗は汎用表示で練習可能。
 - PACKフォルダはブラウザ内限定。manifest_version 1、PNGのみ、最大67ファイル、64パーツ、4096×4096、1ファイル70 MiB、合計/展開後300 MiB、manifest 128 KiB、任意source.psd 20 MiB。PSDは描画せず、WebPパーツはゲーム内では未対応。mode_defaultに従い元画像か可視パーツのみを合成。再読込で解除、サーバー保存なし。編集は `/pack-lab`。
 - NodeのDOMスタブで選択・検証・排他的合成・URL解放・状態遷移を検証。実ブラウザ確認は別途。全体検証にはソケット/子プロセス権限と既存MCP SDKが必要。
+
+
+## Gemini Web の実回答取得（2026-11-14 検証済み）
+
+ゲーム設計を Gemini Web に相談する際、**送信操作と回答本文の検証を別に行う**。既存の Linux Chrome / Playwright CLI / CUA 接続ではタブ列挙だけ成功して本文取得時にエラーが出たため、無条件に再利用しない。
+
+- **推奨読取経路**：本人が承認した Windows Chrome の Gemini Web 画面。ChatGPT 側の Browser 連携でタブ一覧を読み、目的の `gemini.google.com/app/...` タブを特定し、`get_tab_context` で表示中のプロンプトと回答を取得する。これは **読み取り専用**。
+- **送信経路**：同じ Windows の Remote Desktop Commander 経由で PowerShell の `UIAutomationClient` / `UIAutomationTypes` を使う。対象の Gemini Chrome ウィンドウだけを特定し、アクセシビリティ名 `Gemini へのプロンプトを入力` の編集欄に `ValuePattern.SetValue` で入力する。Browser で入力本文を確認してから、`プロンプトを送信` ボタンの `InvokePattern.Invoke` を呼ぶ。ウィンドウや要素が複数なら勝手に送信しない。日本語は PowerShell の文字コード問題に注意。
+- **完了判定**：Browser で同じタブの更新を再取得し、今回の質問とその直後の `Gemini の回答` を確認する。`回答を停止` が消え、本文が途中で切れていないことを確認して初めてレビュー取得完了とする。開始・タイトル・送信だけでは不十分。
+- **2026-11-14の実績**：この経路で Gemini Web Argon にゲーム性の相談を送信し、生成終了後の回答本文まで確認できた。回答の採用は別途批判的に評価する。モデル選択・ログイン状態は実行ごとに再確認する。
+- **安全**：認証情報、Cookie、個人の接続ID、会話全量、他人の画像を Git や公開文書に保存しない。Linux の古いブラウザーセッションを再起動・破棄しない。Windows 操作ができない場合は「取得不可」と報告し、Gemini CLI や Codex の回答を Gemini Web と偽らない。ゲーム本体の変更とは別作業にする。
