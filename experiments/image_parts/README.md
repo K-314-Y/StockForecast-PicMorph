@@ -153,3 +153,26 @@ Chromeで experiments/image_parts/annotate.html を開きます。通常は file
 
 静的チェック: python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -q。
 保存画素・ブラシ・ダウンロードの実操作はChrome/Playwrightの受け入れ確認で行い、テスト画像はPillow生成の抽象図形だけを使います。第三者キャラクター、学習モデル重み、公開アニメ作品の画像は同梱していません。
+
+## 編集したPNGから評価JSONを作る（手入力を減らすCLI）
+
+1. `annotate.html` で許可を確認し、元PNGを開いて髪・顔・服の正解を塗り、プレビュー後に必要な部位のPNGを保存します。
+2. 元画像と保存した全マスクを、既存の**リポジトリ外の非公開フォルダ1つ**へ手動で移動してまとめます。元画像は保管したまま、そのコピーを用意してください。CLIは入力のコピー・変更やフォルダ作成をしません。Git管理下のフォルダも拒否し、元画像や許可記録をうっかりコミットしないようにします。
+3. 元画像、生成した正解マスク、指定する予測マスクの**すべて**についてローカル評価する権利と根拠を確認し、次を実行します。これは独自制作の合成図形の例です。実際の根拠に合わせて記録してください。
+
+```bash
+python3 experiments/image_parts/prepare_benchmark.py --folder /ABS/PRIVATE/DATA_DIR --source original.png --hair-truth hair.png --face-truth face.png --outfit-truth outfit.png --basis self_created --evidence "Original artwork and masks made by creator for local scoring on 2026-11-14" --dataset-type synthetic_original --tolerance 20 --confirm-local-evaluation --output benchmark.json
+python3 experiments/image_parts/batch_evaluate.py --manifest /ABS/PRIVATE/DATA_DIR/benchmark.json
+```
+
+4. 集計結果をローカルで確認します。実イラストやモデルによる評価はまだ実施していません。**データ受け渡しの自動化は、意味的な髪・顔・服の識別精度を意味しません。**
+
+- `--hair-truth` / `--face-truth` / `--outfit-truth` は個別に省略可能ですが、最低1つ必要です。それぞれ正画素の外接矩形の中心に最も近い**正画素内**のseedを自動選択し、`hair_seeded` 等のケースを作ります。同距離なら上、左の順です。これは正解を利用した色領域選択の補助評価で、自律的な部位認識ではありません。**正解からseedを選ぶため実際の利用場面より有利な条件（答えを見てクリック位置を決める比較）です。自動判別モデルの精度と公平に比較するには、正解を見ずに利用者が選んだseedを別に記録して試す必要があります。**
+- `--hair-prediction hair_pred.png` 等は対応するtruthがある場合だけ指定可能で、独立した `method=mask` の `hair_mask` 等を追加します。正解のコピーを予測として機械の成功と称さないでください。空のtruthは警告して部位全体を除外し、全部空なら失敗します。
+- `--folder` は既存の絶対パス。入出力はその中の単純なファイル名だけで、URL、絶対パス、区切り文字、親参照、シンボリックリンクは拒否します。入力の重複（ハードリンクを含む）も拒否します。全PNGは同寸法、既存評価器と同じ容量・寸法制限、マスクは二値L/1またはRGBAです。
+- `--basis` は `self_created` / `author_permission` / `licensed`。`--dataset-type synthetic_original` は `self_created` のみ、`permissioned_art` は上記3種を許可します。実イラストを合成図形と偽って指定しないでください。自己申告の真偽は自動確認できません。
+- `--evidence` の文字列はシェル履歴や一時的なプロセス表示には残る可能性があります。個人情報・氏名・秘密の許可証をそのままコマンドに書かず、非公開資料を自分で照合できる短い参照記号を記録してください。
+- `--evidence` は既存の権利検査と同じく10〜2048文字、制御文字や山括弧は禁止、URLを含めるなら通常のHTTPS参照のみです。根拠は非公開のJSON内に残りますが、CLIの標準出力・エラーには表示しません。
+- `--tolerance` は0〜255、既定値20。`--confirm-local-evaluation` は保存への明示同意として必須です。未指定や検査エラーなら永続出力は作りません。
+- 出力JSONは作成時に所有者だけが読めるモード0600で作り、許可根拠を不用意に公開しないようにします。ただしバックアップや管理者によるアクセス、シェル履歴までは防げません。
+- `--output` は必須の新規 `.json` ファイル名（例は `benchmark.json`、`manifest.json` も可）。全検査後に一度だけ排他的に作成し、既存出力・入力の上書きと `local_state` 内の保存は拒否します。出力物はこのローカルマニフェストだけで、成功時の標準出力は `success` のみです。
