@@ -9,6 +9,7 @@
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 75% 0,#31365b 0,transparent 45%),#101624}
 main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px,5vw,43px);margin:6px 0 10px}h2{font-size:21px;margin:0 0 12px}h3{margin:0 0 8px;font-size:17px}p{line-height:1.65}.sub,small{color:var(--soft)}small{line-height:1.6;display:block}.eyebrow{color:var(--mint);font-size:12px;letter-spacing:.12em;font-weight:800}
 .panel{border:1px solid var(--line);border-radius:20px;background:#1b2540;padding:21px;margin:19px 0;box-shadow:0 10px 35px #0002}
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;margin:16px 0}.shop-item{border:1px solid #526b87;border-radius:13px;padding:13px;background:#162039}.shop-item p{font-size:13px;color:#c9d9e9}.shop-item .actions{margin:9px 0 0}
 .hero{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(0,1.2fr);gap:24px;align-items:center}
 .scene{min-height:320px;position:relative;display:flex;align-items:center;justify-content:flex-end;flex-direction:column;overflow:hidden;border-radius:18px;background:radial-gradient(ellipse at 50% 85%,#5977a880,transparent 62%),linear-gradient(145deg,#342e63,#213b59);padding:15px 12px}
 .scene:after{content:"";position:absolute;bottom:23px;width:175px;height:24px;border-radius:50%;background:#0004}
@@ -119,12 +120,67 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 [hidden]{display:none!important}
 @media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
 @media(prefers-reduced-motion:reduce){.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
+.lab-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;margin:12px 0}
+.lab-grid label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:650}
+.lab-grid input{box-sizing:border-box;width:100%;min-width:0;min-height:48px;border:1px solid #748db4;border-radius:9px;background:#101a2f;color:#fff;padding:10px;font:inherit;font-size:max(1rem,1em)}
+#modelLabSection button{min-height:48px}
+.lab-grid input:focus-visible{outline:3px solid #ffdf96;outline-offset:2px}
+.lab-grid input[aria-invalid="true"]{border-color:#ffb1aa}
+.lab-hint{font-size:13px;color:#cbdaed;line-height:1.6;margin:7px 0}
+.lab-fieldset{min-width:0;border:1px solid #4b6381;border-radius:12px;margin:16px 0;padding:12px}
+.lab-fieldset legend{font-weight:700;padding:0 5px}
+.lab-advanced{margin:16px 0;border:1px solid #465e79;border-radius:11px;padding:12px}
+.lab-advanced summary{font-weight:700;cursor:pointer}
+.lab-score-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;margin:14px 0}
+.lab-score-grid article{border-radius:12px;border:1px solid #415878;background:#12223b;padding:12px}
+.lab-score-grid h4{margin:0 0 8px}.lab-score-grid p{margin:0;line-height:1.8}
+.lab-table-container{max-width:100%;overflow-x:auto}
+.lab-table-container table{width:100%;border-collapse:collapse;font-size:13px;min-width:340px}
+.lab-table-container th,.lab-table-container td{border-bottom:1px solid #526a86;text-align:left;padding:9px}
+.lab-table-container th{font-weight:700}
+.lab-table-container tr[data-different="true"]{background:#283851}
+.simple-home{max-width:750px;margin:18px auto}.simple-home .simple-balance{font-size:26px;color:var(--mint);font-weight:800;margin:7px 0}.simple-fields{display:grid;gap:12px;margin:17px 0}.simple-fields label{display:grid;gap:7px;font-weight:750}.simple-fields select,.simple-fields input{width:100%;min-height:50px;background:#101a2e;border:1px solid #7590af;border-radius:12px;padding:12px;color:#f6fbff;font:inherit;font-size:17px}.simple-fields input:focus-visible,.simple-fields select:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-fields .amount-entry{display:flex;align-items:center;gap:8px}.simple-fields .amount-entry input{flex:1;min-width:0}.simple-fields .amount-entry button{flex:none}.simple-home .simple-hint{font-size:13px;color:var(--soft);margin:4px 0}.simple-home .simple-error{color:#ffc8c8;min-height:1.4em}.simple-home .simple-confirm{border:1px solid #58758f;background:#101d31;border-radius:13px;padding:14px;margin:15px 0}.simple-home .simple-result{border:1px solid #638f81;background:#152b31;border-radius:13px;padding:14px;margin-top:18px}.advanced-entry{max-width:1024px;margin:16px auto}.advanced-entry>summary{display:list-item;cursor:pointer;font-weight:750;padding:16px 18px;background:#243653;border:1px solid var(--line);border-radius:13px}.advanced-entry[open]>summary{margin-bottom:18px}.advanced-entry>.panel{margin-left:0;margin-right:0}
+.simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
 </style>
 </head>
 <body><main>
 <span class="eyebrow">CREATURE LAB · NODE PRACTICE</span>
 <h1>相棒と、12日間の予測冒険。</h1>
-<p class="sub">キャラと一緒に架空相場を練習しよう。Pythonは予測判断、Node.jsはゲームと育成を担当します。</p>
+<p class="sub">自分のAIか、解放済みのデモAIを選んで、試算額を入力。まずは12日間の練習から。</p>
+<section class="panel simple-home" id="simpleHome" aria-labelledby="simpleHomeTitle">
+ <span class="eyebrow">EASY MODE · はじめての練習</span>
+ <h2 id="simpleHomeTitle">AIにコインを任せてみよう</h2>
+ <p class="simple-hint">架空相場の12ステップ（12日間）だけを試算します。コインの引き落とし・実際の注文はなく、実際の株価も使いません。練習用残高・結果は保存されません。倍率の強制終了判定は各日の終値のみで行う簡易方式です。</p>
+ <p>練習用の仮想コイン（消費されません） <span class="simple-balance">10,000 C</span></p>
+ <form id="quickForm" novalidate>
+  <div class="simple-fields">
+   <label for="quickModel">① 練習に使うAIを選択
+    <select id="quickModel" name="model" required aria-describedby="quickModelHelp"><option value="self">自分のAI（未作成なら標準AI）</option></select>
+   </label>
+   <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button></div>
+   <p id="quickModelHelp" class="simple-hint">自分のAIは無料です。デモAIはショップ専用のコインで解放できます。</p>
+   <label for="quickAmount">② 試算額を入力（練習用：1〜10,000 C）</label>
+   <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError"><button id="quickAll" type="button">全額</button></div>
+   <p id="quickHelp" class="simple-hint">入力した額だけを試算。AIが購入せずに待機する場合もあります。</p>
+   <p id="quickRemaining" class="simple-hint">試算に使わないコイン：9,000 C</p>
+   <label for="quickLeverage">③ 損益倍率（1〜25倍）
+    <select id="quickLeverage" name="leverage" aria-describedby="quickLeverageHelp" required><option value="1">×1（通常）</option></select>
+   </label>
+   <p id="quickLeverageHelp" class="simple-hint">倍率は利益だけでなく損失にもかかります。最大損失は試算額までです。</p>
+   <p id="quickError" class="simple-error" role="status" aria-live="polite"></p>
+  </div>
+  <button id="quickConfirm" class="primary" type="submit">④ 内容を確認する</button>
+ </form>
+ <div id="quickReview" class="simple-confirm" hidden>
+  <h3>練習内容の確認</h3><p id="quickReviewText"></p>
+  <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額・倍率を修正</button></div>
+ </div>
+ <div id="quickResult" class="simple-result" role="status" aria-live="polite" hidden></div>
+ <div id="quickNext" hidden><p>次はAI・試算額・倍率を変えて、同じ架空12日間で試せます。再挑戦は練習専用です。</p><div class="actions"><button id="quickAgain" class="primary" type="button">AI・金額・倍率を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div></div>
+ <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
+</section>
+<details class="advanced-entry" id="advancedEntry">
+<summary>もっと詳しい機能を開く（AI作成・モデルショップ・研究・育成）</summary>
 <section class="panel hero" aria-label="冒険を始める">
  <div id="scene" class="scene" data-mood="ready">
   <h2 id="companionName">私の相棒</h2>
@@ -148,8 +204,8 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
   <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
   <p id="brainStatus" class="brain-note">予測：標準モデル mine（未作成）。保存すると自分で設計した判断ルールで練習します。DRAFTの予測ルールは未適用。</p>
-  <details class="appearance-controls" open>
-   <summary>私の相棒を作る</summary>
+  <details class="appearance-controls" id="companionControls" open>
+   <summary id="companionEditorTitle" class="simple-target">私の相棒を作る</summary>
    <p class="creator-note">名前・外見・重視する判断・資金の使い方を自分で決めよう。操作中は一時プレビュー。保存した設定だけが次の練習に反映されます。</p>
    <form id="companionForm">
     <div class="creator-grid">
@@ -160,7 +216,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
      <label for="creatorRisk">上昇判断時に使う資金（%）<input id="creatorRisk" type="number" min="5" max="100" step="5" value="35" required></label>
     </div>
     <p id="creatorPreview" class="creator-note" aria-live="polite"></p>
-    <div class="actions"><button id="saveCompanion" type="submit" class="primary" disabled>この相棒を保存する</button><button id="reloadCompanion" type="button">保存済みを再取得</button></div>
+    <div class="actions"><button id="saveCompanion" type="submit" class="primary" disabled>この相棒を保存する</button><button id="reloadCompanion" type="button">保存済みを再取得</button><button id="companionReturn" type="button">AI・試算額の選択に戻る</button></div>
    </form>
    <details class="appearance-controls" id="lookControls" open>
     <summary>✂️ 自分で髪型・表情・飾りを組み立てる</summary>
@@ -239,6 +295,97 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
 </section>
+<section class="panel" id="modelLabSection" aria-labelledby="modelLabTitle">
+ <span class="eyebrow">MODEL LAB / 変数の実験室</span><h2 id="modelLabTitle">相棒の予測ルールを調整して試す</h2>
+ <p>基準の相棒と、数字を変えた相棒が<strong>同じ架空12日間・同じ1万コイン・同じ手数料</strong>でどう動くか比較します。この画面では学習も保存もXP取得も行いません。</p>
+ <p class="notice">株価予測V7で扱っている「予測」と「資金管理」を区別しました。短期・長期や分析の重みは予測判断、仮想投資比率は資金の使い方です。固定12日間で勝っても実力の証明にはなりません。</p>
+ <div class="actions"><button id="labLoad" type="button">今の相棒から変数を読み込む</button><span id="labBasis" class="arena-note">まだ読み込んでいません</span></div>
+ <form id="labForm" aria-labelledby="modelLabTitle" novalidate>
+  <div class="lab-grid">
+   <label for="labFast">短期：直近何日を見るか
+    <input id="labFast" name="fast_window" type="number" min="2" max="19" step="1" required aria-describedby="labWindowHint"></label>
+   <label for="labSlow">長期：何日間の流れを見るか
+    <input id="labSlow" name="slow_window" type="number" min="3" max="20" step="1" required aria-describedby="labWindowHint"></label>
+   <label for="labRisk">仮想投資比率（％）
+    <input id="labRisk" name="risk_percent" type="number" min="5" max="100" step="1" required aria-describedby="labRiskHint"></label>
+  </div>
+  <p class="lab-hint" id="labWindowHint">短期は長期より小さく。短いほど直近に反応しやすくなりますが、正確になるとは限りません。</p>
+  <p class="lab-hint" id="labRiskHint">投資比率は予測の確率を変えず、仮想資金の使用量だけ変えます。</p>
+  <fieldset class="lab-fieldset">
+   <legend>分析パーツの配分（合計100％）</legend>
+   <p class="lab-hint">複数の分析方法を組み合わせます。配分の合計は100％にしてください。</p>
+   <div class="lab-grid lab-weights">
+    <label for="labWeightTrend">流れを追う
+     <input id="labWeightTrend" name="weight_trend" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightMomentum">勢いを追う
+     <input id="labWeightMomentum" name="weight_momentum" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightVolatility">値動きの大きさ
+     <input id="labWeightVolatility" name="weight_volatility" type="number" min="0" max="100" step="1" required></label>
+    <label for="labWeightReversion">平均への戻り
+     <input id="labWeightReversion" name="weight_reversion" type="number" min="0" max="100" step="1" required></label>
+   </div>
+   <p id="labWeightTotal" class="lab-hint" role="status" aria-live="polite">合計：--</p>
+   <div class="actions">
+    <button id="labPresetTrend" type="button">流れ重視</button>
+    <button id="labPresetReversion" type="button">反転重視</button>
+    <button id="labPresetBalanced" type="button">均等</button>
+   </div>
+  </fieldset>
+  <details class="lab-advanced">
+   <summary>詳細設定：各分析の感度（50〜150）</summary>
+   <p class="lab-hint">100が標準。感度を変えても結果が改善する保証はありません。</p>
+   <div class="lab-grid">
+    <label for="labStrengthTrend">流れの感度<input id="labStrengthTrend" name="strength_trend" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthMomentum">勢いの感度<input id="labStrengthMomentum" name="strength_momentum" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthVolatility">値動きの感度<input id="labStrengthVolatility" name="strength_volatility" type="number" min="50" max="150" step="1" required></label>
+    <label for="labStrengthReversion">反転の感度<input id="labStrengthReversion" name="strength_reversion" type="number" min="50" max="150" step="1" required></label>
+   </div>
+  </details>
+  <p class="lab-hint">過去株価の取得元：V7のGit除外済み .env にあるJ-Quants APIキーを読み取り専用で参照します。キーがない場合のみローカルの2024年履歴を使います。APIエラー時は黙って切り替えず取得失敗を通知します。J-Quantsは調整済み終値、ローカル履歴は未調整の参考値です。どちらを使ったか結果に表示します。</p>
+  <div class="actions">
+   <button id="labMarketRun" type="button" class="primary" disabled>別の過去相場を選んで比較する</button>
+   <button id="labMarketReplay" type="button" hidden disabled>同じ過去相場で再検証</button>
+   <button id="labRun" type="submit" disabled>固定架空12日で比較する（従来版）</button>
+  </div>
+ </form>
+ <p id="labStatus" role="status" aria-live="polite">変数を読み込むと比較できます。</p>
+ <section id="labMarketResult" class="lab-market-result" aria-label="実際の過去株価での比較結果" hidden>
+  <h3>実際の過去株価から選んだ12営業日</h3>
+  <p id="labMarketSource" class="lab-hint"></p>
+  <div class="lab-score-grid">
+   <article><h4>元の相棒</h4><p id="labMarketOriginal"></p></article>
+   <article><h4>変数を変えた相棒</h4><p id="labMarketChanged"></p></article>
+  </div>
+  <p id="labMarketDifference" class="brain-note"></p>
+  <p id="labMarketWarning" class="arena-note"></p>
+  <details class="lab-advanced"><summary>12日間の判断の違いを確認</summary>
+   <div id="labMarketDays" class="lab-table-container"></div>
+  </details>
+ </section>
+ <div id="labResult" hidden>
+  <h3>同じ条件での比較結果</h3>
+  <div class="lab-score-grid">
+   <article><h4>変更前</h4><p id="labOriginalSummary"></p></article>
+   <article><h4>変更後</h4><p id="labCandidateSummary"></p></article>
+  </div>
+  <p id="labDifference" class="brain-note"></p>
+  <details class="lab-advanced"><summary>12日間の判断を見比べる</summary>
+   <div id="labDayTable" class="lab-table-container"></div>
+  </details>
+  <p class="arena-note">注意：この比較は固定された架空相場だけです。複数設定を試すほど結果に合わせた調整になりやすく、未知の相場や実際の株価での有効性は検証していません。</p>
+ </div>
+</section>
+<section class="panel" id="modelShopSection" aria-labelledby="modelShopTitle">
+ <span class="eyebrow">MODEL SHOP · コインで他作AIを解放</span>
+ <h2 id="modelShopTitle" class="simple-target" tabindex="-1">ほかの人のAIを使う（ローカル試作）</h2>
+ <p>自作モデルは無料。他人のモデルはコインで一度解放すると、何度でも使えます。作者が公開した更新は次の練習から自動反映し、再購入は不要です。</p>
+ <p class="notice">現在の出品者・モデルはすべて<strong>架空のサンプル</strong>です。実在するユーザー同士の売買や広告によるコイン付与は未実装。勝率・利益は保証されません。</p>
+ <p>モデル解放用の残高：<strong id="shopBalance">読み込み中…</strong>。練習用の10,000 Cとは別です。使用権の解放時だけ減り、解放したAIとこの残高はこのPCに保存されます。</p>
+ <div class="actions"><button id="shopReturn" type="button">AI・試算額の選択に戻る</button></div>
+ <div class="shop-grid" id="shopCatalog"></div>
+ <p id="shopStatus" class="arena-note" role="status" aria-live="polite">ショップ情報を読み込んでいます…</p>
+ <small>モデルは解放したIDで管理し、版ごとの購入は不要です。実行途中に判断が変わることはありません。作者へのコイン送金・現金化・第三者への譲渡はありません。実株価の一般公開利用には別途許諾が必要です。</small>
+</section>
 <section class="panel" id="arenaSection" aria-labelledby="arenaTitle">
  <span class="eyebrow">MODEL ARENA · 同条件比較</span><h2 id="arenaTitle">3モデルで予測対決</h2>
  <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。装備補正は全員オフ、手数料は同一。こちらの比較ではXPは発生しません。</p>
@@ -281,6 +428,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <small>装備は次の練習の予測判断に影響します。外見と学習済みモデルは別管理です。XPはNode専用保存先を使用します。</small>
 </section>
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
-<p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。コインは保存されません。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
+<p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。練習中の仮想投資コインは保存されません。モデルショップの使用権とコイン残高は別管理で保存されます。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
-</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script></body></html>
+</details>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script><script type="module" src="/model-shop-ui.mjs"></script><script type="module" src="/quick-home.mjs"></script></body></html>

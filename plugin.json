@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "creature-lab",
+  "version": "0.1.0",
+  "description": "Create, inspect and test hand-authored forecast creatures in the local Creature Lab game with a private MCP server. All forecasts are synthetic practice.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Creature Lab",
+        "shortDescription": "自作キャラを確認・制作・架空相場で試す",
+        "longDescription": "名前、外見、イラスト、予測方法を自分で決めて架空12日間の練習を試す。保存は本人の指示でのみ実行。",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": [
+          "Creature Labで今の自作キャラと画像を確認して",
+          "自作キャラの設定案を保存せずに12日間試して",
+          "保存済みの髪・顔・服の画像を見て改善点を教えて"
+        ]
+      }
+    }
+  }
+}

@@ -244,3 +244,105 @@ ChatGPT MCPに読み取り専用 `get_my_artwork` を追加（合計8ツール�
 アップロード自体はLinuxのローカルNodeゲーム `127.0.0.1:8890/game` で行う。
 `/api/artwork` は元画像を独立保存し、予測・XP・旧Python・V6には影響しない。
 透過パーツは別途用意する必要がある。現状は自動切り抜き・画像のChatGPT側アップロードには非対応。
+
+### Independent branch: ChatGPT image-aware creator tools
+
+Branch: `feat/chatgpt-plugin-images-v1`; **not merged into main and not installed
+in the ChatGPT product**. Local tests use disposable files and an isolated
+Node game so no user artwork, XP, companion or V6 data is changed.
+
+Two new MCP tools are available on this branch (10 total):
+
+- `get_my_character_sheet` (read-only): one call returns saved companion,
+  cosmetic chibi parts and artwork metadata. Useful before discussing edits.
+- `view_my_artwork_image` (read-only): `{slot:"base"|"hair"|"face"|"outfit"}`
+  returns the **actual saved PNG/JPEG/WebP** as a standard MCP `image`
+  content item so ChatGPT can visually inspect the illustration. Image input is
+  only read from the fixed local Node game API. Max 450 KB, strict MIME + binary
+  signature checks, no arbitrary image URLs, no file system, no upload, no XP,
+  and no modifications. Viewing an image is not automatically recognizing or
+  cutting its hair/face/clothes. ChatGPT's visual analysis may be mistaken.
+
+Local test:
+
+```bash
+cd /home/yugo314/ドキュメント/14_予測クリーチャー_chatgpt-plugin
+(cd mcp && npm test)
+node mcp/companion-chatgpt.mjs
+```
+
+The CLI will bind to `127.0.0.1:8896` only when that port is free; the
+existing server already uses that port. To test while the existing server
+is running, use an isolated ephemeral port with
+`createCompanionChatGptHttpServer({apiBase:gameUrl})`, as tests do.
+The browser game must already have a saved artwork slot for image retrieval.
+
+**Actual ChatGPT plugin installation is not completed.** The published
+ChatGPT documentation (checked November 11, 2026) says custom MCP server
+creation is supported on Business and Enterprise/Edu, subject to workspace
+permissions, rather than being guaranteed on individual Plus. A local
+`127.0.0.1` endpoint is unreachable from ChatGPT. In a supported workspace,
+use **Plugins → + → Add custom MCP server** with a Secure MCP Tunnel or an
+**authenticated public HTTPS** endpoint. Do not use a public unauthenticated
+port-forwarding workaround or put secrets in Git.
+
+Official docs:
+- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
+- https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+
+Security note: this branch also updates its **own** MCP workspace dependency
+to `zod@4.6.7` to address the high-severity validation DoS advisory
+`GHSA-mrhx-c7xc-m3w5`. Verified against all Node and Python regression
+tests and `npm audit --audit-level=high` (zero findings). The original
+`main` workspace and its running server were not modified or restarted.
+
+### Local plugin packaging + repeatable one-command verification (November 2026)
+
+This branch now includes a portable root `plugin.json`, `mcp.json`
+(`stdio` launch of the existing private 10-tool bridge), and a focused
+`skills/creature-lab/SKILL.md`. These follow the documented Agent Plugins
+local / desktop layout; the package is **not yet registered in ChatGPT**.
+
+Run all isolated checks on Linux, including a real MCP Inspector CLI handshake:
+
+```bash
+cd '/home/yugo314/ドキュメント/14_予測クリーチャー_chatgpt-plugin'
+bash scripts/test-plugin.sh
+```
+
+The script checks manifest metadata, runs Node tests without the older
+`mcp.test.mjs` test that can affect the legacy state, checks TypeScript,
+runs Python unit tests, audits dependencies, and calls MCP Inspector CLI
+`tools/list` against the `stdio` service. It doesn't modify live
+companion, image, XP, or frozen V6 data.
+
+GitHub Actions definition: `.github/workflows/creature-lab-plugin-check.yml`.
+It can run automatically on branch pushes/PRs **after the branch is pushed**.
+The current creation does not push it, register the server, install a
+ChatGPT plugin, or approve any account permissions.
+
+A supported ChatGPT account must **separately** register a private Secure
+MCP Tunnel or authenticated HTTPS connection (user action), receive its
+`plugin_asdk_app...` identity, and perform an end-to-end ChatGPT tool
+selection/confirmation test. A local-only stdio package can be used for
+local development and supported desktop-only surfaces, not as a substitute
+for a registered cloud-side connection.
+
+### Follow-up validation after main sync (323b11f)
+
+The package verifier now validates both manifests with the official Agent Plugins
+1.0.0 JSON Schemas, vendored unchanged from their `$id` URLs under
+`scripts/schemas/agent-plugins-1.0.0/` for offline reproducibility. It uses the MCP
+SDK's existing Ajv 2020 validator (no additional dependency), then expands
+`${PLUGIN_ROOT}` in the actual manifest cwd/args and performs a bounded stdio
+initialize/tools-list smoke check without calling the game. This verifies local
+launch semantics, not a particular ChatGPT host's discovery/installation or the
+opaque `com.openai` extension semantics.
+
+The lockfile updates only `@hono/node-server` 2.1.5 to compatible patch 2.1.8;
+Zod remains 4.6.7. Image tests use disposable dynamic localhost ports and cover
+bad MIME/signatures, declared/streamed size limits, HTTP errors, redirects and a
+deterministic aborted timeout signal. The latter verifies error handling rather
+than waiting for the real 4500ms timer. No public listener or new authorization
+mechanism is added: Host/Origin/peer checks remain the browser boundary;
+untrusted processes on the same host remain outside that protection.
