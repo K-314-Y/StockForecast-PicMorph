@@ -62,3 +62,45 @@ export function settleLeveragedPractice({equityPath,amount,leverage,available=10
     allocated_equity_path:leveragedPath.map(round),
   };
 }
+
+// Unwired experiment: freeze at the first daily sample gaining or losing the stake.
+// Daily closes cannot model intraday execution or guarantee economic neutrality.
+export function settleSymmetricCappedExperiment({equityPath,amount,leverage,available=10000}) {
+  const original=settleLeveragedPractice({equityPath,amount,leverage,available});
+  const gainLimit=2*amount;
+  const cappedPath=[amount];
+  let stoppedAtStep=null,stopReason=null;
+  let finalCapital=amount,peak=amount,dd=0;
+  for(let i=1;i<original.allocated_equity_path.length;i++){
+    if(stoppedAtStep===null){
+      // The original output path rounds cents; thresholds and drawdown must not.
+      finalCapital=amount+leverage*(equityPath[i]-amount);
+      if(finalCapital>=gainLimit){
+        finalCapital=gainLimit;
+        stoppedAtStep=i;
+        stopReason='gain_cap';
+      } else if(original.liquidated_at_step===i){
+        finalCapital=0;
+        stoppedAtStep=i;
+        stopReason='loss_cap';
+      }
+    }
+    cappedPath.push(stoppedAtStep===null ? original.allocated_equity_path[i] : finalCapital);
+    peak=Math.max(peak,finalCapital);
+    dd=Math.max(dd,1-finalCapital/peak);
+  }
+  return {
+    leverage,
+    invested_coins:amount,
+    cash_held:original.cash_held,
+    profit_coins:round(finalCapital-amount),
+    allocated_final:round(finalCapital),
+    final_balance:round(original.cash_held+finalCapital),
+    max_drawdown_pct:round(dd*100),
+    stopped_at_step:stoppedAtStep,
+    stop_reason:stopReason,
+    experimental_only:true,
+    daily_close_only:true,
+    capped_equity_path:cappedPath,
+  };
+}
