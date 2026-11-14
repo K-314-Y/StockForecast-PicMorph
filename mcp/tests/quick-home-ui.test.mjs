@@ -40,6 +40,7 @@ async function mount(models=[]) {
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
+    normal_profit_coins:25,normal_final_balance:10025,normal_max_drawdown_pct:1,
   })};
   const fetch=async(path,options)=>{
     const body=options?.body?JSON.parse(options.body):undefined;
@@ -162,17 +163,29 @@ test('25x is selectable, displayed before confirmation, and locked for the reque
   assert.equal(get('quickLeverage').children.at(-1).value,'25');
   get('quickLeverage').value='25';
   await fire('quickLeverage','change');
-  assert.match(get('quickLeverageHelp').textContent,/試算額が0/);
+  assert.match(get('quickLeverageHelp').textContent,/約-4%.*全損/);
   await fire('quickForm','submit');
   assert.match(get('quickReviewText').textContent,/倍率：×25/);
   await fire('quickRun');
   assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:25});
-  assert.match(get('quickResult').children[1].textContent,/倍率：×25/);
+  assert.match(get('quickResult').children[1].textContent,/通常（×1）の損益：/);
+  assert.match(get('quickResult').children[1].textContent,/×25の損益：/);
   get('quickLeverage').value='26';
   await fire('quickLeverage','change');
   await fire('quickForm','submit');
   await fire('quickRun');
   assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+});
+
+test('normal ×1 practice does not duplicate the comparison result in the UI',async()=>{
+  const {get,fire}=await mount();
+  assert.equal(get('quickLeverage').value,'1');
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  const summary=get('quickResult').children[1].textContent;
+  assert.match(summary,/損益倍率：×1/);
+  assert.doesNotMatch(summary,/通常（×1）の損益：/);
+  assert.doesNotMatch(summary,/×25の損益：/);
 });
 
 test('invalid amounts cannot trigger practice requests',async()=>{

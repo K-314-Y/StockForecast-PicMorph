@@ -48,6 +48,9 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       assert.equal(data.mode,'SIMPLE_SYNTHETIC_PRACTICE_ONLY');
       assert.equal(data.invested_coins,amount);
       assert.equal(data.leverage,1,'legacy requests remain x1');
+      assert.equal(data.normal_profit_coins,data.profit_coins);
+      assert.equal(data.normal_final_balance,data.final_balance);
+      assert.equal(data.normal_max_drawdown_pct,data.max_drawdown_pct);
       assert.equal(data.liquidated_at_step,null);
       assert.equal(data.initial_balance,10000);
       assert.equal(data.cash_held,10000-amount);
@@ -68,6 +71,18 @@ test('25x server integration is read-only and never creates a negative balance',
     assert.equal(out.status,200,JSON.stringify(out.data));
     assert.equal(out.data.leverage,25);
     assert.equal(out.data.cash_held,9000);
+    assert.ok(Number.isFinite(out.data.normal_profit_coins));
+    assert.ok(Number.isFinite(out.data.normal_final_balance));
+    assert.ok(Number.isFinite(out.data.normal_max_drawdown_pct));
+    assert.ok(Math.abs(out.data.normal_final_balance-
+      (10000+out.data.normal_profit_coins))<.02);
+    if(out.data.liquidated_at_step===null){
+      assert.ok(Math.abs(out.data.profit_coins-
+        25*out.data.normal_profit_coins)<.03);
+    } else {
+      assert.equal(out.data.profit_coins,-1000,
+        'a liquidated allocation cannot recover');
+    }
     assert.ok(out.data.final_balance>=9000);
     assert.ok(out.data.profit_coins>=-1000);
     assert.equal(out.data.real_market,false);
