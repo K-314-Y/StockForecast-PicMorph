@@ -16,6 +16,11 @@ import {z} from 'zod';
 import {validateArtworkImage,MAX_ARTWORK_FILE} from '../game_runtime/artwork.mjs';
 
 export const CHATGPT_MCP_PORT = 8896;
+export const CHATGPT_READ_ONLY_MCP_PORT = 8897;
+const READ_ONLY_TOOLS = new Set([
+  'get_my_character_sheet','get_my_companion','get_my_look','get_my_artwork',
+  'get_my_creature_growth','list_my_trained_brains',
+]);
 const API = 'http://127.0.0.1:8890';
 const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 65536;
@@ -99,13 +104,20 @@ function errorResult(error) {
   };
 }
 
-export function makeCompanionChatGptMcp({apiBase=API}={}) {
+export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
+  if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
   const server = new McpServer(
     {name:'creature-lab-companion',version:'1.3.0'},
-    {instructions:
+    {instructions:readOnly
+      ? 'Creature Labの非公開・読み取り専用メタデータ接続。保存済みキャラ、外見、画像の登録状況、育成、学習済みキャラ一覧のみ確認できる。名前やXPも個人情報として扱う。保存・プレビュー・画像本体の転送はできない。'
+      :
       '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はユーザーと相談する推測であり自動認識・自動分割ではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。実取引・V6変更・XP操作なし。'}
   );
-  server.registerTool('get_my_companion',{
+  // Explicit metadata allowlist: readOnlyHint alone also permits previews/images.
+  const registerTool=(name,config,handler)=>{
+    if(!readOnly || READ_ONLY_TOOLS.has(name)) server.registerTool(name,config,handler);
+  };
+  registerTool('get_my_companion',{
     title:'Creature Lab: 自分の相棒を確認',
     description:'Nodeゲームと共有している保存済みキャラの名前、髪色、服色、予測方法、リスク設定、編集revisionを取得する。未作成ならデフォルトを返す。読み取りだけで保存しない。',
     inputSchema:{},
@@ -121,7 +133,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       };
     } catch(e) {return errorResult(e);}
   });
-  server.registerTool('save_my_companion',{
+  registerTool('save_my_companion',{
     title:'Creature Lab: 自分の相棒を作成・更新',
     description:'ユーザーが選んだ相棒の名前・髪色・服色・予測方法・仮想コインの資金配分をNodeゲームに保存し、Webゲームと同期する。必ずユーザーの作成・変更意図を確認し、get_my_companionの現在revisionを指定する。旧ゲーム/V6は更新しない。',
     inputSchema:z.object({
@@ -146,7 +158,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       };
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('list_my_trained_brains',{
+  registerTool('list_my_trained_brains',{
     title:'Creature Lab: 作って学習させたキャラを確認',
     description:'旧制作画面から保存した練習専用の学習済みキャラ一覧を取得。次の試遊では指定したバージョンIDで判断させられる。読み取りのみ。実市場の検証結果ではない。',
     inputSchema:{},
@@ -159,7 +171,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         structuredContent:{...data,practice_only:true,real_market_validation:false}};
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('preview_my_companion',{
+  registerTool('preview_my_companion',{
     title:'Creature Lab: 保存前のキャラ案を12日間お試し',
     description:'自分で決めた未保存の候補キャラ、現在保存済みの相棒、または制作画面で学習した練習版を、架空相場12日間で試す。XPやコイン、候補設定の保存、注文は行わない。結果を見てから保存を判断できる。',
     inputSchema:z.object({
@@ -188,7 +200,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         structuredContent:{result}};
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('get_my_look',{
+  registerTool('get_my_look',{
     title:'Creature Lab: 自分が組み立てた2D外見パーツを確認',
     description:'ゲームと同じ髪型・表情・アクセサリーの保存済み設定を取得する。画像生成ではなく2Dパーツの組み合わせ。読み取りだけで保存しない。',
     inputSchema:{},
@@ -202,7 +214,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         structuredContent:{...look,cosmetic_only:true}};
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('save_my_look',{
+  registerTool('save_my_look',{
     title:'Creature Lab: 2Dキャラの髪型・表情・飾りを保存',
     description:'本人が決めたパーツをゲーム内のchibiへ保存する。get_my_lookで現在のrevisionを取得してから明示的な編集依頼で呼ぶ。予測ルール・育成・V6は変更しない。',
     inputSchema:z.object({
@@ -222,7 +234,7 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         structuredContent:{...value,cosmetic_only:true}};
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('get_my_creature_growth',{
+  registerTool('get_my_creature_growth',{
     title:'Creature Lab: 育成レベル・装備を確認',
     description:'Nodeゲームの育成XP、レベル、現在の装備を読み取る。XPや装備の変更はしない。',
     inputSchema:{},
@@ -233,9 +245,11 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       return {content:[{type:'text',text:'保存済みの育成XP・装備を読み取りました。'}],structuredContent:{growth}};
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('get_my_character_sheet',{
+  registerTool('get_my_character_sheet',{
     title:'Creature Lab: キャラ制作の現在地を一覧で確認',
-    description:'自分の相棒の予測設定、見た目のパーツ、アップロード済みの画像の有無をまとめて取得する。読み取りだけ。画像本体は view_my_artwork_image で個別取得する。',
+    description:readOnly
+      ? '自分の相棒の予測設定、見た目のパーツ、画像の登録状況だけをまとめて取得する。読み取り専用。画像本体は送らない。'
+      : '自分の相棒の予測設定、見た目のパーツ、アップロード済みの画像の有無をまとめて取得する。読み取りだけ。画像本体は view_my_artwork_image で個別取得する。',
     inputSchema:{},
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
   },async()=>{
@@ -246,13 +260,15 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
         jsonFromGame(apiBase,'/api/artwork'),
       ]);
       return {
-        content:[{type:'text',text:'現在の自作キャラの設定・外見・画像登録状況をまとめました。画像をChatGPTで確認するときは view_my_artwork_image を呼び、本人が決めた内容のみ保存してください。未保存の内容を自動確定しません。'}],
+        content:[{type:'text',text:readOnly
+          ? '現在の自作キャラの設定・外見・画像登録状況を読み取りました。画像本体の転送・保存・プレビューはこの接続ではできません。'
+          : '現在の自作キャラの設定・外見・画像登録状況をまとめました。画像をChatGPTで確認するときは view_my_artwork_image を呼び、本人が決めた内容のみ保存してください。未保存の内容を自動確定しません。'}],
         structuredContent:{companion,look,artwork,read_only:true,
           preview_only_until_explicit_save:true,real_market_trading:false},
       };
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('view_my_artwork_image',{
+  registerTool('view_my_artwork_image',{
     title:'Creature Lab: 保存済みの自作イラストをChatGPTで見る',
     description:'ユーザーが自分の作品の閲覧・画像分析を明示的に求めた時だけ使用。Nodeゲームに保存された完成イラスト（base）または髪・顔・服を画像データとしてChatGPTへ送って表示する。ローカル以外への画像送信が発生するため、単なる設定確認では呼ばない。自動分割は行わず、ローカルの画像保存内容も変更しない。',
     inputSchema:z.object({
@@ -274,16 +290,16 @@ export function makeCompanionChatGptMcp({apiBase=API}={}) {
       };
     }catch(e){return errorResult(e);}
   });
-  server.registerTool('get_my_artwork',{
+  registerTool('get_my_artwork',{
     title:'Creature Lab: 自分のイラストの保存状況を確認',
-    description:'完成イラスト・髪・顔・服の保存状況（revision、存在、MIME、サイズ）だけを読み取る。画像バイトはChatGPTに送らない。ChatGPTからの画像バイナリ転送は未実装。画像はローカルゲーム画面のファイル入力で選び、SAVEする。自動切り抜きは行わない。',
+    description:'完成イラスト・髪・顔・服の保存状況（revision、存在、MIME、サイズ）だけを読み取る。画像バイトは送らない。画像本体は別ツールを明示的に呼んだときだけ返される。画像はローカルゲーム画面でSAVEする。',
     inputSchema:z.object({}).strict(),
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
   },async()=>{
     try {
       const state=await jsonFromGame(apiBase,'/api/artwork');
       return {content:[{type:'text',text:
-        '自分のイラストの保存状況を読み取りました。ChatGPTからの画像バイナリ転送は未実装です。ローカルゲームの「私のイラストを重ねる」でファイルを選び、SAVEしてください。自動切り抜きは行いません。任意レイヤーは人や別アプリで切り抜いた同じサイズの透明キャンバスを使います。'}],
+        '自分のイラストの保存状況を読み取りました。'+(readOnly ? 'この接続では画像本体の取得は禁止しています。' : '画像本体を確認するときは明示的な本人の依頼が必要です。')+'ローカルゲームの「私のイラストを重ねる」でファイルを選び、SAVEしてください。自動切り抜きは行いません。'}],
         structuredContent:state};
     }catch(e){return errorResult(e);}
   });
@@ -300,7 +316,8 @@ function locallyAllowed(req, port) {
     !['forwarded','x-forwarded-for','x-forwarded-host','x-forwarded-proto'].some(x=>req.headers[x]);
 }
 
-export function createCompanionChatGptHttpServer(options={}) {
+export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}) {
+  if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
   const server=createServer(async(req,res)=>{
     const port=server.address()?.port;
     if(!locallyAllowed(req,port)) {
@@ -310,7 +327,8 @@ export function createCompanionChatGptHttpServer(options={}) {
     const url=new URL(req.url ?? '/', 'http://localhost');
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
-        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,tools:10}));
+        .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,
+          tools:readOnly ? READ_ONLY_TOOLS.size : 10}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {
@@ -319,7 +337,7 @@ export function createCompanionChatGptHttpServer(options={}) {
     if(req.method==='POST' && Number(req.headers['content-length']??0)>MAX_REQUEST_BYTES) {
       res.writeHead(413).end('Request too large');return;
     }
-    const mcp=makeCompanionChatGptMcp(options);
+    const mcp=makeCompanionChatGptMcp({apiBase,readOnly});
     const transport=new StreamableHTTPServerTransport({
       sessionIdGenerator:undefined,enableJsonResponse:true,
     });
@@ -334,10 +352,32 @@ export function createCompanionChatGptHttpServer(options={}) {
   return server;
 }
 
+export function parseCompanionChatGptArgs(args) {
+  let readOnly=false,port;
+  for(const arg of args) {
+    if(arg==='--read-only' && !readOnly) readOnly=true;
+    else if(/^--port=[1-9]\d{0,4}$/.test(arg) && port===undefined) {
+      port=Number(arg.slice('--port='.length));
+      if(port>65535) throw new Error('Invalid port');
+    } else throw new Error('Invalid arguments');
+  }
+  return {readOnly,port:port ?? (readOnly ? CHATGPT_READ_ONLY_MCP_PORT : CHATGPT_MCP_PORT)};
+}
+
 // Bootstrap only when directly run; importing does not create a listener.
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  const server=createCompanionChatGptHttpServer();
-  server.listen(CHATGPT_MCP_PORT,'127.0.0.1',()=>{
-    process.stdout.write(`Creature Lab private ChatGPT MCP ready: http://127.0.0.1:${CHATGPT_MCP_PORT}/mcp\n`);
-  });
+  try {
+    const {readOnly,port}=parseCompanionChatGptArgs(process.argv.slice(2));
+    const server=createCompanionChatGptHttpServer({readOnly});
+    server.on('error',()=>{
+      process.stderr.write(`Creature Lab private ChatGPT MCP could not listen on 127.0.0.1:${port}\n`);
+      process.exitCode=1;
+    });
+    server.listen(port,'127.0.0.1',()=>{
+      process.stdout.write(`Creature Lab private ChatGPT MCP ready: http://127.0.0.1:${port}/mcp${readOnly ? ' (read-only metadata)' : ''}\n`);
+    });
+  } catch {
+    process.stderr.write('Usage: node mcp/companion-chatgpt.mjs [--read-only] [--port=1..65535]\n');
+    process.exitCode=1;
+  }
 }
