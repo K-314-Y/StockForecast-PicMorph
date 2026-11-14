@@ -10,8 +10,10 @@ from time import perf_counter
 from PIL import Image, ImageChops, UnidentifiedImageError
 
 if __package__:
+    from .adaptive_region import extract_region_adaptive
     from .region_grow import MAX_BYTES, MAX_PIXELS, MAX_SIDE, extract_region
 else:
+    from adaptive_region import extract_region_adaptive
     from region_grow import MAX_BYTES, MAX_PIXELS, MAX_SIDE, extract_region
 
 PART_COLORS = {"hair": (255, 0, 0), "face": (100, 150, 255),
@@ -100,11 +102,12 @@ class LimitedPNGBuffer(BytesIO):
 def evaluate(source: Path, truth: Path, *, method: str, prediction: Path | None = None,
              seed_x: int | None = None, seed_y: int | None = None,
              tolerance: int | None = None, part: str | None = None,
-             output: Path | None = None) -> dict:
+             output: Path | None = None, step_tolerance: int | None = None,
+             drift_tolerance: int | None = None) -> dict:
     started = perf_counter()
-    if method not in ("seeded", "mask", "anime-seg-rgb"):
+    if method not in ("seeded", "adaptive-seeded", "mask", "anime-seg-rgb"):
         raise ValueError("Unknown method")
-    if method == "seeded":
+    if method in ("seeded", "adaptive-seeded"):
         if seed_x is None or seed_y is None or prediction is not None or part is not None:
             raise ValueError("seeded requires seed-x/seed-y and forbids prediction/part")
     elif prediction is None or any(v is not None for v in (seed_x, seed_y, tolerance)):
@@ -112,6 +115,10 @@ def evaluate(source: Path, truth: Path, *, method: str, prediction: Path | None 
     if (method == "anime-seg-rgb" and part not in PART_COLORS
             or method != "anime-seg-rgb" and part is not None):
         raise ValueError("part hair/face/outfit is required only for anime-seg-rgb")
+    if method != "adaptive-seeded" and any(v is not None for v in (step_tolerance, drift_tolerance)):
+        raise ValueError("Adaptive tolerances require adaptive-seeded")
+    if method == "adaptive-seeded" and tolerance is not None:
+        raise ValueError("adaptive-seeded forbids tolerance")
     inputs = [source, truth] + ([prediction] if prediction is not None else [])
     if output is not None:
         validate_output(output, inputs)
@@ -120,9 +127,16 @@ def evaluate(source: Path, truth: Path, *, method: str, prediction: Path | None 
     if truth_image.size != original.size:
         raise ValueError("Truth dimensions must match source; resizing is forbidden")
     expected = binary_mask(truth_image)
-    if method == "seeded":
-        cutout, _ = extract_region(original, seed_x, seed_y,
-                                   35 if tolerance is None else tolerance)
+    if method in ("seeded", "adaptive-seeded"):
+        extraction_started = perf_counter()
+        if method == "adaptive-seeded":
+            cutout, _ = extract_region_adaptive(original, seed_x, seed_y,
+                18 if step_tolerance is None else step_tolerance,
+                90 if drift_tolerance is None else drift_tolerance)
+        else:
+            cutout, _ = extract_region(original, seed_x, seed_y,
+                                       35 if tolerance is None else tolerance)
+        segmentation_ms = round((perf_counter() - extraction_started) * 1000, 3)
         selected = binary_mask(cutout)
     else:
         predicted_image = read_png(prediction)
@@ -132,6 +146,8 @@ def evaluate(source: Path, truth: Path, *, method: str, prediction: Path | None 
                     else binary_mask(predicted_image))
     result = {"method": method, "part": part, "same_canvas": list(original.size),
               **pixel_metrics(expected, selected)}
+    if method in ("seeded", "adaptive-seeded"):
+        result["segmentation_ms"] = segmentation_ms
     result["elapsed_ms"] = round((perf_counter() - started) * 1000, 3)
     if output is not None:
         cutout = Image.new("RGBA", original.size, (0, 0, 0, 0))
@@ -153,10 +169,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--truth", type=Path, required=True)
-    parser.add_argument("--method", choices=("seeded", "mask", "anime-seg-rgb"), required=True)
+    parser.add_argument("--method", choices=("seeded", "adaptive-seeded", "mask", "anime-seg-rgb"), required=True)
     parser.add_argument("--seed-x", type=int)
     parser.add_argument("--seed-y", type=int)
     parser.add_argument("--tolerance", type=int)
+    parser.add_argument("--step-tolerance", type=int)
+    parser.add_argument("--drift-tolerance", type=int)
     parser.add_argument("--prediction", type=Path)
     parser.add_argument("--part", choices=tuple(PART_COLORS))
     parser.add_argument("--output", type=Path)

@@ -42,7 +42,8 @@ def seed_inside(mask):
 
 
 def prepare(folder, source, basis, evidence, dataset_type, tolerance,
-            confirm_local_evaluation, output, **masks):
+            confirm_local_evaluation, output, adaptive=False, step_tolerance=18,
+            drift_tolerance=90, **masks):
     require(confirm_local_evaluation is True, 'Explicit local evaluation confirmation required')
     root = Path(folder)
     require(root.is_absolute() and root.is_dir(), 'Existing absolute folder required')
@@ -59,6 +60,9 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
     require(dataset_type in ('synthetic_original', 'permissioned_art'), 'Invalid dataset type')
     require(dataset_type != 'synthetic_original' or basis == 'self_created', 'Invalid rights combination')
     require(type(tolerance) is int and 0 <= tolerance <= 255, 'Invalid tolerance')
+    require(type(adaptive) is bool, 'Invalid adaptive flag')
+    for value in (step_tolerance, drift_tolerance):
+        require(type(value) is int and 0 <= value <= 255, 'Invalid adaptive tolerance')
     rights = dict(basis=basis, evidence=evidence, local_evaluation_allowed=True,
                   redistribution_allowed=False, covered_files=['source', 'truth'])
     validate_rights(rights)
@@ -91,6 +95,10 @@ def prepare(folder, source, basis, evidence, dataset_type, tolerance,
         cases.append(dict(common, id=part + '_seeded', method='seeded',
                           seed_x=seed[0], seed_y=seed[1], tolerance=tolerance,
                           rights=dict(rights)))
+        if adaptive:
+            cases.append(dict(common, id=part + '_adaptive', method='adaptive-seeded',
+                              seed_x=seed[0], seed_y=seed[1], step_tolerance=step_tolerance,
+                              drift_tolerance=drift_tolerance, rights=dict(rights)))
         if prediction is not None:
             cases.append(dict(common, id=part + '_mask', method='mask', prediction=prediction,
                               rights=dict(rights, covered_files=['source', 'truth', 'prediction'])))
@@ -120,6 +128,9 @@ def main(argv=None):
     for name in ('folder', 'source', 'basis', 'evidence', 'dataset-type', 'output'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--tolerance', type=int, default=20)
+    parser.add_argument('--adaptive', action='store_true')
+    parser.add_argument('--step-tolerance', type=int, default=18)
+    parser.add_argument('--drift-tolerance', type=int, default=90)
     parser.add_argument('--confirm-local-evaluation', action='store_true')
     for part in PART_COLORS:
         for kind in ('truth', 'prediction'):

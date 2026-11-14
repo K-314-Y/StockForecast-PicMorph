@@ -176,3 +176,48 @@ python3 experiments/image_parts/batch_evaluate.py --manifest /ABS/PRIVATE/DATA_D
 - `--tolerance` は0〜255、既定値20。`--confirm-local-evaluation` は保存への明示同意として必須です。未指定や検査エラーなら永続出力は作りません。
 - 出力JSONは作成時に所有者だけが読めるモード0600で作り、許可根拠を不用意に公開しないようにします。ただしバックアップや管理者によるアクセス、シェル履歴までは防げません。
 - `--output` は必須の新規 `.json` ファイル名（例は `benchmark.json`、`manifest.json` も可）。全検査後に一度だけ排他的に作成し、既存出力・入力の上書きと `local_state` 内の保存は拒否します。出力物はこのローカルマニフェストだけで、成功時の標準出力は `success` のみです。
+
+## 2026-11-14: 濃淡に対応する適応型の色領域抽出（実験限定）
+
+**これはAIによる意味的な髪・顔・服の認識ではありません。** 旧方式 seeded は、クリックした開始点の色との差が小さい画素を4方向にたどります。新方式 adaptive-seeded は、**隣の画素との色差（step_tolerance）** と **最初にクリックした画素との色差の上限（drift_tolerance）** の両方を満たす画素をたどります。元画像と同じ大きさの透明PNGを作れます。元画像は書き換えません。
+
+- メリット: なめらかなグラデーションで、開始点から離れた同一領域を取り逃しにくくなる。
+- デメリット: 似た色が徐々につながっている背景にも広がり、**誤って余計に切り抜く場合がある**。線画の線で領域が分断される場合も解決しない。
+- 安全対策: 4方向の連結領域だけ、透明部分を通らない、4百万画素まで、抽出率が高すぎたらエラー。描画対象の名前（髪など）を機械が判定しているわけではない。
+
+既存の prepare_benchmark.py に --adaptive を付けると、髪・顔・服の各正解マスクについて、**同じ開始位置**を使った seeded と adaptive-seeded の2ケースを一括評価できます。--adaptive を省略した場合は今までのままです。
+
+    python3 experiments/image_parts/prepare_benchmark.py \
+      --folder /ABS/PRIVATE/DATA_DIR --source original.png \
+      --hair-truth hair.png --basis self_created \
+      --evidence "Original artwork and masks made by creator for local evaluation" \
+      --dataset-type synthetic_original --tolerance 20 \
+      --adaptive --step-tolerance 18 --drift-tolerance 90 \
+      --confirm-local-evaluation --output paired.json
+
+    python3 experiments/image_parts/batch_evaluate.py \
+      --manifest /ABS/PRIVATE/DATA_DIR/paired.json
+
+直接1件だけ評価する場合:
+
+    python3 experiments/image_parts/evaluate_masks.py \
+      --source /ABS/PRIVATE/DATA_DIR/original.png \
+      --truth /ABS/PRIVATE/DATA_DIR/hair.png \
+      --method adaptive-seeded --seed-x 40 --seed-y 50 \
+      --step-tolerance 18 --drift-tolerance 90
+
+**公平性への注意:** prepare_benchmark.py は人が描いた正解マスクを見て開始位置を選びます。これは比較の再現性を高めるための「正解を見てクリック位置を決める実験」であり、本人が正解を見ずにクリックする実際の操作とは条件が違います。実イラストで本番の精度を主張するなら、**正解を見ずに決めた開始位置**も別途記録して検証してください。閾値をテスト画像に合わせて何度も調整すると成績が水増しされるため、先に決めた閾値で未使用画像を評価します。
+
+### オフライン比較例（Pillowで独自作図した抽象図形）
+
+64×48ピクセル、同じ開始点、旧方式 tolerance=20、改良版 step=18/drift=90。**実イラストでの認識精度を示す値ではありません。**
+
+| 画像の条件 | 旧方式IoU | 新方式IoU | 解釈 |
+|---|---:|---:|---|
+| 色が滑らかに変わる矩形 | 0.375 | 1.000 | 新方式が見逃しを減らした |
+| 背景と明確に色が違う矩形 | 1.000 | 1.000 | 差はない |
+| 背景に近い色の細い通路がつながる矩形 | 0.865 | 0.748 | 新方式が余分な背景を選んだ |
+
+出力JSONの segmentation_ms は切り抜き処理の計測値です。既存の batch_evaluate.py の elapsed_ms は画素の正誤を計算した時間で、画像の読み込みやAIモデル推論時間を含みません。実際に操作する時のCPU負荷・メモリも別に測定する必要があります。
+
+著作権ルールは前節を引き継ぎます。使用許可が不明な作品画像を取得せず、モデル重みをダウンロードせず、画像を外部送信せず、実験Branchを本番ゲームにはまだ統合しません。

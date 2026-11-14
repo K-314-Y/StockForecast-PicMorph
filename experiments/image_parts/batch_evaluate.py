@@ -12,10 +12,10 @@ from urllib.parse import urlsplit
 
 if __package__:
     from .evaluate_masks import (read_png, binary_mask, semantic_mask, pixel_metrics,
-                                 PART_COLORS, MAX_BYTES, MAX_SIDE, extract_region)
+                                 PART_COLORS, MAX_BYTES, MAX_SIDE, extract_region, extract_region_adaptive)
 else:
     from evaluate_masks import (read_png, binary_mask, semantic_mask, pixel_metrics,
-                                PART_COLORS, MAX_BYTES, MAX_SIDE, extract_region)
+                                PART_COLORS, MAX_BYTES, MAX_SIDE, extract_region, extract_region_adaptive)
 
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_CASES = 100
@@ -97,9 +97,12 @@ def preflight(manifest):
     for case in cases:
         require(isinstance(case, dict), "Invalid case")
         method = case.get("method")
-        require(method in ("seeded", "mask", "anime-seg-rgb"), "Unknown method")
+        require(method in ("seeded", "adaptive-seeded", "mask", "anime-seg-rgb"), "Unknown method")
         fields = {"id", "part", "method", "source", "truth", "rights"}
         fields.update(("seed_x", "seed_y", "tolerance") if method == "seeded" else ("prediction",))
+        if method == "adaptive-seeded":
+            fields.discard("prediction")
+            fields.update(("seed_x", "seed_y", "step_tolerance", "drift_tolerance"))
         exact_keys(case, fields)
         identifier = case["id"]
         require(isinstance(identifier, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", identifier),
@@ -112,18 +115,19 @@ def preflight(manifest):
             require(case["rights"]["basis"] == "self_created",
                     "Synthetic-original datasets must be declared self-created")
         # The declaration covers original art AND human/predicted derived masks.
-        expected_coverage = (["source", "truth"] if method == "seeded"
+        expected_coverage = (["source", "truth"] if method in ("seeded", "adaptive-seeded")
                              else ["source", "truth", "prediction"])
         require(case["rights"]["covered_files"] == expected_coverage,
                 "Permission declaration must explicitly cover all input files")
-        if method == "seeded":
-            for key, upper in (("seed_x", MAX_SIDE - 1), ("seed_y", MAX_SIDE - 1), ("tolerance", 255)):
+        if method in ("seeded", "adaptive-seeded"):
+            parameters = (("tolerance", 255),) if method == "seeded" else (("step_tolerance", 255), ("drift_tolerance", 255))
+            for key, upper in (("seed_x", MAX_SIDE - 1), ("seed_y", MAX_SIDE - 1)) + parameters:
                 require(type(case[key]) is int and 0 <= case[key] <= upper, "Invalid seeded parameter")
         item = {key: case[key] for key in ("method", "part")}
-        for key in ("source", "truth") + (() if method == "seeded" else ("prediction",)):
+        for key in ("source", "truth") + (() if method in ("seeded", "adaptive-seeded") else ("prediction",)):
             item[key] = local_png(root, case[key])
-        if method == "seeded":
-            item.update({key: case[key] for key in ("seed_x", "seed_y", "tolerance")})
+        if method in ("seeded", "adaptive-seeded"):
+            item.update({key: case[key] for key in ("seed_x", "seed_y") + tuple(key for key, _ in parameters)})
         validated.append(item)
     return data["dataset_type"], validated
 
@@ -150,8 +154,15 @@ def batch_evaluate(manifest):
         source = read_png(case["source"])
         truth = binary_mask(read_png(case["truth"]))
         require(source.size == truth.size, "Truth dimensions must match source")
-        if case["method"] == "seeded":
-            cutout, _ = extract_region(source, case["seed_x"], case["seed_y"], case["tolerance"])
+        segmentation_ms = None
+        if case["method"] in ("seeded", "adaptive-seeded"):
+            extraction_started = perf_counter()
+            if case["method"] == "adaptive-seeded":
+                cutout, _ = extract_region_adaptive(source, case["seed_x"], case["seed_y"],
+                    case["step_tolerance"], case["drift_tolerance"])
+            else:
+                cutout, _ = extract_region(source, case["seed_x"], case["seed_y"], case["tolerance"])
+            segmentation_ms = round((perf_counter() - extraction_started) * 1000, 3)
             prediction = binary_mask(cutout)
         else:
             image = read_png(case["prediction"])
@@ -164,6 +175,8 @@ def batch_evaluate(manifest):
         results.append({"id": f"case_{index:03d}", "method": case["method"], "part": case["part"],
                         "empty_truth": metrics["tp"] + metrics["fn"] == 0,
                         **metrics, "elapsed_ms": round(elapsed, 3)})
+        if segmentation_ms is not None:
+            results[-1]["segmentation_ms"] = segmentation_ms
     groups = []
     for method, part in sorted({(c["method"], c["part"]) for c in results}):
         groups.append({"method": method, "part": part,
