@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'self'; img-src blob:; style-src 'unsafe-inline'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creature Lab：修正済み予測</title>
+<style>body{font:16px/1.7 system-ui,sans-serif;max-width:960px;margin:auto;padding:1rem;background:#f5f7fa;color:#172336}label{display:inline-block;margin:.4rem}button,input,select{font:inherit}button{padding:.4rem}fieldset{margin:1rem 0}canvas{width:100%;height:auto;display:block;touch-action:none;background:repeating-conic-gradient(#ddd 0% 25%,#fff 0% 50%) 0/20px 20px} .warning{background:#fff0d8;padding:.7rem}#status{white-space:pre-line}</style>
+<script src="refine_prediction.js" defer></script></head><body>
+<h1>予測マスクを手直しする</h1>
+<p class="warning">出力は「修正済み予測」です。読み込んだ生の予測を手直ししても、独立した正解（GOLD）にはなりません。精度の正解データとして扱わないでください。</p>
+<p>完全オフライン。選択したファイルだけをタブ内で処理し、通信・自動保存・元ファイルの変更はしません。再読込・終了で編集が失われます。</p>
+<label><input id="rights" type="checkbox">自作または派生画像作成の適法な許可がある元PNGです。権利条件を確認しました。</label>
+<p>チェックは権利の許諾を与えません。PNG拡張子のみ、各8 MiB以下・各辺4096以下・200万画素以下。APNG不可。</p>
+<label>1 元PNG <input id="source" type="file" accept=".png,image/png" disabled></label>
+<label>2 予測専用PNG <input id="prediction" type="file" accept=".png,image/png" disabled></label>
+<p>preview_extract の白＋透明の二値マスクを選んでください。同寸法が必須です。カラー切り抜きは不可。ファイルから部位名は推定しません。</p>
+<label>部位（編集開始後は固定）<select id="part" disabled><option value="hair">髪 hair</option><option value="face">顔 face</option><option value="outfit">服 outfit</option></select></label>
+<fieldset id="tools" disabled><legend>修正済み予測の編集</legend>
+<label>操作 <select id="mode"><option value="1">追加</option><option value="0">消去</option></select></label>
+<label>半径（元画素）<input id="radius" type="number" min="2" max="40" step="1" value="10"></label>
+<button id="undo" type="button">元に戻す</button><button id="clear" type="button">全消去（確認）</button></fieldset>
+<p>元画像＋ピンクの選択領域。ドラッグして編集します。表示の拡大縮小にかかわらず半径は元画素単位です。</p>
+<canvas id="preview" width="1" height="1" aria-label="元画像上の修正済み予測マスク"></canvas>
+<p id="stats" role="status"></p><p id="status" role="status" aria-live="polite">権利確認後、元PNGと予測マスクを選んでください。</p>
+<label>保存形式 <select id="format"><option value="mask">白＋透明マスク</option><option value="cutout">元RGBAカラー＋透明切り抜き</option></select></label>
+<button id="save" type="button" disabled>修正済み予測PNGを保存（確認）</button>
+<p>全寸法・位置を維持し、重ね色は保存しません。切り抜きは元画像のCanvas復号RGBAとalphaを保持します（半透明RGBは復号時に丸められる場合があります）。保存先で元ファイルを上書きしないでください。</p>
+</body></html>
