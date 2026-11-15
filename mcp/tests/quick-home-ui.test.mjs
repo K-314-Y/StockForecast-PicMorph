@@ -7,7 +7,7 @@ const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.m
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
 async function mount(models=[]) {
-  const nodes=new Map(),calls=[],scrolls=[];
+  const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
   let document;
   class Element {
     constructor(tagName) {
@@ -24,7 +24,7 @@ async function mount(models=[]) {
     addEventListener(name,handler){this.handlers[name]=handler;}
     replaceChildren(...children){this.children=children;if(this.tagName==='SELECT')this.value='';}
     append(...children){this.children.push(...children);}
-    focus(){document.activeElement=this;}
+    focus(options){document.activeElement=this;this.focusOptions=options;}
     scrollIntoView(){scrolls.push(this);}
     async fire(name='click'){await this.handlers[name]?.({preventDefault(){}});}
   }
@@ -52,10 +52,18 @@ async function mount(models=[]) {
     const value=await state.practice(body);
     return {ok:!value.error,json:async()=>value};
   };
-  runInNewContext(script,{document,fetch});
+  const storage={
+    getItem:()=>null,
+    setItem:(...args)=>storageWrites.push(['setItem',...args]),
+    removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
+    clear:()=>storageWrites.push(['clear']),
+  };
+  const context={document,fetch,localStorage:storage,sessionStorage:storage};
+  context.window=context;
+  runInNewContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
-  return {get,calls,scrolls,document,state,fire:(id,event)=>get(id).fire(event)};
+  return {get,calls,scrolls,storageWrites,document,state,fire:(id,event)=>get(id).fire(event)};
 }
 
 test('shop and editor navigation opens details, scrolls and focuses the destination',async()=>{
@@ -156,6 +164,58 @@ test('successful practice shows next actions and retry keeps the amount and mode
   assert.equal(document.activeElement,get('quickAmount'));
   await fire('quickRun');
   assert.equal(calls.filter(call=>call.path==='/api/quick-practice').length,1);
+});
+
+test('growth bridge after practice only opens, scrolls and focuses the existing start button',async()=>{
+  const {get,fire,calls,scrolls,storageWrites,document}=await mount([{id:'demo',name:'デモ',owned:true}]);
+  assert.equal(get('quickNext').hidden,true);
+  get('quickModel').value='demo';
+  get('quickAmount').value='1000';
+  get('quickLeverage').value='3';
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  await fire('quickFollowing');
+  assert.equal(get('quickNext').hidden,false);
+  assert.deepEqual(calls,[
+    {path:'/api/model-shop',body:undefined},
+    {path:'/api/quick-practice',body:{model_id:'demo',amount:1000,leverage:3}},
+  ]);
+  const priorCalls=calls.slice();
+  const preserved=['quickModel','quickAmount','quickLeverage','quickResult','quickReplay',
+    'quickReplayDay','quickReview','quickNext','growthInfo','currentGear','gear','reward','claim','play'];
+  const snapshot=()=>preserved.map(id=>{
+    const node=get(id);
+    return {id,value:node.value,text:node.textContent,hidden:node.hidden,disabled:node.disabled,
+      children:node.children.map(child=>child.textContent)};
+  });
+  const before=snapshot();
+  let starts=0,claims=0;
+  get('play').addEventListener('click',()=>{starts++;});
+  get('claim').addEventListener('click',()=>{claims++;});
+  for(let attempt=0;attempt<2;attempt++) {
+    get('advancedEntry').open=false;
+    await fire('quickGrow');
+    await fire('advancedEntry','toggle'); // Opening details must not refresh models either.
+    assert.equal(get('advancedEntry').open,true);
+    assert.equal(scrolls.at(-1),get('play'));
+    assert.equal(document.activeElement,get('play'));
+    assert.equal(get('play').focusOptions.preventScroll,true);
+    assert.equal(get('play').attributes.tabindex,undefined); // Keep the native button's Tab stop.
+    assert.deepEqual(snapshot(),before);
+    assert.deepEqual(calls,priorCalls);
+    assert.deepEqual(storageWrites,[]);
+    assert.equal(starts,0);
+    assert.equal(claims,0);
+  }
+});
+
+test('growth bridge uses a native button with adjacent XP and synthetic practice boundaries',()=>{
+  const next=html.match(/<div id="quickNext" hidden>([\s\S]*?)<p id="quickStatus"/)[1];
+  assert.match(next,/<button id="quickGrow"[^>]*type="button"[^>]*aria-controls="advancedEntry"[^>]*aria-describedby="quickGrowthHelp">相棒を育てる冒険へ<\/button>/);
+  assert.match(next,/id="quickGrowthHelp"[^>]*>今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPがたまると装備が解放されます。/);
+  assert.match(next,/どちらも架空相場の練習で、実相場の予測力を示すものではありません。/);
+  for(const id of ['quickAgain','quickNextShop'])assert.ok(next.includes('id="'+id+'"'));
+  assert.match(html,/<button id="claim" type="button" class="primary" disabled>XPを受け取る<\/button>/);
 });
 
 test('new practice clears previous results immediately and errors leave next actions hidden',async()=>{

@@ -201,6 +201,10 @@ modelField.addEventListener('change',resetReview);
 leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();});
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
+element('quickGrow').addEventListener('click',()=>{
+  element('advancedEntry').open=true;
+  scrollAndFocus('play','play');
+});
 element('quickCustomize').addEventListener('click',openEditor);
 element('quickArtwork').addEventListener('click',openArtwork);
 element('artworkReturn').addEventListener('click',()=>scrollAndFocus('simpleHome','quickModel'));

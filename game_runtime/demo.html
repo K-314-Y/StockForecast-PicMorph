@@ -187,7 +187,12 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <button id="quickFollowing" type="button" aria-controls="quickReplayDay" disabled>次の日</button>
   </nav>
  </section>
- <div id="quickNext" hidden><p>次はAI・試算額・倍率を変えて、同じ架空12日間で試せます。再挑戦は練習専用です。</p><div class="actions"><button id="quickAgain" class="primary" type="button">AI・金額・倍率を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div></div>
+ <div id="quickNext" hidden>
+  <p id="quickGrowthHelp" class="simple-hint">今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPがたまると装備が解放されます。どちらも架空相場の練習で、実相場の予測力を示すものではありません。</p>
+  <div class="actions"><button id="quickGrow" class="primary" type="button" aria-controls="advancedEntry" aria-describedby="quickGrowthHelp">相棒を育てる冒険へ</button></div>
+  <p>次はAI・試算額・倍率を変えて、同じ架空12日間で試せます。再挑戦は練習専用です。</p>
+  <div class="actions"><button id="quickAgain" class="primary" type="button">AI・金額・倍率を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div>
+ </div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
 <details class="advanced-entry" id="advancedEntry">
