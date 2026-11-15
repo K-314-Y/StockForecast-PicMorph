@@ -54,10 +54,23 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .look-grid label{display:grid;gap:6px;font-size:13px;font-weight:650}
 .look-grid select{min-width:0;width:100%}
 @media(max-width:520px){.look-grid{grid-template-columns:1fr}}
-.scene[data-mood="happy"] .chibi,.scene[data-mood="growth"] .chibi{transform:translateY(-11px) rotate(6deg)}
+.scene[data-mood="happy"] .chibi{transform:translateY(-11px) rotate(6deg)}
 .scene[data-mood="thinking"] .chibi{transform:rotate(-6deg)}
 .scene[data-mood="cautious"] .chibi{transform:translateY(3px) rotate(-4deg)}
-.scene[data-mood="growth"] .chibi{filter:drop-shadow(0 0 14px #b0ffe2)}
+.scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:companion-growth .7s ease-out 1}
+@keyframes companion-growth{50%{transform:translateY(-6px);filter:drop-shadow(0 0 8px #a1f1d1)}100%{transform:none}}
+#sceneGear{position:absolute;right:14px;bottom:48px;z-index:4;border:1px solid var(--mint);border-radius:50%;padding:8px;background:#162039;font-size:24px;line-height:1;pointer-events:none}
+#growthProgress{display:block;appearance:none;width:100%;min-width:0;height:24px;margin:10px 0;border:1px solid #526b87;border-radius:999px;overflow:hidden;background:#101a2f;accent-color:var(--mint);box-shadow:inset 0 2px 5px #0004}
+#growthProgress::-webkit-progress-bar{background:#101a2f;border-radius:999px;box-shadow:inset 0 2px 5px #0004}
+#growthProgress::-webkit-progress-value{background:linear-gradient(90deg,#51bda3,var(--mint));border-radius:999px;box-shadow:inset 0 2px 0 #ffffff40}
+#growthProgress::-moz-progress-bar{background:linear-gradient(90deg,#51bda3,var(--mint));border-radius:999px;box-shadow:inset 0 2px 0 #ffffff40}
+#growthMilestones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0;margin:12px 0 16px;line-height:1.65;font-size:13px}
+#growthMilestones li{display:block;min-width:0;padding:10px;border:1px solid #425575;border-radius:12px;background:#162039;color:var(--soft);overflow-wrap:anywhere}
+#growthMilestones li[data-unlocked="true"]{border-color:var(--mint);background:linear-gradient(145deg,#24463f,#19333b);color:#d6ffed;box-shadow:inset 0 2px 0 #a1f1d133}
+#growthCelebration{color:var(--mint);font-size:14px;font-weight:700;line-height:1.65;overflow-wrap:anywhere;margin:0}
+#growthCelebration:not(:empty){margin-top:12px;padding:10px 13px;border:1px solid #6cae98;border-left:3px solid var(--mint);border-radius:10px;background:#193b36}
+#growthCelebration:empty{display:none}
+@media(max-width:420px){#growthMilestones{grid-template-columns:1fr;gap:6px}#growthMilestones li{padding:8px 11px}}
 #companionName{max-width:100%;overflow-wrap:anywhere;text-align:center}
 .scene-note{z-index:1;font-size:11px;color:#cfddf5;text-align:center}
 #portrait{z-index:1;max-width:94%;width:220px;height:194px;object-fit:contain;margin-bottom:6px;filter:drop-shadow(0 8px 10px #0004)}
@@ -119,7 +132,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .arena-metrics{display:flex;gap:12px;flex-wrap:wrap;margin:9px 0}.arena-metrics span{font-size:13px}.arena-days{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.arena-days button{min-width:42px;padding:9px}.arena-days button[aria-pressed=true]{background:var(--mint);color:#12303b}.arena-day-detail{border:1px solid var(--line);border-radius:13px;padding:13px;background:#101d34}.arena-day-detail p{margin:6px 0}.arena-note{font-size:13px;color:#cbdced}.creator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.creator-grid label{display:grid;gap:5px;font-size:13px}.creator-grid input{min-width:0;max-width:100%;font:inherit;border:1px solid #6c809c;border-radius:8px;padding:8px;background:#111c31;color:#fff;min-height:44px}.creator-grid input[type=color]{width:100%}.creator-note{font-size:13px;color:var(--soft)}
 [hidden]{display:none!important}
 @media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
-@media(prefers-reduced-motion:reduce){.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
+@media(prefers-reduced-motion:reduce){.scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:none}.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
 .lab-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;margin:12px 0}
 .lab-grid label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:650}
 .lab-grid input{box-sizing:border-box;width:100%;min-width:0;min-height:48px;border:1px solid #748db4;border-radius:9px;background:#101a2f;color:#fff;padding:10px;font:inherit;font-size:max(1rem,1em)}
@@ -211,6 +224,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <img id="artworkBase" alt="完成イラスト" hidden>
    <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
   </div>
+  <span id="sceneGear" role="img" aria-label="装備なし" hidden></span>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
  </div>
  <div>
@@ -446,12 +460,17 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <div class="reward"><span class="eyebrow">STEP 03 / 育成</span><h3>練習XPを受け取ろう</h3>
  <p>XPは課題ごとに一度だけ。再練習しても同じ実績でXPは増えません。</p>
  <div class="actions"><button id="claim" type="button" class="primary" disabled>XPを受け取る</button><button id="discard" type="button" hidden>報酬を辞退して再挑戦</button></div>
- <p id="reward" role="status" aria-live="polite"></p></div>
+ <p id="reward" role="status" aria-live="polite"></p>
+ <p id="growthCelebration" role="status" aria-live="polite" aria-atomic="true"></p></div>
  <small>ここに表示される損益は架空コインの結果で、市場予測の本番実績やランキングには加えません。</small>
 </section>
 <section class="panel" aria-labelledby="growthTitle">
  <span class="eyebrow">STEP 04 / 装備と再挑戦</span><h2 id="growthTitle">相棒を育てよう</h2>
- <div class="growth"><div><p id="growthInfo" role="status">育成記録を読み込んでいます…</p><p id="currentGear">現在の装備: --</p><button id="refreshGrowth" type="button">育成情報を再取得</button></div>
+ <div class="growth"><div><p id="growthInfo" role="status">育成記録を読み込んでいます…</p>
+ <label for="growthProgress">装備解放のXP進捗</label>
+ <progress id="growthProgress" aria-describedby="growthNext">育成記録を読み込んでいます…</progress>
+ <p id="growthNext" role="status"></p><ul id="growthMilestones" aria-label="装備解放マイルストーン"></ul>
+ <p id="currentGear">現在の装備: --</p><button id="refreshGrowth" type="button">育成情報を再取得</button></div>
  <div><label for="gear">解放済み装備を選択</label><div class="gearline"><select id="gear" aria-label="装備を選ぶ"></select><button id="equip" type="button" disabled>装備する</button></div><p id="gearStatus" role="status" aria-live="polite"></p></div></div>
  <small>装備は次の練習の予測判断に影響します。外見と学習済みモデルは別管理です。XPはNode専用保存先を使用します。</small>
 </section>
