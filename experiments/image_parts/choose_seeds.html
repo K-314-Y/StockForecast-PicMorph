@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creature Lab — 元画像だけからseedを選択</title>
+<style>
+body { max-width: 1000px; margin: auto; padding: 16px; font: 16px/1.6 system-ui, sans-serif; color: #182333; background: #f4f6fa; }
+button,input,select { font: inherit; margin: 5px; } fieldset { margin: 16px 0; }
+#stage { position: relative; } canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
+#overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.dot { position: absolute; transform: translate(-5px, -50%); white-space: nowrap; font-weight: bold; text-shadow: 0 0 2px white, 0 0 4px white; }
+:focus-visible { outline: 3px solid #305bce; }
+</style>
+<script src="choose_seeds.js" defer></script>
+</head>
+<body>
+<h1>元画像だけを見てseedを選ぶ</h1>
+<p>正解マスクを見る<strong>前</strong>に、元PNGだけから髪・顔・服の点を1つずつ選んでください。マスクの読み込み機能はありません。自動的な意味部位認識は行いません。</p>
+<p>これは自己申告の手順であり、正直さやblindであったことを証明できません（self-reported protocol, cannot prove honesty）。SHA-256は点と元ファイルの対応を確認するもので、作成時刻や選択順序の証明ではありません。</p>
+<label><input id="rights" type="checkbox">元画像と派生マスクのローカル処理について、自作または権利者の許可を確認しました。</label>
+<p>許諾はユーザー自身が確認してください。この画面は権利を付与しません。</p>
+<label>元PNGのみ選択 <input id="source" type="file" accept=".png,image/png" disabled></label>
+<p>8 MiB以下、各辺4096px以下、総画素4,000,000以下の単一フレームPNG。ChromeでこのHTMLをfile://から開いて使います。</p>
+<fieldset id="tools" disabled><legend>マウスまたは指で1点を選択（元画像の整数座標）</legend>
+<label>部位 <select id="part"><option value="hair">髪 hair（赤）</option><option value="face">顔 face（青）</option><option value="outfit">服 outfit（緑）</option></select></label>
+<button id="clear" type="button">選択部位の点を消す</button>
+<button id="save" type="button" disabled>点のJSONだけを保存</button>
+</fieldset>
+<p id="coordinates" aria-live="polite">未選択</p>
+<p id="status" role="status">権利を確認してから元PNGを選択してください。</p>
+<div id="stage"><canvas id="image" width="1" height="1" aria-label="元画像。マウスまたは指で点を選択"></canvas><div id="overlay" aria-hidden="true"></div></div>
+<p>画像と点はタブのメモリだけに保持します。通信・ストレージ・自動探索・アップロードはありません。保存ボタンと確認操作の後だけJSONをダウンロードします。画像や権利確認文はJSONに含めません。再読み込みで破棄されます。</p>
+</body>
+</html>

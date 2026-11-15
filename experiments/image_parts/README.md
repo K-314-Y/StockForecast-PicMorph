@@ -1,0 +1,353 @@
+# Experimental artwork parsing (separate from game and MCP)
+
+**Status:** experimental, not used by the live Node game. Image classifier accuracy not measured yet.
+
+## Approaches compared
+
+| Approach | What it can distinguish | Practical concern |
+|---|---|---|
+| **Human-seeded RGB region growing** (implemented here) | A connected patch of colour from a click | Very fast and offline; hair gradients, highlights and matching-colour background break it. It does not know what hair/face is |
+| SkyTNT Anime Segmentation (ISNet) | Person/character vs background | Doesn't distinguish hair/face/clothes. Usually needs ONNX/PyTorch and model weights |
+| suzukimain AnimeSeg (Mask2Former, DINOv2) | Semantic classes like hair, face, clothes, eyes | Trained model is significantly heavier and should be measured on the intended Linux CPU; real samples and model license must be checked |
+| shitagaki-lab See-through | Up to 23 semantic drawing layers, including imagined hidden parts | Diffusion models are heavy; inferred invisible content can be *invented*, not evidence of the original drawing |
+
+References (read before evaluating licenses/weights):
+- https://github.com/SkyTNT/anime-segmentation
+- https://github.com/suzukimain/AnimeSeg
+- https://github.com/shitagaki-lab/see-through
+
+## Lightweight prototype
+
+Uses only Pillow, not PyTorch/CUDA/ONNX. Human clicks a seed on the region.
+Every region is extracted into a **same-dimension transparent PNG** aligned with the original.
+
+```bash
+python3 experiments/image_parts/region_grow.py source.png /tmp/region.png --x 80 --y 50 --tolerance 20
+python3 -m unittest discover -s experiments/image_parts -p 'test_*.py' -v
+```
+
+Use a **copy** of the user's image; do not put experiment output in the game's
+`local_state` directory. Data output is local only, never an XP/model change.
+
+## Decision gates (before integrating into game)
+
+1. Collect user-authored, *permissioned* test art, including flat color, gradients, ornaments and busy backgrounds. Do **not** judge only on synthetic fixtures.
+2. Have the creator manually mark hair, face and outfit masks (ground truth). Compare intersection-over-union (IoU), boundary errors, editing time, CPU latency and memory.
+3. Always show a proposed **mask preview**, not an automatic save. Keep correction tools and original pixels intact. Misclassification should never be presented as a reliable hair/face result.
+4. Benchmark Semantic AnimeSeg on the actual CPU separately **before** downloading gigabytes of model weights into the user's primary project.
+
+Current conclusion: seeded segmentation is a useful no-install *manual assist*, not reliable automatic hair recognition. For automatic semantic parsing, compare pretrained anime-domain multi-class models next.
+
+## 2026-11-14: 同じ条件で切り抜きを比較する（実験専用）
+
+**これは認識AIそのものではなく、切り抜きの精度を測る道具です。** 作者がマスク（対象は白、それ以外は黒。もしくはRGBAの透明度）を正解として用意し、色選択方式や別の画像AIの出力がどの程度一致するかを測ります。入力の元画像とマスクは同寸法PNG、最大4096pxかつ400万画素です。
+
+### コマンド例
+
+1. 人が指定した一点から同じ色のつながった領域を選択する場合:
+
+    python3 experiments/image_parts/evaluate_masks.py --source /tmp/source.png --truth /tmp/truth-hair.png --method seeded --seed-x 80 --seed-y 50 --tolerance 25
+
+2. 他の方式が出した二値または透過マスクと比較する場合:
+
+    python3 experiments/image_parts/evaluate_masks.py --source /tmp/source.png --truth /tmp/truth-hair.png --method mask --prediction /tmp/predicted-hair.png
+
+3. AnimeSeg Mask2Former標準12クラスのカラーラベルPNGを評価する場合:
+
+    python3 experiments/image_parts/evaluate_masks.py --source /tmp/source.png --truth /tmp/truth-hair.png --method anime-seg-rgb --prediction /tmp/animeseg-colors.png --part hair --output /tmp/proposed-hair.png
+
+    --part は hair / face / outfit が指定できます。色は髪が赤（255,0,0）、顔が青（100,150,255）、服が紫（180,0,255）の**完全一致**を前提とします。アンチエイリアスのあるマスクやAnimeSeg-Nextの異なるクラスには、そのまま使えません。推論モデルのダウンロードや実行は行いません。
+
+4. 既存と追加の自動テスト:
+
+    python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -v
+
+### 評価指標
+
+- **IoU（重なり率）**: 正しく選べた画素を、正解または選択された画素全体で割った割合。1.0に近いほど良い。
+- **Precision**: 選んだ画素の中で正しい割合。**Recall**: 正解の画素をどれだけ取りこぼさなかったか。**F1**: そのバランス。TP/FP/FN/TNは正解/余計な選択/見逃し/正しく除外した画素数。
+- **coverage**: 全画素に占める選択画素。**elapsed_ms**: 読み込み・抽出・評価の時間であり、別プログラムで実行した画像AIの推論時間は含まれません。
+- 正解も予測も空なら、IoU/F1/Precision/Recallを1.0と定義。一方だけ空なら0.0。実データ集計では空マスクと対象あり画像を別々に報告します。
+
+出力はJSON標準出力。--outputを指定したときだけ同じサイズの透過PNGを書き出します。入力画像、既存ファイル、ゲームのlocal_stateを上書きすることは拒否し、自動的にゲームへ取り込みません。
+
+### 本格的な認識AIへ進む条件
+
+1. **権利・利用許可を確認した実イラスト20〜30枚以上**について、人の手で髪・顔・服の正解マスクを作成する。合成画像だけの精度は本番採用の根拠になりません。
+2. 暫定基準として部位ごとの平均IoU0.80以上、極端な失敗が少ないこと、本人が少ない操作で修正できること、Linux CPUで処理時間・メモリ消費が許容できることを評価する。**0.80は検証前の仮説で、確立した合格値ではありません**。
+3. AnimeSegは髪・顔・服などの12クラスを扱えるが、公開モデル一式が約2.77GB、個別の重みも数百MB規模。AnimeSeg-Nextは31/37クラスに細分化されているものの、今回の12クラス用の色解釈とは互換性がありません。モデルのライセンス・配布条件・CPU実行可否も別途検証するまで導入しない。
+4. 実行前にユーザーに画像プライバシーと保存意図を確認する。元画像を残し、自動保存やMCPでの画像送信はしない。
+
+仕様の参照先:
+- https://github.com/suzukimain/AnimeSeg
+- https://huggingface.co/suzukimain/AnimeSeg
+- https://github.com/suzukimain/AnimeSeg-Next
+
+現状: **切り抜き精度の測定準備はできたが、実イラストの髪・顔・服の自動識別精度は未測定**。mainには統合していない。
+
+## 複数画像の著作権・許諾チェック付き評価（2026-11-14）
+
+**実験のみ。本番ゲームへ未統合。画像・正解マスク・予測マスクはローカルPC上だけに置きます。** 公開されているイラストの自動収集、外部サイトへのアップロード、モデル重みの取得は行いません。
+
+テストする各画像セットについて、データの出所と**ローカル採点に使う許可**をJSONで宣言します。これは自己申告を機械的に確認する仕組みであり、法律上の許可を自動的に証明するものではありません。出所に疑問がある画像、作品・キャラの複製、権利者を確認できないもの、無断で学習データから抜き出した画像は追加しないでください。
+
+### 準備と実行
+
+個人データはGitリポジトリ外の非公開フォルダに置き、以下を参考に manifest.json を作成します。例では、絵と正解マスク・予測マスクの**すべてを自分で制作した合成図形**として宣言しています。
+
+    {
+      "schema_version": 1,
+      "dataset_type": "synthetic_original",
+      "cases": [
+        {
+          "id": "study_01",
+          "part": "hair",
+          "method": "mask",
+          "source": "drawing.png",
+          "truth": "ground_truth.png",
+          "prediction": "predicted_mask.png",
+          "rights": {
+            "basis": "self_created",
+            "evidence": "Original simple drawing and masks made by the tester, 2026-11-14",
+            "covered_files": ["source", "truth", "prediction"],
+            "local_evaluation_allowed": true,
+            "redistribution_allowed": false
+          }
+        }
+      ]
+    }
+
+    # 上の3枚をmanifest.jsonと同じフォルダに置いた場合
+    python3 experiments/image_parts/batch_evaluate.py --manifest /path/to/private/manifest.json
+
+- method は seeded / mask / anime-seg-rgb。seeded は prediction を外し、seed_x、seed_y、tolerance を加え、covered_files は ["source","truth"] にします。
+- dataset_type は synthetic_original（独自作成の合成図形）か permissioned_art（権利確認済みの実イラスト）を指定。事実と異なるラベルは禁止です。
+- basis は self_created / author_permission / licensed のいずれか。evidence には、作者本人の記録、許可文書の保管先、利用許諾のURLなど**実際に確認できる根拠**を記録。URLが書いてあっても自動で訪問・検証しません。
+- **元画像、手で作った正解マスク、AIが出力した予測マスクのすべてが許可の対象**です。正解マスクは二次的な画像になり得るため、元絵だけに許可がある場合は使わないでください。
+- ソフトは全件の宣言、相対パス、PNGファイルの存在を確認してから評価します。許可情報が足りない場合は採点を開始しません。リンク先画像、シンボリックリンク、親フォルダへの脱出、重複ID、無関係な項目は拒否します。最大100件、manifestは128 KiB以下です。
+- 出力は**標準出力のJSONだけ**です。画像や評価レポートを勝手に保存・共有しません。レポートのIDは入力順の匿名IDになり、画像のパス・許可証の文言は含めません。ただし成績や統計も非公開のまま扱い、他人に配布しないでください。
+
+### 数字の集計と限界
+
+部位×方法ごとに、IoU（重なり率）とF1の**平均・中央値・最低値**を出します。正解が空のケースを平均から除外して別件数で表示するため、何も切り抜かないだけで高得点になることを防ぎます。処理時間は**画素の採点だけ**で、AIの推論や画像読み込みにかかった時間ではありません。多数の実例で評価する前の点数は「実際のアニメ絵における認識精度」を意味しません。
+
+AnimeSeg/AnimeSeg-Nextの説明資料に含まれる12クラスなどの**仕様を参照すること**と、モデルのコード・重み・学習元画像・出力マスクを**再配布・商用利用する許諾**は別です。少なくとも今回確認できた公開ページだけでは重みの配布権を確認できていません。モデルもサンプル画像もダウンロードせず、ライセンスや権利範囲が確認されるまで本番組み込みしません。今回の実験コードはそれらを同梱・複製していません。
+
+### 安全性の範囲
+
+この実験はローカル単独ユーザー用です。パスやシンボリックリンクを事前確認しますが、**別の悪意あるローカルプロセスが確認後にファイルを入れ替える競合**までは完全に防げません。また、権利の自己申告が真実であるかは自動検証できません。他人の画像を扱う際は、権利者が示した具体的な条件・目的・期間を人が確認してください。
+
+**次にやるべきこと**: 作者の許可を得た実イラスト20～30枚程度に、同寸法の正解マスクを作成。画像そのものを外部送信せず、髪・顔・服について実測し、修正時間やCPU負荷も別途測る。モデル利用条件が不明な間は画像AIの重みを導入しません。
+
+## ブラウザで「人が正解を描く」作業（オフライン実験）
+
+正解マスクを自分で用意するための独立HTML編集画面を追加しました。
+Chromeで experiments/image_parts/annotate.html を開きます。通常は file:// から直接開く設計です。ブラウザのファイルアクセス制限により表示できない場合のみ、同じPC内で一時的なlocalhost静的サーバーを使い、作業後に停止してください。本番ゲームのHTTP/MCPに接続する機能はありません。
+
+- 自作画像、または正解マスクを作成・ローカル評価する明示的な許可がある画像だけを選びます。権利確認チェックを入れるまで、ファイル選択は無効です。自己申告の真偽を自動確認するものではありません。
+- ローカルPNGのみを選択します。PNGは8MiB以下、1辺4096px以下、合計400万画素以下です。ネット上の画像URLやアニメ作品の画像は自動取得しません。
+- 髪、顔、服を選んでマウスまたはタッチで塗り、消しゴム、Undo、選択部位のクリアを使います。各部位のマスクは独立し、元画像のピクセル数のまま保持します。
+- まずマスクをプレビューし、作者が各保存ボタンと確認操作を明示的に実行した場合だけ、その部位の不透明な白＋透明背景のPNGをダウンロードします。元画像は変更しません。ブラウザの保存先を確認して既存ファイルを置き換えないでください。
+- 保存したマスクは、前節の evaluate_masks.py の method=mask と prediction にそのまま渡せます。配布や公開時には元画像と正解マスク両方の権利条件を確認してください。本人の操作なしに画像が外部送信・自動保存されることはありません。
+- 編集内容はタブ内メモリだけにあり、別画像を選ぶときは未保存内容の破棄を確認します。再読み込み・タブを閉じると消えます。未保存の修正には注意してください。AIによる髪・顔・服の自動識別ではありません。
+
+静的チェック: python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -q。
+保存画素・ブラシ・ダウンロードの実操作はChrome/Playwrightの受け入れ確認で行い、テスト画像はPillow生成の抽象図形だけを使います。第三者キャラクター、学習モデル重み、公開アニメ作品の画像は同梱していません。
+
+## 編集したPNGから評価JSONを作る（手入力を減らすCLI）
+
+1. `annotate.html` で許可を確認し、元PNGを開いて髪・顔・服の正解を塗り、プレビュー後に必要な部位のPNGを保存します。
+2. 元画像と保存した全マスクを、既存の**リポジトリ外の非公開フォルダ1つ**へ手動で移動してまとめます。元画像は保管したまま、そのコピーを用意してください。CLIは入力のコピー・変更やフォルダ作成をしません。Git管理下のフォルダも拒否し、元画像や許可記録をうっかりコミットしないようにします。
+3. 元画像、生成した正解マスク、指定する予測マスクの**すべて**についてローカル評価する権利と根拠を確認し、次を実行します。これは独自制作の合成図形の例です。実際の根拠に合わせて記録してください。
+
+```bash
+python3 experiments/image_parts/prepare_benchmark.py --folder /ABS/PRIVATE/DATA_DIR --source original.png --hair-truth hair.png --face-truth face.png --outfit-truth outfit.png --basis self_created --evidence "Original artwork and masks made by creator for local scoring on 2026-11-14" --dataset-type synthetic_original --tolerance 20 --confirm-local-evaluation --output benchmark.json
+python3 experiments/image_parts/batch_evaluate.py --manifest /ABS/PRIVATE/DATA_DIR/benchmark.json
+```
+
+4. 集計結果をローカルで確認します。実イラストやモデルによる評価はまだ実施していません。**データ受け渡しの自動化は、意味的な髪・顔・服の識別精度を意味しません。**
+
+- `--hair-truth` / `--face-truth` / `--outfit-truth` は個別に省略可能ですが、最低1つ必要です。それぞれ正画素の外接矩形の中心に最も近い**正画素内**のseedを自動選択し、`hair_seeded` 等のケースを作ります。同距離なら上、左の順です。これは正解を利用した色領域選択の補助評価で、自律的な部位認識ではありません。**正解からseedを選ぶため実際の利用場面より有利な条件（答えを見てクリック位置を決める比較）です。自動判別モデルの精度と公平に比較するには、正解を見ずに利用者が選んだseedを別に記録して試す必要があります。**
+- `--hair-prediction hair_pred.png` 等は対応するtruthがある場合だけ指定可能で、独立した `method=mask` の `hair_mask` 等を追加します。正解のコピーを予測として機械の成功と称さないでください。空のtruthは警告して部位全体を除外し、全部空なら失敗します。
+- `--folder` は既存の絶対パス。入出力はその中の単純なファイル名だけで、URL、絶対パス、区切り文字、親参照、シンボリックリンクは拒否します。入力の重複（ハードリンクを含む）も拒否します。全PNGは同寸法、既存評価器と同じ容量・寸法制限、マスクは二値L/1またはRGBAです。
+- `--basis` は `self_created` / `author_permission` / `licensed`。`--dataset-type synthetic_original` は `self_created` のみ、`permissioned_art` は上記3種を許可します。実イラストを合成図形と偽って指定しないでください。自己申告の真偽は自動確認できません。
+- `--evidence` の文字列はシェル履歴や一時的なプロセス表示には残る可能性があります。個人情報・氏名・秘密の許可証をそのままコマンドに書かず、非公開資料を自分で照合できる短い参照記号を記録してください。
+- `--evidence` は既存の権利検査と同じく10〜2048文字、制御文字や山括弧は禁止、URLを含めるなら通常のHTTPS参照のみです。根拠は非公開のJSON内に残りますが、CLIの標準出力・エラーには表示しません。
+- `--tolerance` は0〜255、既定値20。`--confirm-local-evaluation` は保存への明示同意として必須です。未指定や検査エラーなら永続出力は作りません。
+- 出力JSONは作成時に所有者だけが読めるモード0600で作り、許可根拠を不用意に公開しないようにします。ただしバックアップや管理者によるアクセス、シェル履歴までは防げません。
+- `--output` は必須の新規 `.json` ファイル名（例は `benchmark.json`、`manifest.json` も可）。全検査後に一度だけ排他的に作成し、既存出力・入力の上書きと `local_state` 内の保存は拒否します。出力物はこのローカルマニフェストだけで、成功時の標準出力は `success` のみです。
+
+## 2026-11-14: 濃淡に対応する適応型の色領域抽出（実験限定）
+
+**これはAIによる意味的な髪・顔・服の認識ではありません。** 旧方式 seeded は、クリックした開始点の色との差が小さい画素を4方向にたどります。新方式 adaptive-seeded は、**隣の画素との色差（step_tolerance）** と **最初にクリックした画素との色差の上限（drift_tolerance）** の両方を満たす画素をたどります。元画像と同じ大きさの透明PNGを作れます。元画像は書き換えません。
+
+- メリット: なめらかなグラデーションで、開始点から離れた同一領域を取り逃しにくくなる。
+- デメリット: 似た色が徐々につながっている背景にも広がり、**誤って余計に切り抜く場合がある**。線画の線で領域が分断される場合も解決しない。
+- 安全対策: 4方向の連結領域だけ、透明部分を通らない、4百万画素まで、抽出率が高すぎたらエラー。描画対象の名前（髪など）を機械が判定しているわけではない。
+
+既存の prepare_benchmark.py に --adaptive を付けると、髪・顔・服の各正解マスクについて、**同じ開始位置**を使った seeded と adaptive-seeded の2ケースを一括評価できます。--adaptive を省略した場合は今までのままです。
+
+    python3 experiments/image_parts/prepare_benchmark.py \
+      --folder /ABS/PRIVATE/DATA_DIR --source original.png \
+      --hair-truth hair.png --basis self_created \
+      --evidence "Original artwork and masks made by creator for local evaluation" \
+      --dataset-type synthetic_original --tolerance 20 \
+      --adaptive --step-tolerance 18 --drift-tolerance 90 \
+      --confirm-local-evaluation --output paired.json
+
+    python3 experiments/image_parts/batch_evaluate.py \
+      --manifest /ABS/PRIVATE/DATA_DIR/paired.json
+
+直接1件だけ評価する場合:
+
+    python3 experiments/image_parts/evaluate_masks.py \
+      --source /ABS/PRIVATE/DATA_DIR/original.png \
+      --truth /ABS/PRIVATE/DATA_DIR/hair.png \
+      --method adaptive-seeded --seed-x 40 --seed-y 50 \
+      --step-tolerance 18 --drift-tolerance 90
+
+**公平性への注意:** prepare_benchmark.py は人が描いた正解マスクを見て開始位置を選びます。これは比較の再現性を高めるための「正解を見てクリック位置を決める実験」であり、本人が正解を見ずにクリックする実際の操作とは条件が違います。実イラストで本番の精度を主張するなら、**正解を見ずに決めた開始位置**も別途記録して検証してください。閾値をテスト画像に合わせて何度も調整すると成績が水増しされるため、先に決めた閾値で未使用画像を評価します。
+
+### オフライン比較例（Pillowで独自作図した抽象図形）
+
+64×48ピクセル、同じ開始点、旧方式 tolerance=20、改良版 step=18/drift=90。**実イラストでの認識精度を示す値ではありません。**
+
+| 画像の条件 | 旧方式IoU | 新方式IoU | 解釈 |
+|---|---:|---:|---|
+| 色が滑らかに変わる矩形 | 0.375 | 1.000 | 新方式が見逃しを減らした |
+| 背景と明確に色が違う矩形 | 1.000 | 1.000 | 差はない |
+| 背景に近い色の細い通路がつながる矩形 | 0.865 | 0.748 | 新方式が余分な背景を選んだ |
+
+出力JSONの segmentation_ms は切り抜き処理の計測値です。既存の batch_evaluate.py の elapsed_ms は画素の正誤を計算した時間で、画像の読み込みやAIモデル推論時間を含みません。実際に操作する時のCPU負荷・メモリも別に測定する必要があります。
+
+著作権ルールは前節を引き継ぎます。使用許可が不明な作品画像を取得せず、モデル重みをダウンロードせず、画像を外部送信せず、実験Branchを本番ゲームにはまだ統合しません。
+
+## 2026-11-14: 正解マスクを見ずに点を選ぶブラインド比較
+
+以前の prepare_benchmark.py は、正解マスク内のピクセルを探して開始点にしていたため、実利用より簡単な条件での比較でした。新しい choose_seeds.html は **元画像だけを読み込む画面**で、髪・顔・服の点を作者自身が指定できます。これは意味を自動理解するAIではありません。
+
+### 使い方
+
+1. 権利が確認できた自作・許諾済みの元画像を準備。先に Chrome で experiments/image_parts/choose_seeds.html を開きます。ローカルPNGだけを選択し、部位を選んで元画像の上をクリックします。正解マスクはこの画面では**一切読み込めません**。
+2. 点を選択したあと、ダウンロードを明示的に承認して seeds_...json を保存。JSONは元画像のファイル名、幅・高さ、ファイルSHA-256、髪・顔・服の座標だけを持ち、画像そのものや権利者の情報は含まれません。
+3. その後、別の「手で描く正解マスク」画面 annotate.html などで正解を用意します。**元画像、各マスク、seedのJSONを同じ非公開のGit管理外フォルダ**に配置します。ファイル名は変更しないでください。本人がダウンロードしたseed JSONの名前を --seeds-file にそのまま渡します。
+4. ローカル処理の権利が確認済みであることを宣言して評価用JSONを生成します。seedが不正な場合・別のPNGに紐づく場合・権限が不足する場合は拒否します。元画像とマスクは変更せず、評価用JSONのみ0600で新規作成します。
+
+    python3 experiments/image_parts/prepare_benchmark.py \
+      --folder /ABS/PRIVATE/DATA_DIR --source original.png \
+      --hair-truth original_hair.png --face-truth original_face.png \
+      --basis self_created \
+      --evidence "Creator verified original artwork and derived masks for local scoring" \
+      --dataset-type permissioned_art --seeds-file seeds_...json \
+      --tolerance 20 --adaptive --step-tolerance 18 --drift-tolerance 90 \
+      --confirm-local-evaluation --output blind_benchmark.json
+
+    python3 experiments/image_parts/batch_evaluate.py \
+      --manifest /ABS/PRIVATE/DATA_DIR/blind_benchmark.json
+
+**注意:** 例の dataset_type=permissioned_art は自作の実イラストを含む実画像用です。許可された実画像の準備がないうちは synthetic_original と自作の単純な図形だけを使ってください。--basis の self_created / author_permission / licensed も利用許諾を自動検証するものではありません。正解マスクと予測マスクにも権利条件が及びます。証拠の文書自体や個人情報はコマンドに書かず、私的な照合用の短い記録を残してください（シェル履歴に残り得ます）。
+
+### 自己申告の限界と正しい読み方
+
+- 出力には seed_selection=image_only_manual と明記します。従来の正解から選ぶ方式では truth_assisted と表示します。古いmanifestの seed_selection が無い場合は truth_assisted とみなします。
+- クリック位置が正解マスクの外側でも、勝手に正解へ移動させません。透明ピクセルや広すぎる背景で抽出停止した場合も、**手動選択の評価では空の抽出結果として数え、失敗を除外しません**。各ケースに segmentation_rejected=true を出します。これは精度を都合よく上げないためです。
+- 両方式はまったく同じ画像・同じ座標を使い、別々の閾値を事前に決めて比較します。正解を見て閾値を調整しないでください。
+- **ユーザーが本当に正解を見ずに点を選んだかは自己申告**です。SHA-256は同じPNGかどうかを照合するだけで、点を選んだ時刻や順番を証明するものではありません。
+- 外部通信やAIモデル重みのダウンロードを必要としません。評価の実用性を主張する前には権利確認済みの実イラストで、見逃し・誤抽出・CPU時間・修正に必要な作業量を別に測定してください。
+
+UIの静的確認と評価ツールのテスト:
+
+    node --check experiments/image_parts/choose_seeds.js
+    python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -q
+
+画面は独立したローカル実験ツールで、Creature Labの通常ゲーム画面や保存データには接続しません。
+
+## 2026-11-15: クリックした領域をプレビューして「予測マスク」を保存する
+
+**目的**: 以前のPythonで実験していた固定色方式/適応型の切り抜き候補を、本人がブラウザで実際に見て確認する。画像が何の部位かをAIが判定する機能ではありません。**正解マスクの作成とは完全に別の画面です。**
+
+Chromeで experiments/image_parts/preview_extract.html を開きます。静的HTMLと標準JavaScriptだけを使い、通常は file:// でも開けます。著作権・利用許諾を確認してチェックを入れた後、**自分で選んだ**ローカルPNGだけを開けます。外部への画像送信・オンライン画像検索・機械学習モデルのダウンロードは行いません。
+
+- 元PNGの上をクリックすると、選んだピクセルと色のつながりを追い、**推測した領域を色付きで重ねて表示**します。髪・顔・服のラベルは人が選び、ソフトは意味を理解していません。
+- 方式は seeded（クリックした色との差）と adaptive-seeded（隣との色差＋開始点との差）。tolerance/step/driftの数値を変えると前の推測は破棄されます。各画素の最大RGBチャンネル差（0〜255）と4方向だけのつながりを使います。
+- 抽出対象が全画素の70%を超える、最初の画素がほぼ透明、入力サイズが大きすぎる場合は拒否します。ブラウザでのCPU負荷を抑えるため **200万画素まで**（Pythonの400万画素制限とは別）、処理は15秒以内の上限と適宜画面操作に処理を譲る制御を備えています。大きな画像では処理が重くなる場合があります。
+- **保存形式で白色マスクを選び、「予測PNGを保存」**を押し、確認したときだけ、元画像と同じ縦横サイズの透明PNGをダウンロードします。選択部分は不透明な白、非選択部分は透明です。保存ファイル名に prediction と方式が入り、元画像のピクセルを変更しません。
+- 保存結果は **正解ではなく推測（raw prediction）**です。このPNGを使って同じ方式の正解マスクを作成すると、評価に答えが混ざるため禁止。正解の髪・顔・服は、推測を見ずに独立した annotate.html で手描きしてください。編集・手直し済みの「補助予測」と無編集の raw prediction の成績も混同しないでください。
+- 以前の一括評価を行う場合、推測PNGと独立に作った正解PNGを同じGit管理外の非公開フォルダに置き、prepare_benchmark.py に対応する --hair-prediction / --face-prediction / --outfit-prediction を渡します。JSONではこの結果は method=mask（外部で生成済みのマスクの比較）となり、**使用した抽出方式はJSONのmethodからは判別できない**ため、比較実験ではファイル名や別の実験記録に方式と設定を明確に記してください。
+- 本番用の自動認識AIや他人の著作物・モデル重みは使っていません。利用が許可されていない画像は開かず、著作権の確認・派生画像の作成許可・再配布条件は人が確認してください。
+
+### 開発時の検証と限界
+
+独自に描いた色のグラデーション、明確な境界、細い背景への通路、半透明画像、分断された領域など計6種類×2方式の**12ケースで既存Python抽出処理と画素単位で一致**しました。LinuxのChromeでも160×96の自作図形をクリックして両方式の予測PNGを保存でき、既存Pythonが出力したマスクと完全一致しています。外部通信要求はなく、許可チェックを解除すると保存ができなくなることを確認しました。これらは実在するアニメキャラを認識できた証拠ではありません。
+
+    node --check experiments/image_parts/preview_extract.js
+    python3 -B -m unittest discover -s experiments/image_parts -p 'test_*.py' -q
+
+**実際のアニメ風イラストに対する精度は未測定です。** 固定色方式はグラデーションを見逃しやすく、適応型は似た色が背景へつながると誤選択しやすい。意味的な髪・顔・服の認識には別途権利条件が明確なモデルと、許可済みの実画像での検証が必要です。今回の実験は main のゲーム/MCPへ統合していません。
+
+
+**推測と正解の混入防止**: この画面が保存するファイル名には creature_prediction_ と、部位・方式・クリックした画素座標・色差パラメータが入ります。prepare_benchmark.py と batch_evaluate.py は、このプレフィックスのPNGを truth（正解）に指定した場合は拒否します。これは誤指定を減らす簡易対策であり、**ファイル名の変更や別ソフトでの生成を見抜ける仕組みではありません**。実験の正解は必ず推測から独立して人間が作成し、権利を確認してください。
+
+### 同じ開始点で固定・適応型を比較する
+
+元画像上で点を指定するか X/Y を入力し、「両方式を同じ点で比較」を押します。
+固定方式は tolerance、適応型は step_tolerance / drift_tolerance を使い、同じ元画像・同じ元画素座標で固定→適応型の順に実行します。
+比較後の元画像クリックも両方式を同じ点で比較します。「この点で予測」を押すと従来の単方式表示に戻り、方式セレクトで選んだ方式だけを実行します。
+
+- 固定、適応型、差・重なりの3ペインを表示します。紫は両方式の共通部分、橙は固定のみ、シアンは適応型のみです。各方式のペインには自身の選択領域だけを表示し、非選択部は元画像を中立な灰色にして表示します。キャンバス内部の縦横画素数は元画像のままで、狭い画面では表示のみ縮小します。
+- 両方が成功すると、それぞれの選択画素数・全画像に対する被覆率、共通部分・和集合、IoU（共通部分÷和集合）、不一致画素数を表示します。**方式間の一致度であり、正解との精度ではありません**。高い一致度でも両方式が同じ背景を誤選択している可能性があります。正解マスクは読み込みません。
+- 画像端に到達、被覆率25%以上、IoUが0.75未満の場合は警告します。25%は確認を促す目安であり失敗判定ではありません。漏出・見逃しを本人が確認してください。最良の方式を自動選択しません。
+- 片方が失敗しても、その方式名とエラーを残します。成功側のみ単独色で表示し、差・重なりは未算出です。失敗を空マスク扱いしたIoUは計算しません。保存できるのは成功した方式だけです。
+- 比較時の保存方式は最初は未選択です。専用の「比較から保存する方式」で固定または適応型を明示的に選び、保存ボタンを押し、確認に同意して初めてPNG保存を依頼します。この選択だけでは比較結果を破棄しません。従来の単方式保存はそのまま使用できます。ファイル名には prediction・部位・開始点・方式・閾値が残り、保存形式は初期値の白色マスク、またはカラー切り抜きを選べます。
+- 元PNG、権利チェック、座標、閾値、部位、方式を変更、または単方式/比較を再実行すると旧比較・数値・保存選択を破棄します。取り消しも進行中の両方式を無効にします。200万画素上限、各抽出の15秒制限、処理中に画面操作へ制御を返す仕組みを維持します。逐次実行のため比較全体は単方式より時間がかかります。
+
+比較の検証にはNode上で生成した単純な二値配列・一時的な矩形画素だけを使用します。同一・包含・非交差・空集合、入力の不変性、不正な長さと型、明示的な保存選択、条件変更と取消、片側失敗を確認します。実イラストに対する精度の測定ではありません。画像データや作例ファイルは追加しません。
+
+
+## Sprint 54：元画像のカラー切り抜きを保存する
+
+preview_extract.html の「保存形式」は初期値が mask（白色マスク・評価用）です。
+cutout（カラー切り抜き・試作用）を選ぶと、選択領域の元画像の色とalphaを保ち、
+選択外をRGBAすべて0にしたPNGを保存できます。どちらも元画像の全寸法・位置を維持し、切り詰めません。
+カラー抽出であり、AIによる意味的な髪・顔の検出ではありません。固定seededと適応型adaptive-seededの
+色のつながりの推測なので、意図しない背景の混入や必要な画素の見逃しがあります。
+
+1. 自作または適法な許可があるPNGについて、派生画像の作成権利を確認して読み込みます。
+2. 点・部位・閾値を指定して予測、または両方式を比較します。比較時は「比較から保存する方式」を必ず明示的に選びます。
+3. 保存形式を選択します。形式変更は再計算せず、選択済みの結果や方式を保持します。方式の自動選択もしません。
+4. 「予測PNGを保存」を押し、形式名を含む確認ダイアログに同意した場合だけ保存します。権利取消は結果と保存を無効にします。
+
+ファイル名は creature_prediction_mask_hair_seeded_x…png または
+creature_prediction_cutout_hair_seeded_x…png のように形式・部位・方式・座標・パラメータを含みます。
+両形式とも検証された人の手描き正解マスクでも権利の証明でもありません。
+カラー切り抜きを評価用の白色マスクとして使わず、どちらの予測も annotate.html の正解作成に流用しないでください。
+既存のprediction接頭辞によるtruth拒否は両形式に適用されます。元画像・切り抜きはGit管理外で扱ってください。
+
+保存は不変の元ImageDataから作り、ピンク等の表示用オーバーレイを使いません。
+alphaを二重に掛けません。純粋関数cutoutBytesではCanvasのRGBAバイトをそのままコピーしますが、
+半透明画素はPNGの復号やCanvasの乗算済みalpha変換でRGBが丸められます。
+**元の圧縮PNGに対するバイト完全一致は保証しません。**
+既存の8 MiB・各辺4096・CPU保護200万画素の入力制限を維持します。通信・追加の保存領域は使いません。
+
+新規テストはNodeとPython unittestで合成RGBA・単純な矩形のみを使い、色・半透明alpha・外側ゼロ・
+入力不変性・型/長さ/二値検査・空集合・サイズ上限と、両形式の保存/比較選択/非同期取消を検証します。
+ChromeはこのSprintのCLI検証では起動していません。独立した実ブラウザ検証では、Pillowで独自作図した
+不透明矩形と半透明図形を読み込み、両方式・両形式の全寸法/位置と半透明alpha、RGB丸め、
+比較方式未選択時の保存禁止、確認取消、権利取消を確認してからコミットしてください。
+
+## 予測マスクの手直し（修正済み予測）
+
+`refine_prediction.html` をChromeで直接開きます（file://、追加依存・通信なし）。
+権利確認後、元PNG、preview_extractで保存した白＋透明の予測マスクの順に明示選択し、
+部位（hair/face/outfit）を手動指定します。両PNGは8 MiB以下・各辺4096以下・200万画素以下、
+同寸法が必要です。APNG、半透明マスク、カラー切り抜きは拒否します。
+
+元画像上のピンク領域を半径2〜40元画素の追加・消去ブラシで修正できます。
+部位名は編集開始後固定。Undoは最大12枚かつ32 MiB以下、全消去・編集中の読込置換には確認があります。
+取消や読込失敗では既存編集を保持します。表示する追加・削除数は読込予測との差であり精度ではありません。
+権利確認取消で編集・保存は無効になり、再読込・終了で編集は消えます。
+
+保存形式を明示選択し確認すると、全寸法の白＋透明マスクまたは元RGBAカラー切り抜きを保存します。
+名前は `creature_prediction_refined_mask_hair_<nonce>.png` 等です。元ファイルの自動変更や保存はしません。
+Canvas復号の半透明RGBには丸めがあり得ます。**修正済み予測も独立したGOLDではありません。**
+正解データとして流用しないでください。JSON・画像作例は生成しません。
