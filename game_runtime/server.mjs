@@ -454,6 +454,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           leverage:settled.leverage,
           profit_coins:settled.profit_coins,
           final_balance:settled.final_balance,
+          daily_balances:settled.allocated_equity_path.map((capital,day,path)=>
+            day===0 ? 10000 : day===path.length-1 ? settled.final_balance :
+              Math.round((settled.cash_held+capital+Number.EPSILON)*100)/100),
           max_drawdown_pct:settled.max_drawdown_pct,
           normal_profit_coins:normal.profit_coins,
           normal_final_balance:normal.final_balance,

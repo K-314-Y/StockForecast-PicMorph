@@ -2,6 +2,37 @@
 const element = id => document.getElementById(id);
 const BALANCE = 10000;
 const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigits:2});
+let replay = null;
+let replayDay = 0;
+const signedMoney = value => (value>=0?'+':'')+money(value);
+function clearReplay() {
+  replay=null;
+  replayDay=0;
+  element('quickReplay').hidden=true;
+  element('quickReplayDay').textContent='';
+  element('quickPrevious').disabled=true;
+  element('quickFollowing').disabled=true;
+}
+function renderReplay() {
+  if(!replay)return;
+  const balance=replay.daily_balances[replayDay];
+  element('quickReplayDay').textContent='第'+replayDay+'日（0〜12日） ／ 練習用の全残高：'+
+    money(balance)+' C ／ 累計損益：'+signedMoney(balance-BALANCE)+
+    ' C ／ 前日比：'+(replayDay===0 ? '算出できません（開始日）' :
+      signedMoney(balance-replay.daily_balances[replayDay-1])+' C')+
+    (replay.liquidated_at_step!==null && replayDay>=replay.liquidated_at_step ?
+      '。投入した資金は尽きました。投入しなかった残高は'+money(BALANCE-replay.invested_coins)+' C残っています。' : '');
+  element('quickPrevious').disabled=replayDay===0;
+  element('quickFollowing').disabled=replayDay===12;
+  element('quickReplay').hidden=false;
+}
+for(const [id,delta] of [['quickPrevious',-1],['quickFollowing',1]]) {
+  element(id).addEventListener('click',()=>{
+    if(!replay)return;
+    replayDay=Math.max(0,Math.min(12,replayDay+delta));
+    renderReplay();
+  });
+}
 let pending = null;
 let busy = false;
 let touched = false;
@@ -58,6 +89,7 @@ function renderValidation(showError=false) {
   }
 }
 function resetReview() {
+  clearReplay();
   pending=null;
   element('quickReview').hidden=true;
   element('quickResult').hidden=true;
@@ -173,6 +205,7 @@ element('quickAgain').addEventListener('click',()=>{
 });
 element('quickRun').addEventListener('click',async()=>{
   if(busy||!pending)return;
+  clearReplay();
   const ordered=pending;
   pending=null;
   element('quickReview').hidden=true;
@@ -186,6 +219,11 @@ element('quickRun').addEventListener('click',async()=>{
     if(value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY'||value.real_market!==false||
        value.persisted!==false||value.invested_coins!==ordered.amount||
        value.leverage!==ordered.leverage ||
+       !Array.isArray(value.daily_balances)||value.daily_balances.length!==13||
+       !Array.from(value.daily_balances).every(balance=>
+         Number.isFinite(balance)&&balance>=0&&balance<=Number.MAX_SAFE_INTEGER)||
+       value.daily_balances[0]!==BALANCE||
+       Math.abs(value.daily_balances[12]-value.final_balance)>0.01||
        !Number.isFinite(value.final_balance)||!Number.isFinite(value.profit_coins)||
        !Number.isFinite(value.normal_profit_coins)||
        !Number.isFinite(value.normal_final_balance)||
@@ -215,10 +253,14 @@ element('quickRun').addEventListener('click',async()=>{
       '強制終了は日足終値だけの近似です。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
     footnote.className='simple-hint';
     panel.append(heading,summary,footnote);
+    replay=value;
+    replayDay=0;
+    renderReplay();
     panel.hidden=false;
     element('quickNext').hidden=false;
     statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
   }catch(error){
+    clearReplay();
     element('quickResult').hidden=true;
     element('quickNext').hidden=true;
     statusField.textContent='試算できませんでした：'+error.message;
