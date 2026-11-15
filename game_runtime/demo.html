@@ -266,6 +266,17 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <label for="artworkFileOutfit">服（outfit・任意）</label><input id="artworkFileOutfit" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoOutfit">
     <small id="artworkInfoOutfit">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
    </div>
+   <details id="artworkWorkshop" class="crop-controls">
+    <summary>画像工房（ローカル実験）</summary>
+    <p>自作、または派生画像を作る許可のあるイラストだけを使ってください。RGBの色のつながりによるローカルの推測であり、AIが髪・顔・服を意味として理解する機能ではありません。工房から画像をサーバーへアップロードしません。</p>
+    <ol>
+     <li><a href="/artwork-lab/preview_extract.html" target="_blank" rel="noopener noreferrer">色から生の予測・切り抜きを試す</a>：修正へ進む場合は、白色の予測マスクPNGをダウンロードします。</li>
+     <li><a href="/artwork-lab/refine_prediction.html" target="_blank" rel="noopener noreferrer">生の予測マスクを手動修正する</a>：元PNGと白色の予測マスクを選び直し、修正後はカラー切り抜きPNGをダウンロードします。</li>
+    </ol>
+    <p>各ページで元PNGの再選択と、個別のブラウザダウンロードが必要です。ページ間やゲームとの共有状態・自動転送はありません。画像の自動読込・自動保存もしません。</p>
+    <p>最終的な修正済みの<strong>カラーPNG</strong>を、この画面の髪（hair）・顔（face）・服（outfit）で手動選択してください。別途その部位の <strong>SAVE</strong> を押した場合だけゲーム用に保存します。1枚450KBまで。完成イラストと同じキャンバス寸法・位置を保ち、余白を切り詰めずに重ねてください。</p>
+    <p>独立した評価用の手順：正解を見る前に<a href="/artwork-lab/choose_seeds.html" target="_blank" rel="noopener noreferrer">元画像だけから開始点を選ぶ</a> → <a href="/artwork-lab/annotate.html" target="_blank" rel="noopener noreferrer">元画像から正解マスクを手描きする</a>。正解マスクは予測や修正済み予測から作らないでください。正解マスクは評価用で、ゲームの表示パーツには使いません。</p>
+   </details>
    <details id="cropControls" class="crop-controls">
     <summary>✂️ 完成イラストから手動でパーツを切り出す</summary>
     <p class="creator-note">好きな範囲をドラッグするか、下のX・Y・幅・高さを数字で指定できます。<strong>四角形の外側だけ</strong>が透明になります。範囲の中にある背景は消えず、髪などを自動判別しません。元の完成イラストは変更しません。</p>

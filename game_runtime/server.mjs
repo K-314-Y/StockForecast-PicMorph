@@ -31,6 +31,19 @@ const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
 const QUICK_HOME_JS = new URL('./quick-home.mjs', import.meta.url);
 const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
+// Fixed read-only assets only: never resolve a request path on the filesystem.
+const ARTWORK_LAB = new Map([
+  ['/artwork-lab/preview_extract.html', new URL('../experiments/image_parts/preview_extract.html', import.meta.url)],
+  ['/artwork-lab/preview_extract.js', new URL('../experiments/image_parts/preview_extract.js', import.meta.url)],
+  ['/artwork-lab/refine_prediction.html', new URL('../experiments/image_parts/refine_prediction.html', import.meta.url)],
+  ['/artwork-lab/refine_prediction.js', new URL('../experiments/image_parts/refine_prediction.js', import.meta.url)],
+  ['/artwork-lab/choose_seeds.html', new URL('../experiments/image_parts/choose_seeds.html', import.meta.url)],
+  ['/artwork-lab/choose_seeds.js', new URL('../experiments/image_parts/choose_seeds.js', import.meta.url)],
+  ['/artwork-lab/annotate.html', new URL('../experiments/image_parts/annotate.html', import.meta.url)],
+  ['/artwork-lab/annotate.js', new URL('../experiments/image_parts/annotate.js', import.meta.url)],
+]);
+// Original meta policies remain intact and also apply (including blob-only images).
+const ARTWORK_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src blob: data:; connect-src 'none'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
@@ -297,6 +310,23 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     const port = server.address()?.port;
     if (!safeLocal(req, port)) return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});
     const path = new URL(req.url, 'http://localhost').pathname;
+    const rawPath = req.url.split('?')[0];
+    if (rawPath.startsWith('/artwork-lab/') || path.startsWith('/artwork-lab/')) {
+      const asset = ARTWORK_LAB.get(rawPath);
+      if (req.method !== 'GET' || !asset) return json(res, 404, {error: '見つかりません'});
+      try {
+        const body = await readFile(asset);
+        res.writeHead(200, {
+          'Content-Type': rawPath.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+          'Content-Length': body.length, 'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+          'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': ARTWORK_LAB_CSP,
+        });
+        return res.end(body);
+      } catch {
+        return json(res, 404, {error: '見つかりません'});
+      }
+    }
     if (req.method === 'GET' && path === '/favicon.ico') {
       res.writeHead(204, {'Cache-Control': 'no-store'});
       return res.end();
