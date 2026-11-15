@@ -163,7 +163,8 @@ test('25x is selectable, displayed before confirmation, and locked for the reque
   assert.equal(get('quickLeverage').children.at(-1).value,'25');
   get('quickLeverage').value='25';
   await fire('quickLeverage','change');
-  assert.match(get('quickLeverageHelp').textContent,/約-4%.*全損/);
+  assert.match(get('quickRisk').textContent,/×25.*約−4%.*投入分を失うおそれ/);
+  assert.match(get('quickRisk').textContent,/手数料.*日次判定.*厳密な閾値ではありません/);
   await fire('quickForm','submit');
   assert.match(get('quickReviewText').textContent,/倍率：×25/);
   await fire('quickRun');
@@ -199,4 +200,141 @@ test('invalid amounts cannot trigger practice requests',async()=>{
     assert.equal(get('quickNext').hidden,true);
   }
   assert.equal(calls.filter(call=>call.path==='/api/quick-practice').length,0);
+});
+
+
+test('shortcuts are native non-submit controls with accessible risk descriptions',()=>{
+  for(const [id,label] of [['quickTen','10%'],['quickHalf','50%'],['quickAll','全額']]) {
+    assert.match(html,new RegExp('<button id="'+id+'" type="button">'+label+'</button>'));
+  }
+  for(const id of ['quickAmount','quickLeverage']) {
+    assert.match(html,new RegExp('id="'+id+'"[^>]*aria-describedby="[^"]*quickRisk'));
+  }
+});
+
+test('initial risk, manual amount and every leverage update without submitting',async()=>{
+  const {get,fire,calls}=await mount();
+  assert.match(get('quickRisk').textContent,/練習用10,000 Cの10%（1,000C）.*最大損失は1,000C。この試算で投入しない残り9,000C/);
+  assert.doesNotMatch(get('quickRisk').textContent,/所持|実残高|約|閾値/);
+  get('quickAmount').value='2345';
+  await fire('quickAmount','input');
+  assert.match(get('quickRisk').textContent,/23.45%（2,345C）.*残り7,655C/);
+  for(let leverage=1;leverage<=25;leverage++) {
+    get('quickLeverage').value=String(leverage);
+    await fire('quickLeverage','change');
+    const risk=get('quickRisk').textContent;
+    if(leverage===1)assert.doesNotMatch(risk,/約|閾値/);
+    else {
+      assert.ok(risk.includes('×'+leverage+'では1倍の基準損益が約−'+
+        (100/leverage).toLocaleString('ja-JP',{maximumFractionDigits:2})+'%'));
+      assert.match(risk,/基準運用の損失100%÷倍率.*手数料.*日次判定.*厳密な閾値ではありません/);
+    }
+    await fire('quickForm','submit');
+    assert.equal(get('quickReviewRisk').textContent,risk);
+    assert.match(get('quickReviewText').textContent,/使わないコイン：7,655 C。最大損失は2,345 C/);
+  }
+  assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,0);
+});
+
+test('each shortcut discards review even when unchanged and clears results without requesting',async()=>{
+  const {get,fire,calls}=await mount();
+  for(const [id,amount,percent,held] of [
+    ['quickTen','1000','10','9,000'],['quickHalf','5000','50','5,000'],['quickAll','10000','100','0'],
+  ]) {
+    await fire(id);
+    assert.equal(get('quickAmount').value,amount);
+    assert.ok(get('quickRisk').textContent.includes('の'+percent+'%'));
+    assert.ok(get('quickRisk').textContent.includes('この試算で投入しない残り'+held+'C'));
+    await fire('quickForm','submit');
+    const review=get('quickReviewText').textContent;
+    assert.ok(review.includes('最大損失は'+Number(amount).toLocaleString('ja-JP')+' C'));
+    assert.ok(review.includes('使わないコイン：'+held+' C'));
+    assert.equal(get('quickReviewRisk').textContent,get('quickRisk').textContent);
+    const before=calls.length;
+    await fire(id); // Same value must still discard the pending confirmation.
+    assert.equal(get('quickReview').hidden,true);
+    await fire('quickRun');
+    assert.equal(calls.length,before);
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.equal(get('quickResult').hidden,false);
+    const after=calls.length;
+    await fire(id);
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(get('quickNext').hidden,true);
+    await fire('quickRun');
+    assert.equal(calls.length,after);
+  }
+});
+
+test('manual edits and leverage changes clear completed results and pending confirmation',async()=>{
+  for(const [id,event,value] of [['quickAmount','input','4321'],['quickLeverage','change','10']]) {
+    const {get,fire,calls}=await mount();
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.equal(get('quickResult').hidden,false);
+    await fire('quickForm','submit');
+    get(id).value=value;
+    await fire(id,event);
+    assert.equal(get('quickReview').hidden,true);
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(get('quickNext').hidden,true);
+    await fire('quickRun');
+    assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+    assert.match(get('quickRisk').textContent,id==='quickAmount'?/43.21%/:/×10.*約−10%/);
+  }
+});
+
+test('invalid risk hides numeric claims and shortcuts recover from input and API errors',async()=>{
+  const {get,fire,state,calls}=await mount();
+  for(const invalid of ['','0','10001','-1','1.2','1e3','NaN','<img src=x>']) {
+    await fire('quickForm','submit');
+    get('quickAmount').value=invalid;
+    await fire('quickAmount','input');
+    assert.match(get('quickRisk').textContent,/^入力値を確認してください/);
+    assert.doesNotMatch(get('quickRisk').textContent,/最大損失|守られる/);
+    await fire('quickRun');
+  }
+  assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,0);
+  await fire('quickHalf');
+  assert.equal(get('quickError').textContent,'');
+  assert.equal(get('quickAmount').attributes['aria-invalid'],undefined);
+  state.practice=async()=>({error:'通信エラー'});
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  for(const id of ['quickTen','quickHalf','quickAll'])assert.equal(get(id).disabled,false);
+  await fire('quickTen');
+  assert.match(get('quickRisk').textContent,/10%（1,000C）/);
+  get('quickLeverage').value='26';
+  await fire('quickLeverage','change');
+  assert.match(get('quickRisk').textContent,/^入力値を確認してください/);
+});
+
+test('in-flight request disables all shortcuts and prevents double submission at 25x full stake',async()=>{
+  const {get,fire,state,calls}=await mount();
+  await fire('quickAll');
+  get('quickLeverage').value='25';
+  await fire('quickLeverage','change');
+  await fire('quickForm','submit');
+  const response=await state.practice({amount:10000,leverage:25});
+  let finish;
+  state.practice=()=>new Promise(resolve=>{finish=resolve;});
+  const running=fire('quickRun');
+  for(const id of ['quickTen','quickHalf','quickAll','quickAmount','quickLeverage','quickConfirm','quickRun']) {
+    assert.equal(get(id).disabled,true);
+  }
+  const risk=get('quickRisk').textContent;
+  for(const id of ['quickTen','quickHalf','quickAll'])await fire(id); // Defensive handler guard too.
+  assert.equal(get('quickAmount').value,'10000');
+  assert.equal(get('quickRisk').textContent,risk);
+  await fire('quickRun');
+  await fire('quickForm','submit');
+  assert.deepEqual(calls.filter(c=>c.path==='/api/quick-practice'),[
+    {path:'/api/quick-practice',body:{model_id:'self',amount:10000,leverage:25}},
+  ]);
+  finish(response);
+  await running;
+  for(const id of ['quickTen','quickHalf','quickAll'])assert.equal(get(id).disabled,false);
+  await fire('quickRun');
+  assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
 });
