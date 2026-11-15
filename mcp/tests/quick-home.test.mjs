@@ -55,6 +55,11 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       assert.equal(data.initial_balance,10000);
       assert.equal(data.cash_held,10000-amount);
       assert.equal(data.steps,12);
+      assert.equal(data.daily_balances.length,13);
+      assert.equal(data.daily_balances[0],10000);
+      assert.equal(data.daily_balances[12],data.final_balance);
+      assert.ok(data.daily_balances.every(n=>Number.isFinite(n)&&n>=data.cash_held));
+      assert.ok(data.daily_balances.every(n=>Math.abs(n*100-Math.round(n*100))<1e-6));
       assert.equal(data.real_market,false);
       assert.equal(data.persisted,false);
       assert.equal(data.order_placed,false);
@@ -70,6 +75,14 @@ test('25x server integration is read-only and never creates a negative balance',
     const out=await post(base,{amount:1000,model_id:'self',leverage:25});
     assert.equal(out.status,200,JSON.stringify(out.data));
     assert.equal(out.data.leverage,25);
+    assert.equal(out.data.daily_balances.length,13);
+    assert.equal(out.data.daily_balances[0],10000);
+    assert.equal(out.data.daily_balances[12],out.data.final_balance);
+    assert.ok(out.data.daily_balances.every(n=>n>=9000));
+    if(out.data.liquidated_at_step!==null) {
+      assert.deepEqual(out.data.daily_balances.slice(out.data.liquidated_at_step),
+        Array(13-out.data.liquidated_at_step).fill(9000));
+    }
     assert.equal(out.data.cash_held,9000);
     assert.ok(Number.isFinite(out.data.normal_profit_coins));
     assert.ok(Number.isFinite(out.data.normal_final_balance));

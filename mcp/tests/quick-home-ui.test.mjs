@@ -40,6 +40,7 @@ async function mount(models=[]) {
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
+    daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
     normal_profit_coins:25,normal_final_balance:10025,normal_max_drawdown_pct:1,
   })};
   const fetch=async(path,options)=>{
@@ -337,4 +338,86 @@ test('in-flight request disables all shortcuts and prevents double submission at
   for(const id of ['quickTen','quickHalf','quickAll'])assert.equal(get(id).disabled,false);
   await fire('quickRun');
   assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+});
+
+test('daily replay navigates all 13 full balances with signed changes and endpoint controls',async()=>{
+  const {get,fire}=await mount();
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.equal(get('quickReplay').hidden,false);
+  assert.equal(get('quickPrevious').disabled,true);
+  assert.equal(get('quickFollowing').disabled,false);
+  assert.match(get('quickReplayDay').textContent,/第0日.*全残高：10,000 C.*累計損益：\+0 C.*前日比：算出できません/);
+  await fire('quickPrevious');
+  assert.match(get('quickReplayDay').textContent,/第0日/);
+  await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/第1日.*10,010 C.*累計損益：\+10 C.*前日比：\+10 C/);
+  await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/第2日.*9,995 C.*累計損益：-5 C.*前日比：-15 C/);
+  for(let i=2;i<12;i++)await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/第12日.*10,025 C/);
+  assert.equal(get('quickFollowing').disabled,true);
+  await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/第12日/);
+  await fire('quickPrevious');
+  assert.match(get('quickReplayDay').textContent,/第11日/);
+  assert.equal(get('quickFollowing').disabled,false);
+});
+
+test('25x replay shows liquidation only from its day and preserves uninvested cash',async()=>{
+  const {get,fire,state}=await mount();
+  const practice=state.practice;
+  state.practice=async body=>({...await practice(body),final_balance:9000,profit_coins:-1000,
+    liquidated_at_step:2,daily_balances:[10000,9500,...Array(11).fill(9000)]});
+  get('quickLeverage').value='25';
+  await fire('quickLeverage','change');
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.doesNotMatch(get('quickReplayDay').textContent,/尽きました/);
+  await fire('quickFollowing');
+  assert.doesNotMatch(get('quickReplayDay').textContent,/尽きました/);
+  await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/全残高：9,000 C.*累計損益：-1,000 C.*前日比：-500 C.*投入した資金は尽きました.*投入しなかった残高は9,000 C残っています/);
+  for(let i=2;i<12;i++)await fire('quickFollowing');
+  assert.match(get('quickReplayDay').textContent,/第12日.*9,000 C.*前日比：\+0 C.*尽きました/);
+});
+
+test('malformed daily balances reject the entire result',async()=>{
+  const {get,fire,state}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  const path=valid.daily_balances;
+  for(const daily_balances of [undefined,null,{},'bad',[],path.slice(1),[...path,10025],
+    [9999,...path.slice(1)],[...path.slice(0,12),10025.02],
+    ...[NaN,Infinity,-1,'10000',Number.MAX_SAFE_INTEGER+1,undefined].map(n=>
+      path.map((v,i)=>i===5?n:v)),Array(13)]) {
+    state.practice=async()=>({...valid,daily_balances});
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.match(get('quickStatus').textContent,/結果の形式が不正/);
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(get('quickNext').hidden,true);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickReplayDay').textContent,'');
+  }
+});
+
+test('input, model, leverage, shortcuts, new practice and retry clear replay state',async()=>{
+  for(const [id,event] of [['quickAmount','input'],['quickModel','change'],
+    ['quickLeverage','change'],['quickTen','click'],['quickHalf','click'],
+    ['quickAll','click'],['quickForm','submit'],['quickAgain','click']]) {
+    const {get,fire}=await mount();
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    await fire('quickFollowing');
+    await fire(id,event);
+    assert.equal(get('quickReplay').hidden,true,id);
+    assert.equal(get('quickReplayDay').textContent,'',id);
+    assert.equal(get('quickPrevious').disabled,true);
+    assert.equal(get('quickFollowing').disabled,true);
+    await fire('quickFollowing');
+    assert.equal(get('quickReplayDay').textContent,'');
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.match(get('quickReplayDay').textContent,/第0日/);
+  }
 });
