@@ -158,7 +158,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <label for="quickModel">① 練習に使うAIを選択
     <select id="quickModel" name="model" required aria-describedby="quickModelHelp"><option value="self">自分のAI（未作成なら標準AI）</option></select>
    </label>
-   <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button></div>
+   <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button></div>
    <p id="quickModelHelp" class="simple-hint">自分のAIは無料です。デモAIはショップ専用のコインで解放できます。</p>
    <label for="quickAmount">② 試算額を入力（練習用：1〜10,000 C）</label>
    <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError quickRisk"></div>
@@ -246,25 +246,26 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <p class="creator-note">予測はゲーム練習専用です。V6の学習済みOfficialは書き換えません。実際の注文や自動売買は行いません。</p>
   </details>
   <details id="artworkControls" class="appearance-controls" open>
-   <summary>私のイラストを重ねる</summary>
+   <summary id="artworkTitle" class="simple-target">私のイラストを重ねる</summary>
+   <p id="artworkSteps" class="creator-note"><strong>ゲームで使う最短手順：</strong>原画を選択 → base SAVE → 画像工房で白マスク → 修正したカラーPNGをダウンロード → 対応する部位を選択してSAVE → 練習へ戻る。評価用の正解データとは別です。画像はこのPCで使い、外部転送・自動反映はありません。</p>
    <p>自分で制作した完成イラストを1枚選ぶだけで、上のゲーム画面に表示できます。選んだ直後は未保存です。各画像の <strong>SAVE</strong> を押すと、このPCに保存して再読込後も使えます。</p>
    <p class="creator-note">自動切り抜き・自動分割は行いません。髪・顔・服は任意です。人や別アプリであらかじめ切り抜いた、完成イラストと同じサイズの透明キャンバスのPNG/WebPを使うと位置がそろいます。重なる順は完成イラスト→服→顔→髪です。元の画像データは加工しません。</p>
    <small>1枚450KB、4枚で合計2MBまで。完成イラスト：PNG/JPEG/WebP。任意レイヤー：透明PNG/WebP。</small>
    <div class="artwork-slot">
     <label for="artworkFileBase">完成イラスト（base）</label><input id="artworkFileBase" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="artworkInfoBase">
-    <small id="artworkInfoBase">未取得</small><div class="actions"><button id="artworkSaveBase" type="button" class="primary" disabled>SAVE 完成イラスト</button><button id="artworkClearBase" type="button" disabled>CLEAR 保存した完成イラストを削除</button></div>
+    <small id="artworkInfoBase" aria-live="polite">未取得</small><div class="actions"><button id="artworkSaveBase" type="button" class="primary" aria-describedby="artworkInfoBase" disabled>SAVE 完成イラスト</button><button id="artworkClearBase" type="button" disabled>CLEAR 保存した完成イラストを削除</button></div>
    </div>
    <div class="artwork-slot">
     <label for="artworkFileHair">髪（hair・任意）</label><input id="artworkFileHair" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoHair">
-    <small id="artworkInfoHair">未取得</small><div class="actions"><button id="artworkSaveHair" type="button" disabled>SAVE 髪</button><button id="artworkClearHair" type="button" disabled>CLEAR 保存した髪を削除</button></div>
+    <small id="artworkInfoHair" aria-live="polite">未取得</small><div class="actions"><button id="artworkSaveHair" type="button" aria-describedby="artworkInfoHair" disabled>SAVE 髪</button><button id="artworkClearHair" type="button" disabled>CLEAR 保存した髪を削除</button></div>
    </div>
    <div class="artwork-slot">
     <label for="artworkFileFace">顔（face・任意）</label><input id="artworkFileFace" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoFace">
-    <small id="artworkInfoFace">未取得</small><div class="actions"><button id="artworkSaveFace" type="button" disabled>SAVE 顔</button><button id="artworkClearFace" type="button" disabled>CLEAR 保存した顔を削除</button></div>
+    <small id="artworkInfoFace" aria-live="polite">未取得</small><div class="actions"><button id="artworkSaveFace" type="button" aria-describedby="artworkInfoFace" disabled>SAVE 顔</button><button id="artworkClearFace" type="button" disabled>CLEAR 保存した顔を削除</button></div>
    </div>
    <div class="artwork-slot">
     <label for="artworkFileOutfit">服（outfit・任意）</label><input id="artworkFileOutfit" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoOutfit">
-    <small id="artworkInfoOutfit">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
+    <small id="artworkInfoOutfit" aria-live="polite">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" aria-describedby="artworkInfoOutfit" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
    </div>
    <details id="artworkWorkshop" class="crop-controls">
     <summary>画像工房（ローカル実験）</summary>
@@ -293,7 +294,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <div class="actions"><button id="cropCreate" type="button" class="primary" disabled>未保存レイヤーを作る</button><a id="cropDownload" hidden>生成したPNGをダウンロード</a></div>
     <p id="cropStatus" role="status" aria-live="polite">編集台は未読込です。透明PNGはSAVEするまでは保存されません。</p>
    </details>
-   <div class="actions"><button id="showArtwork" type="button">自分のイラストに切り替える</button><button id="showChibi" type="button">カスタムchibiに切り替える</button><button id="reloadArtwork" type="button">未保存を破棄して再取得</button></div>
+   <div class="actions"><button id="showArtwork" type="button">自分のイラストに切り替える</button><button id="showChibi" type="button">カスタムchibiに切り替える</button><button id="reloadArtwork" type="button">未保存を破棄して再取得</button><button id="artworkReturn" type="button">練習へ戻る</button></div>
    <p id="artworkStatus" role="status" aria-live="polite">イラストの保存状況を読み込んでいます…</p>
   </details>
   <details id="skinControls" class="appearance-controls">

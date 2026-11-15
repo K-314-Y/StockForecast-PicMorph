@@ -21,6 +21,8 @@ let savedArtwork = null;
 let artworkSaving = false;
 let artworkActive = false;
 const artworkPreviews = new Map();
+const artworkDimensions = new Map();
+const artworkSelectionErrors = new Map();
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
 const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
@@ -614,32 +616,88 @@ loadCompanion().catch(error => {
 });
 
 // Local File previews are separate from the revision-guarded saved source bytes.
+function savedArtworkSource(slot) {
+  return savedArtwork?.slots[slot]?.exists ?
+    '/api/artwork/image/' + slot + '?revision=' + savedArtwork.revision : '';
+}
+// Decode only local preview URLs and the existing same-origin image endpoint.
+function artworkSize(src) {
+  if (!src) return null;
+  if (artworkDimensions.has(src)) return artworkDimensions.get(src);
+  const size = {pending:typeof Image === 'function',width:0,height:0};
+  artworkDimensions.set(src, size);
+  if (size.pending) {
+    const img = new Image();
+    const finish = () => {
+      if (artworkDimensions.get(src) !== size) return;
+      size.pending = false;
+      size.width = img.naturalWidth; size.height = img.naturalHeight;
+      refreshArtworkButtons();
+    };
+    img.onload = finish; img.onerror = finish;
+    img.src = src;
+  }
+  return size;
+}
+const knownArtworkSize = size => size?.width > 0 && size?.height > 0;
+const artworkSizeText = size => size?.pending ? '寸法確認中…' :
+  knownArtworkSize(size) ? size.width + '×' + size.height + 'px' : '寸法を確認できません';
+const differentArtworkSize = (a,b) => knownArtworkSize(a) && knownArtworkSize(b) &&
+  (a.width !== b.width || a.height !== b.height);
+function artworkLayerCheck(slot) {
+  const layer = artworkSize(artworkSource(slot));
+  const base = artworkSize(artworkSource('base'));
+  const storedBase = artworkSize(savedArtworkSource('base'));
+  if (layer?.pending || base?.pending || storedBase?.pending)
+    return {blocked:true,message:'SAVE前に画像の寸法を確認中です…'};
+  if (differentArtworkSize(base, layer)) return {blocked:true,invalid:true,message:
+    '寸法が違います（base ' + artworkSizeText(base) + ' / ' + artworkNames[slot] + ' ' + artworkSizeText(layer) +
+    '）。余白を切り詰めず、baseと同じキャンバス寸法・位置で書き出して選び直してください。このレイヤーはSAVEできません。'};
+  if (differentArtworkSize(storedBase, layer)) return {blocked:true,invalid:true,message:
+    '保存済みbase（' + artworkSizeText(storedBase) + '）と寸法が違うため、このレイヤーはSAVEできません。先に新しいbaseをSAVEするか、同じキャンバス寸法のレイヤーを選び直してください。'};
+  if (!knownArtworkSize(base) || (savedArtwork?.slots.base.exists && !knownArtworkSize(storedBase)))
+    return {blocked:false,message:'注意：base寸法が確認できないため、重ね合わせのサイズが合うか判断できません。原画と同じキャンバス寸法・位置か確認してください。'};
+  if (!knownArtworkSize(layer)) return {blocked:false,message:
+    '注意：レイヤー寸法が確認できないため、baseとの一致は判断できません。画像を確認して選び直してください。'};
+  return {blocked:false,message:'base ' + artworkSizeText(base) + ' と同じ寸法です。位置は自動調整しません。余白・重なりを確認してください。'};
+}
 function refreshArtworkButtons() {
   for (const slot of artworkSlots) {
     const suffix = artworkId(slot);
     const save = $('artworkSave' + suffix);
     if (!save) continue;
-    save.disabled = artworkSaving || savedArtwork === null || !artworkPreviews.has(slot);
+    const src = artworkSource(slot);
+    const size = artworkSize(src);
+    const check = slot !== 'base' && src ? artworkLayerCheck(slot) : null;
+    const selectionError = artworkSelectionErrors.get(slot);
+    save.disabled = artworkSaving || savedArtwork === null || !artworkPreviews.has(slot) ||
+      Boolean(size?.pending || check?.blocked);
     $('artworkClear' + suffix).disabled = artworkSaving || !savedArtwork?.slots[slot]?.exists;
     $('artworkFile' + suffix).disabled = artworkSaving;
+    $('artworkFile' + suffix).setAttribute('aria-invalid', String(Boolean(selectionError || check?.invalid)));
     const preview = artworkPreviews.get(slot);
     const stored = savedArtwork?.slots[slot];
-    $('artworkInfo' + suffix).textContent = preview ?
+    const info = preview ?
       '未保存：' + preview.file.name + ' / ' + preview.file.size + ' bytes' :
       stored?.exists ? '保存済み：' + stored.mime + ' / ' + stored.size + ' bytes' :
       savedArtwork ? '画像なし' : '保存状況は未取得（選択してプレビューできます）';
+    $('artworkInfo' + suffix).textContent = info + (src ? ' / ' + artworkSizeText(size) : '') +
+      (check ? '。' + check.message : '') + (selectionError ? '。' + selectionError : '');
   }
   if ($('reloadArtwork')) $('reloadArtwork').disabled = artworkSaving;
 }
 function discardArtworkPreview(slot) {
   const preview = artworkPreviews.get(slot);
-  if (preview) URL.revokeObjectURL(preview.url);
+  if (preview) {
+    URL.revokeObjectURL(preview.url);
+    artworkDimensions.delete(preview.url);
+  }
   artworkPreviews.delete(slot);
+  artworkSelectionErrors.delete(slot);
   $('artworkFile' + artworkId(slot)).value = '';
 }
 function artworkSource(slot) {
-  return artworkPreviews.get(slot)?.url || (savedArtwork?.slots[slot]?.exists ?
-    '/api/artwork/image/' + slot + '?revision=' + savedArtwork.revision : '');
+  return artworkPreviews.get(slot)?.url || savedArtworkSource(slot);
 }
 function showArtwork() {
   const base = artworkSource('base');
@@ -686,8 +744,15 @@ function previewArtwork(slot) {
   if (!file || artworkSaving) return;
   const allowed = slot === 'base' ? ['image/png','image/jpeg','image/webp'] : ['image/png','image/webp'];
   if (!allowed.includes(file.type) || file.size <= 0 || file.size > 450 * 1024) {
-    input.value = '';
-    $('artworkStatus').textContent = '画像は1枚450KBまで。完成イラストはPNG/JPEG/WebP、レイヤーはPNG/WebPを選んでください。';
+    const message = file.size > 450 * 1024 ?
+      '選択した画像は ' + file.size.toLocaleString('ja-JP') + ' bytes（' + (file.size / 1024).toFixed(1) +
+      'KB）で、上限450KB（460,800 bytes）を超えています。画像編集ソフトで圧縮して選び直してください。パーツは余白を切らず、baseと同じキャンバス寸法・位置を保ってください。' :
+      '完成イラストはPNG/JPEG/WebP、レイヤーはPNG/WebPの空でない画像を選んでください。1枚450KBまでです。';
+    discardArtworkPreview(slot);
+    artworkSelectionErrors.set(slot, message);
+    refreshArtworkButtons();
+    if (artworkActive) showArtwork();
+    $('artworkStatus').textContent = message;
     return;
   }
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
@@ -711,11 +776,22 @@ async function artworkBase64(file) {
 }
 async function saveArtworkSlot(slot, clear = false) {
   if (artworkSaving || !savedArtwork || (!clear && !artworkPreviews.has(slot))) return;
+  if (!clear) {
+    if (artworkSize(artworkSource(slot))?.pending) return;
+    if (slot !== 'base') {
+      const check = artworkLayerCheck(slot);
+      if (check.blocked) { $('artworkStatus').textContent = check.message; return; }
+      const message = artworkNames[slot] + '（' + artworkSizeText(artworkSize(artworkSource(slot))) + '）をSAVEしますか？\n' +
+        check.message + '\n重なる順はbase→服→顔→髪です。この部位だけをこのPCに保存します。';
+      if (typeof window === 'undefined' || typeof window.confirm !== 'function' || !window.confirm(message)) return;
+    }
+  }
   artworkSaving = true; refreshArtworkButtons();
   try {
     const file = artworkPreviews.get(slot)?.file;
     const image = clear ? null : {mime:file.type,base64:await artworkBase64(file)};
     savedArtwork = await call('/api/artwork', {expected_revision:savedArtwork.revision,slot,image});
+    artworkDimensions.clear();
     discardArtworkPreview(slot);
     $('artworkStatus').textContent = artworkNames[slot] + (clear ? 'の保存画像を削除しました。' : 'を保存しました。再読込後も使えます。');
     if (artworkActive) showArtwork();
@@ -727,6 +803,7 @@ async function loadArtwork(restore = false) {
   const epoch = skinEpoch;
   const record = await call('/api/artwork');
   savedArtwork = record;
+  artworkDimensions.clear();
   refreshArtworkButtons();
   $('artworkStatus').textContent = record.created ? '保存済みイラストを復元しました。revision ' + record.revision :
     'まだ画像は保存されていません。完成イラスト1枚から使えます。';

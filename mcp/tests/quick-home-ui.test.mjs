@@ -78,6 +78,31 @@ test('shop and editor navigation opens details, scrolls and focuses the destinat
   assert.equal(get('companionEditorTitle').attributes.tabindex,'-1');
 });
 
+test('artwork shortcut expands the workshop and returns to practice without requests or form changes',async()=>{
+  const {get,fire,calls,scrolls,document}=await mount();
+  assert.match(html,/<button id="quickArtwork" type="button"[^>]*>キャラの見た目を作る<\/button>/);
+  assert.match(html,/id="quickCustomize"[^>]*>自分のAIを作る・編集する/);
+  get('quickAmount').value='2345';
+  get('quickLeverage').value='3';
+  await fire('quickForm','submit');
+  const priorCalls=calls.length;
+  for(let attempt=0;attempt<2;attempt++) {
+    for(const id of ['advancedEntry','artworkControls','artworkWorkshop'])get(id).open=false;
+    await fire('quickArtwork');
+    for(const id of ['advancedEntry','artworkControls','artworkWorkshop'])assert.equal(get(id).open,true);
+    assert.equal(scrolls.at(-1),get('artworkControls'));
+    assert.equal(document.activeElement,get('artworkTitle'));
+    assert.equal(get('artworkTitle').attributes.tabindex,undefined); // summary keeps its native Tab stop.
+    await fire('artworkReturn');
+    assert.equal(scrolls.at(-1),get('simpleHome'));
+    assert.equal(document.activeElement,get('quickModel'));
+  }
+  assert.equal(calls.length,priorCalls);
+  assert.equal(get('quickAmount').value,'2345');
+  assert.equal(get('quickLeverage').value,'3');
+  assert.equal(get('quickReview').hidden,false);
+});
+
 test('both return buttons refresh owned AI choices and preserve the current selection',async()=>{
   const owned={id:'demo_one',name:'<img src=x onerror=alert(1)>',owned:true};
   const locked={id:'demo_two',name:'次のAI',owned:false};

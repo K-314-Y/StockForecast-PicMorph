@@ -112,6 +112,12 @@ function openEditor() {
   element('companionControls').open=true;
   scrollAndFocus('companionEditorTitle','companionEditorTitle');
 }
+function openArtwork() {
+  element('advancedEntry').open=true;
+  element('artworkControls').open=true;
+  element('artworkWorkshop').open=true;
+  scrollAndFocus('artworkControls','artworkTitle');
+}
 async function returnHome() {
   scrollAndFocus('simpleHome','quickModel');
   await loadModels();
@@ -196,6 +202,8 @@ leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();})
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
 element('quickCustomize').addEventListener('click',openEditor);
+element('quickArtwork').addEventListener('click',openArtwork);
+element('artworkReturn').addEventListener('click',()=>scrollAndFocus('simpleHome','quickModel'));
 element('shopReturn').addEventListener('click',returnHome);
 element('companionReturn').addEventListener('click',returnHome);
 element('quickAgain').addEventListener('click',()=>{
