@@ -43,6 +43,8 @@ body{font-family:system-ui,sans-serif;max-width:960px;margin:auto;padding:1rem;l
 <p id="dimensions">元画像未読込</p>
 <p id="status" role="status" aria-live="polite">権利確認後、元PNGを選んでください。</p>
 <button id="cancel" type="button" disabled>処理・予測を取り消す</button>
-<button id="export" type="button" disabled>予測の白色マスクPNGを保存（確認あり）</button>
-<p>保存は選択部が不透明な白、その他が透明のRGBA PNGです。元画像と同じ寸法です。表示用の色は保存されません。保存先で既存ファイルを置き換えないでください。</p>
+<label>保存形式 <select id="exportFormat" aria-describedby="exportHelp"><option value="mask" selected>白色マスク（評価用）</option><option value="cutout">カラー切り抜き（試作用）</option></select></label>
+<button id="export" type="button" disabled>予測PNGを保存（選択した形式・確認あり）</button>
+<p id="exportHelp">白色マスクは評価用（選択部は不透明な白）、カラー切り抜きは試作用の元画像の色の抽出です。どちらも人が検証して手描きした正解マスクでも、権利の証明でもありません。カラー切り抜きは意図しない背景を含み得る推測画素です。選択外は透明で、元画像の全寸法・位置を保ち、切り詰めません。表示用の重ね色は保存しません。形式変更だけでは再計算・方式の自動選択はしません。</p>
+<p>カラー切り抜きはCanvasが復号したRGBA（元のalphaを含む）を使います。半透明画素はPNG復号・Canvasの乗算済みalpha変換でRGBが丸められる場合があり、元の圧縮PNGとのバイト完全一致は保証しません。保存先で既存ファイルを置き換えないでください。</p>
 </body></html>

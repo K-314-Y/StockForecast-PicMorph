@@ -114,13 +114,36 @@
     for (let i = 0; i < selected.length; i++) if (selected[i]) output.set([255,255,255,255], i*4);
     return output;
   }
+  // Copy decoded original ImageData bytes, never the tinted preview or alpha twice.
+  function cutoutBytes(sourceRgba, selected) {
+    if (!(sourceRgba instanceof Uint8ClampedArray) || !(selected instanceof Uint8Array) ||
+        sourceRgba.length !== selected.length * 4) {
+      throw new Error("元RGBAまたは選択マスクの型・長さが不正です。");
+    }
+    const output = new Uint8ClampedArray(sourceRgba.length);
+    for (let i = 0; i < selected.length; i++) {
+      if (selected[i] > 1) throw new Error("選択マスクは0または1です。");
+      if (selected[i]) output.set(sourceRgba.subarray(i*4, i*4+4), i*4);
+    }
+    return output;
+  }
   // Node-only regression access; a classic script keeps file:// independent of module CORS.
-  if (typeof module !== "undefined" && module.exports) module.exports = { grow, validatePNG, mapPoint, maskBytes, compareSelections };
+  if (typeof module !== "undefined" && module.exports) module.exports = { grow, validatePNG, mapPoint, maskBytes, cutoutBytes, compareSelections };
   if (typeof document === "undefined") return;
   const el = id => document.getElementById(id);
   const rights = el("rights"), source = el("source"), canvas = el("preview"), save = el("export");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   let pixels = null, result = null, comparison = null, token = 0, serial = 0;
+  let exportRevision = 0;
+  const exportFormat = el("exportFormat");
+  const selectedFormat = () => exportFormat ? exportFormat.value : "mask";
+  const validFormat = () => ["mask", "cutout"].includes(selectedFormat());
+  const formatLabel = format => format === "cutout" ? "カラー切り抜き（cutout）" : "白色マスク（mask）";
+  exportFormat?.addEventListener("change", () => {
+    exportRevision++;
+    save.disabled = !rights.checked || !pixels || !result || !result.count || !validFormat();
+    status(`${formatLabel(selectedFormat())}を選択しました。${save.disabled ? "有効な予測と、比較時は保存方式の選択が必要です。" : "保存ボタンと確認でPNGを保存できます。"}`);
+  });
   let compareMode = false;
   function status(message) { el("status").textContent = message; }
   function invalidate(message) {
@@ -272,7 +295,8 @@
   // This choice changes only the export target; it must not cancel a comparison.
   el("comparisonExport").addEventListener("change", () => {
     result = comparison && comparison[el("comparisonExport").value] || null;
-    save.disabled = !result;
+    exportRevision++;
+    save.disabled = !rights.checked || !result || !validFormat();
   });
   el("compare").addEventListener("click", () => {
     if (!el("seedX").value.trim() || !el("seedY").value.trim()) { invalidate("元画素座標を入力してください。"); return; }
@@ -290,24 +314,26 @@
   save.addEventListener("click", async () => {
     if (!rights.checked || !pixels || !result || !result.count) return;
     if (comparison && comparison[el("comparisonExport").value] !== result) return;
-    if (!window.confirm("予測（正解ではありません）の白色マスクPNGを保存しますか？派生画像の作成権利と保存先を確認してください。")) return;
-    const current = token, chosen = result;
+    if (!validFormat()) return;
+    const format = selectedFormat(), revision = exportRevision;
+    if (!window.confirm(`予測（正解ではありません）の${formatLabel(format)}PNGを保存しますか？${format === "cutout" ? "意図しない背景を含む推測画素です。" : "評価用の白と透明のマスクです。"}権利の証明ではありません。派生画像の作成権利と保存先を確認してください。`)) return;
+    const current = token, chosen = result, original = pixels;
     save.disabled = true;
     try {
-      const output = document.createElement("canvas"); output.width = pixels.width; output.height = pixels.height;
-      output.getContext("2d").putImageData(new ImageData(maskBytes(chosen.selected), output.width, output.height), 0, 0);
+      const output = document.createElement("canvas"); output.width = original.width; output.height = original.height;
+      output.getContext("2d").putImageData(new ImageData(format === "cutout" ? cutoutBytes(original.data, chosen.selected) : maskBytes(chosen.selected), output.width, output.height), 0, 0);
       const blob = await new Promise(resolve => output.toBlob(resolve, "image/png"));
-      if (current !== token || !rights.checked || result !== chosen) return;
+      if (current !== token || !rights.checked || result !== chosen || pixels !== original || revision !== exportRevision || selectedFormat() !== format) return;
       if (!blob) throw new Error("PNGの生成に失敗しました。");
       const url = URL.createObjectURL(blob), link = document.createElement("a");
       const stamp = `${Date.now()}_${++serial}_${crypto.randomUUID()}`;
       const params = chosen.method === "seeded"
         ? `t${chosen.options.tolerance}` : `step${chosen.options.step}_drift${chosen.options.drift}`;
-      link.download = `creature_prediction_${chosen.part}_${chosen.method}_x${chosen.seedX}_y${chosen.seedY}_${params}_${stamp}.png`;
+      link.download = `creature_prediction_${format}_${chosen.part}_${chosen.method}_x${chosen.seedX}_y${chosen.seedY}_${params}_${stamp}.png`;
       link.href = url; document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      status("予測マスクの保存をブラウザに依頼しました。正解として自己評価に使用しないでください。");
+      status(`予測の${formatLabel(format)}PNGの保存をブラウザに依頼しました。正解として自己評価に使用しないでください。`);
     } catch (error) { if (current === token) status(error.message); }
-    finally { if (current === token && rights.checked && result) save.disabled = false; }
+    finally { if (current === token && rights.checked && result && validFormat()) save.disabled = false; }
   });
 })();
