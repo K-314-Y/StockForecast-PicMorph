@@ -55,6 +55,10 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       assert.equal(data.initial_balance,10000);
       assert.equal(data.cash_held,10000-amount);
       assert.equal(data.steps,12);
+      assert.equal(data.daily_ai_signals.length,12);
+      assert.ok(data.daily_ai_signals.every(signal=>signal==='LONG'||signal==='CASH'));
+      assert.equal(data.daily_synthetic_prices.length,13);
+      assert.ok(data.daily_synthetic_prices.every(price=>Number.isFinite(price)&&price>0&&price<=1e12));
       assert.equal(data.daily_balances.length,13);
       assert.equal(data.daily_balances[0],10000);
       assert.equal(data.daily_balances[12],data.final_balance);
@@ -103,7 +107,13 @@ test('25x server integration is read-only and never creates a negative balance',
     assert.equal(out.data.order_placed,false);
     assert.equal(out.data.xp_awarded,false);
     assert.equal(out.data.steps,12);
-    assert.deepEqual(read(),{writes:0,predictions:1});
+    const normal=await post(base,{amount:1000,model_id:'self',leverage:1});
+    assert.equal(normal.status,200);
+    assert.equal(out.data.daily_ai_signals.length,12);
+    assert.equal(out.data.daily_synthetic_prices.length,13);
+    assert.deepEqual(out.data.daily_ai_signals,normal.data.daily_ai_signals);
+    assert.deepEqual(out.data.daily_synthetic_prices,normal.data.daily_synthetic_prices);
+    assert.deepEqual(read(),{writes:0,predictions:2});
   });
 });
 

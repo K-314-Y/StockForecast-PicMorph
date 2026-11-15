@@ -41,6 +41,8 @@ async function mount(models=[]) {
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
     daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
+    daily_ai_signals:Array.from({length:12},(_,i)=>i%2===0?'LONG':'CASH'),
+    daily_synthetic_prices:[100,110,99,105,100,110,99,105,100,110,99,105,100],
     normal_profit_coins:25,normal_final_balance:10025,normal_max_drawdown_pct:1,
   })};
   const fetch=async(path,options)=>{
@@ -433,13 +435,20 @@ test('daily replay navigates all 13 full balances with signed changes and endpoi
   assert.equal(get('quickPrevious').disabled,true);
   assert.equal(get('quickFollowing').disabled,false);
   assert.match(get('quickReplayDay').textContent,/第0日.*全残高：10,000 C.*累計損益：\+0 C.*前日比：算出できません/);
+  assert.match(get('quickReplayContext').textContent,/開始前.*AI判断なし.*架空の開始価格：100/);
   await fire('quickPrevious');
   assert.match(get('quickReplayDay').textContent,/第0日/);
   await fire('quickFollowing');
   assert.match(get('quickReplayDay').textContent,/第1日.*10,010 C.*累計損益：\+10 C.*前日比：\+10 C/);
+  assert.match(get('quickReplayContext').textContent,/AIの方針：株を持つ.*架空の終値：110.*株価の前日終値比：\+10.00%/);
   await fire('quickFollowing');
   assert.match(get('quickReplayDay').textContent,/第2日.*9,995 C.*累計損益：-5 C.*前日比：-15 C/);
-  for(let i=2;i<12;i++)await fire('quickFollowing');
+  assert.match(get('quickReplayContext').textContent,/AIの方針：現金で待機.*架空の終値：99.*株価の前日終値比：-10.00%/);
+  for(let day=3;day<=12;day++) {
+    await fire('quickFollowing');
+    assert.ok(get('quickReplayDay').textContent.includes('第'+day+'日'));
+    assert.ok(get('quickReplayContext').textContent.includes(day%2?'株を持つ':'現金で待機'));
+  }
   assert.match(get('quickReplayDay').textContent,/第12日.*10,025 C/);
   assert.equal(get('quickFollowing').disabled,true);
   await fire('quickFollowing');
@@ -463,7 +472,13 @@ test('25x replay shows liquidation only from its day and preserves uninvested ca
   assert.doesNotMatch(get('quickReplayDay').textContent,/尽きました/);
   await fire('quickFollowing');
   assert.match(get('quickReplayDay').textContent,/全残高：9,000 C.*累計損益：-1,000 C.*前日比：-500 C.*投入した資金は尽きました.*投入しなかった残高は9,000 C残っています/);
-  for(let i=2;i<12;i++)await fire('quickFollowing');
+  assert.match(get('quickReplayContext').textContent,/AIの方針：現金で待機.*この日の終値で投入資金の運用は強制終了/);
+  for(let day=3;day<=12;day++) {
+    await fire('quickFollowing');
+    assert.match(get('quickReplayContext').textContent,/強制終了後なので、この日のAIの方針は運用に使われていません.*架空の終値/);
+    assert.doesNotMatch(get('quickReplayContext').textContent,/AIの方針：/);
+    assert.match(get('quickReplayDay').textContent,/全残高：9,000 C/);
+  }
   assert.match(get('quickReplayDay').textContent,/第12日.*9,000 C.*前日比：\+0 C.*尽きました/);
 });
 
@@ -497,6 +512,7 @@ test('input, model, leverage, shortcuts, new practice and retry clear replay sta
     await fire(id,event);
     assert.equal(get('quickReplay').hidden,true,id);
     assert.equal(get('quickReplayDay').textContent,'',id);
+    assert.equal(get('quickReplayContext').textContent,'',id);
     assert.equal(get('quickPrevious').disabled,true);
     assert.equal(get('quickFollowing').disabled,true);
     await fire('quickFollowing');
@@ -505,4 +521,31 @@ test('input, model, leverage, shortcuts, new practice and retry clear replay sta
     await fire('quickRun');
     assert.match(get('quickReplayDay').textContent,/第0日/);
   }
+});
+
+test('invalid signals and synthetic prices reject the entire result and clear context',async()=>{
+  const {get,fire,state}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  for(const [field,badValues] of [
+    ['daily_ai_signals',[undefined,null,{},'LONG',[],Array(11).fill('LONG'),Array(13).fill('CASH'),
+      Array(12),...['BUY','long',1,null,'<img src=x>'].map(v=>valid.daily_ai_signals.map((x,i)=>i===3?v:x))]],
+    ['daily_synthetic_prices',[undefined,null,{},'100',[],Array(12).fill(100),Array(14).fill(100),
+      Array(13),...[0,-1,NaN,Infinity,1e12+1,'100',null,undefined].map(v=>valid.daily_synthetic_prices.map((x,i)=>i===3?v:x))]],
+  ]) for(const bad of badValues) {
+    state.practice=async()=>valid;
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    await fire('quickFollowing');
+    assert.notEqual(get('quickReplayContext').textContent,'');
+    state.practice=async()=>({...valid,[field]:bad});
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.match(get('quickStatus').textContent,/練習結果の形式が不正です/);
+    for(const id of ['quickReplay','quickResult','quickNext'])assert.equal(get(id).hidden,true);
+    assert.equal(get('quickReplayContext').textContent,'');
+  }
+  state.practice=async()=>({error:'通信エラー'});
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.equal(get('quickReplayContext').textContent,'');
 });

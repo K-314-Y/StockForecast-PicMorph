@@ -10,6 +10,7 @@ function clearReplay() {
   replayDay=0;
   element('quickReplay').hidden=true;
   element('quickReplayDay').textContent='';
+  element('quickReplayContext').textContent='';
   element('quickPrevious').disabled=true;
   element('quickFollowing').disabled=true;
 }
@@ -22,6 +23,18 @@ function renderReplay() {
       signedMoney(balance-replay.daily_balances[replayDay-1])+' C')+
     (replay.liquidated_at_step!==null && replayDay>=replay.liquidated_at_step ?
       '。投入した資金は尽きました。投入しなかった残高は'+money(BALANCE-replay.invested_coins)+' C残っています。' : '');
+  const price=replay.daily_synthetic_prices[replayDay];
+  const stopped=replay.liquidated_at_step;
+  element('quickReplayContext').textContent=replayDay===0 ?
+    '開始前 ／ AI判断なし ／ 架空の開始価格：'+money(price) :
+    (stopped!==null && replayDay>stopped ?
+      '強制終了後なので、この日のAIの方針は運用に使われていません' :
+      'AIの方針：'+(replay.daily_ai_signals[replayDay-1]==='LONG'?'株を持つ':'現金で待機')+
+      '（売買の実行を示すものではありません）')+
+    ' ／ 架空の終値：'+money(price)+' ／ 株価の前日終値比：'+
+    ((price/replay.daily_synthetic_prices[replayDay-1]-1)>=0?'+':'')+
+    ((price/replay.daily_synthetic_prices[replayDay-1]-1)*100).toFixed(2)+'%'+
+    (stopped===replayDay?'。この日の終値で投入資金の運用は強制終了しました。':'');
   element('quickPrevious').disabled=replayDay===0;
   element('quickFollowing').disabled=replayDay===12;
   element('quickReplay').hidden=false;
@@ -231,6 +244,11 @@ element('quickRun').addEventListener('click',async()=>{
     if(value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY'||value.real_market!==false||
        value.persisted!==false||value.invested_coins!==ordered.amount||
        value.leverage!==ordered.leverage ||
+       !Array.isArray(value.daily_ai_signals)||value.daily_ai_signals.length!==12||
+       !Array.from(value.daily_ai_signals).every(signal=>signal==='LONG'||signal==='CASH')||
+       !Array.isArray(value.daily_synthetic_prices)||value.daily_synthetic_prices.length!==13||
+       !Array.from(value.daily_synthetic_prices).every(price=>
+         Number.isFinite(price)&&price>0&&price<=1e12)||
        !Array.isArray(value.daily_balances)||value.daily_balances.length!==13||
        !Array.from(value.daily_balances).every(balance=>
          Number.isFinite(balance)&&balance>=0&&balance<=Number.MAX_SAFE_INTEGER)||
