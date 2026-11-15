@@ -182,9 +182,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <section id="quickReplay" class="quick-replay" aria-labelledby="quickReplayTitle" hidden>
   <h3 id="quickReplayTitle">12日間を振り返る</h3>
   <p id="quickReplayDay" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="quickReplayContext" role="status" aria-live="polite" aria-atomic="true"></p>
   <nav aria-label="振り返る日を選ぶ">
-   <button id="quickPrevious" type="button" aria-controls="quickReplayDay" disabled>前の日</button>
-   <button id="quickFollowing" type="button" aria-controls="quickReplayDay" disabled>次の日</button>
+   <button id="quickPrevious" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>前の日</button>
+   <button id="quickFollowing" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>次の日</button>
   </nav>
  </section>
  <div id="quickNext" hidden>
