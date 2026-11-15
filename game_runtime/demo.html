@@ -140,6 +140,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .lab-table-container th{font-weight:700}
 .lab-table-container tr[data-different="true"]{background:#283851}
 .simple-home{max-width:750px;margin:18px auto}.simple-home .simple-balance{font-size:26px;color:var(--mint);font-weight:800;margin:7px 0}.simple-fields{display:grid;gap:12px;margin:17px 0}.simple-fields label{display:grid;gap:7px;font-weight:750}.simple-fields select,.simple-fields input{width:100%;min-height:50px;background:#101a2e;border:1px solid #7590af;border-radius:12px;padding:12px;color:#f6fbff;font:inherit;font-size:17px}.simple-fields input:focus-visible,.simple-fields select:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-fields .amount-entry{display:flex;align-items:center;gap:8px}.simple-fields .amount-entry input{flex:1;min-width:0}.simple-fields .amount-entry button{flex:none}.simple-home .simple-hint{font-size:13px;color:var(--soft);margin:4px 0}.simple-home .simple-error{color:#ffc8c8;min-height:1.4em}.simple-home .simple-confirm{border:1px solid #58758f;background:#101d31;border-radius:13px;padding:14px;margin:15px 0}.simple-home .simple-result{border:1px solid #638f81;background:#152b31;border-radius:13px;padding:14px;margin-top:18px}.advanced-entry{max-width:1024px;margin:16px auto}.advanced-entry>summary{display:list-item;cursor:pointer;font-weight:750;padding:16px 18px;background:#243653;border:1px solid var(--line);border-radius:13px}.advanced-entry[open]>summary{margin-bottom:18px}.advanced-entry>.panel{margin-left:0;margin-right:0}
+.simple-home .simple-risk{font-size:14px;line-height:1.8;border-left:3px solid #58758f;padding:8px 12px;margin:4px 0;background:#101d31}
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
 </style>
 </head>
@@ -160,19 +161,21 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button></div>
    <p id="quickModelHelp" class="simple-hint">自分のAIは無料です。デモAIはショップ専用のコインで解放できます。</p>
    <label for="quickAmount">② 試算額を入力（練習用：1〜10,000 C）</label>
-   <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError"><button id="quickAll" type="button">全額</button></div>
+   <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError quickRisk"></div>
+   <div class="actions simple-model-actions" role="group" aria-label="試算額の入力補助"><button id="quickTen" type="button">10%</button><button id="quickHalf" type="button">50%</button><button id="quickAll" type="button">全額</button></div>
    <p id="quickHelp" class="simple-hint">入力した額だけを試算。AIが購入せずに待機する場合もあります。</p>
    <p id="quickRemaining" class="simple-hint">試算に使わないコイン：9,000 C</p>
    <label for="quickLeverage">③ 損益倍率（1〜25倍）
-    <select id="quickLeverage" name="leverage" aria-describedby="quickLeverageHelp" required><option value="1">×1（通常）</option></select>
+    <select id="quickLeverage" name="leverage" aria-describedby="quickLeverageHelp quickRisk" required><option value="1">×1（通常）</option></select>
    </label>
    <p id="quickLeverageHelp" class="simple-hint">倍率は利益・損失の両方にかかり、最大損失は試算額まで。倍率を変えてもAIの売買は変わりません。</p>
+   <p id="quickRisk" class="simple-risk"></p>
    <p id="quickError" class="simple-error" role="status" aria-live="polite"></p>
   </div>
   <button id="quickConfirm" class="primary" type="submit">④ 内容を確認する</button>
  </form>
  <div id="quickReview" class="simple-confirm" hidden>
-  <h3>練習内容の確認</h3><p id="quickReviewText"></p>
+  <h3>練習内容の確認</h3><p id="quickReviewText"></p><p id="quickReviewRisk" class="simple-risk"></p>
   <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額・倍率を修正</button></div>
  </div>
  <div id="quickResult" class="simple-result" role="status" aria-live="polite" hidden></div>

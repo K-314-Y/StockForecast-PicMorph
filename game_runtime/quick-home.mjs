@@ -25,7 +25,6 @@ function validLeverage(){
 function showLeverageInfo(){
   const n=validLeverage();
   element('quickLeverageHelp').textContent=n===null ? '倍率を1〜25から選んでください。' :
-    n===25 ? '×25：通常のAI運用成績が開始時から約-4%で試算に使う資金が全損し、その後も戻りません。倍率でAIの売買は変わらず、実株価や日中の値動きは使いません。' :
     '利益・損失の両方に×'+n+'を適用し、最大損失は試算額まで。倍率でAIの売買は変わらず、試算額が0になるとその後も戻りません。';
 }
 showLeverageInfo();
@@ -37,8 +36,17 @@ function validAmount() {
   return /^\d+$/.test(raw) && Number.isSafeInteger(amount) && amount>=1 && amount<=BALANCE ?
     amount : null;
 }
+// Display-only approximation; settlement and fees remain the server's responsibility.
+function riskText(amount,leverage) {
+  if(amount===null || leverage===null)return '入力値を確認してください。試算額は1〜10,000の整数、倍率は1〜25を選んでください。';
+  return '練習用10,000 Cの'+money(amount/BALANCE*100)+'%（'+money(amount)+'C）を使う。'+
+    '今回の最大損失は'+money(amount)+'C。この試算で投入しない残り'+money(BALANCE-amount)+'Cは守られる。'+
+    (leverage===1 ? '' : '×'+leverage+'では1倍の基準損益が約−'+money(100/leverage)+
+      '%で投入分を失うおそれ（基準運用の損失100%÷倍率の目安。手数料の影響や日次判定の近似があり、厳密な閾値ではありません）。');
+}
 function renderValidation(showError=false) {
   const amount = validAmount();
+  element('quickRisk').textContent=riskText(amount,validLeverage());
   element('quickRemaining').textContent = amount===null ? '試算に使わないコイン：入力を確認してください' :
     '試算に使わないコイン：'+money(BALANCE-amount)+' C';
   if (showError && amount===null) {
@@ -110,13 +118,14 @@ async function loadModels() {
 }
 function setBusy(next) {
   busy=next;
-  for(const id of ['quickConfirm','quickRun','quickEdit','quickAll','quickModel','quickAmount','quickLeverage'])
+  for(const id of ['quickConfirm','quickRun','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage'])
     element(id).disabled=next;
 }
 element('quickForm').addEventListener('submit',event=>{
   event.preventDefault();
   if(busy)return;
   touched=true;
+  resetReview();
   renderValidation(true);
   const amount=validAmount();
   if(amount===null){amountField.focus();return;}
@@ -129,16 +138,20 @@ element('quickForm').addEventListener('submit',event=>{
     'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
     ' ／ 試算に使わないコイン：'+money(BALANCE-amount)+
     ' C。最大損失は'+money(amount)+' C。実際の注文ではなく12日間の練習です。';
+  element('quickReviewRisk').textContent=riskText(amount,leverage);
   element('quickReview').hidden=false;
   element('quickResult').hidden=true;
   element('quickNext').hidden=true;
   statusField.textContent='内容を確認してから練習を実行できます。';
 });
-element('quickAll').addEventListener('click',()=>{
-  amountField.value=String(BALANCE);
-  touched=true;
-  resetReview();
-});
+for(const [id,ratio] of [['quickTen',0.1],['quickHalf',0.5],['quickAll',1]]) {
+  element(id).addEventListener('click',()=>{
+    if(busy)return;
+    amountField.value=String(BALANCE*ratio);
+    touched=true;
+    resetReview();
+  });
+}
 element('quickEdit').addEventListener('click',()=>{
   element('quickReview').hidden=true;
   pending=null;
