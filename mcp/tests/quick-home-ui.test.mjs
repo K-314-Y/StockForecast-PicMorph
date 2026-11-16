@@ -13,7 +13,7 @@ async function mount(models=[]) {
   class Element {
     constructor(tagName) {
       this.tagName=tagName.toUpperCase();
-      this.children=[];this.handlers={};this.attributes={};
+      this.children=[];this.handlers={};this.attributes={};this.dataset={};
       this.textContent='';this._value='';this.hidden=false;this.open=false;this.disabled=false;
       this.complete=false;this.naturalWidth=0;this.style={};this.srcAssignments=0;
     }
@@ -247,6 +247,8 @@ test('artwork shortcut expands the workshop and returns to practice without requ
   assert.match(html,/id="quickCustomize"[^>]*>自分のAIを作る・編集する/);
   get('quickAmount').value='2345';
   get('quickLeverage').value='3';
+  get('artworkBase').src='blob:unsaved-selection';
+  get('artworkFileBase').value='selected.png';
   await fire('quickForm','submit');
   const priorCalls=calls.length;
   for(let attempt=0;attempt<2;attempt++) {
@@ -259,6 +261,8 @@ test('artwork shortcut expands the workshop and returns to practice without requ
     await fire('artworkReturn');
     assert.equal(scrolls.at(-1),get('simpleHome'));
     assert.equal(document.activeElement,get('quickModel'));
+    assert.equal(get('artworkBase').src,'blob:unsaved-selection');
+    assert.equal(get('artworkFileBase').value,'selected.png');
   }
   assert.equal(calls.length,priorCalls);
   assert.equal(get('quickAmount').value,'2345');
@@ -875,6 +879,8 @@ test('voice distinguishes original price direction and flat days independently o
     '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。'];
   for(const text of expected) {
     await fire('quickFollowing');assert.equal(get('quickTacticsDay').textContent,text);
+    assert.equal(get('scene').dataset.mood,'thinking');
+    assert.equal(get('speech').textContent,text);
   }
 });
 
@@ -893,6 +899,8 @@ test('all CASH in falling market never describes avoidance as profit or zero wal
       assert.equal(get('quickTacticsDay').textContent,fee && day===1 ?
         'うわっ、ここが一番残高の減った日だね…。' :
         '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。');
+      assert.equal(get('scene').dataset.mood,fee?'cautious':'thinking');
+      assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
       assert.doesNotMatch(get('quickTacticsDay').textContent,/損失なし|損失ゼロ|無損失|無傷|ダメージなし|残高は減らない|利益が出|儲か/);
     }
   }
@@ -910,15 +918,95 @@ test('25x stopout voice takes priority over worst day and changes after stopout'
     await fire('quickForm','submit');await fire('quickRun');
     const before=calls.length;
     await fire('quickWorstDay');
+    assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
+    assert.equal(get('scene').dataset.mood,'cautious');
     assert.equal(get('quickTacticsDay').textContent,'あっ…ここで投入したコインが尽きちゃった。悔しい！');
     for(let day=stop+1;day<=12;day++) {
       await fire('quickFollowing');
+      assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
+      assert.equal(get('scene').dataset.mood,'cautious');
       assert.equal(get('quickTacticsDay').textContent,'もう投入分は運用されていないけど、相場はまだ動いてるね。');
     }
     assert.equal(get('quickLeverage').value,'25');
     assert.equal(calls.length,before);
   }
 });
+
+test('self scene mirrors replay facts through gain, loss, liquidation and post-stop without side effects',async()=>{
+  const {get,fire,state,calls,storageWrites}=await mount();
+  const valid=await state.practice({amount:1000,leverage:25});
+  state.practice=async()=>({...valid,liquidated_at_step:3,final_balance:9000,profit_coins:-1000,
+    daily_balances:[10000,10010,9995,...Array(10).fill(9000)]});
+  get('quickModel').value='self';get('quickLeverage').value='25';
+  await fire('quickForm','submit');await fire('quickRun');
+  const before=calls.slice();
+  for(const [day,mood,delta] of [[0,'ready',null],[1,'happy','+10'],[2,'cautious','-15'],
+    [3,'cautious','-995'],[4,'cautious','+0']]) {
+    if(day)await fire('quickFollowing');
+    assert.equal(get('scene').dataset.mood,mood);
+    assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
+    assert.match(get('quickReplayDay').textContent,new RegExp('第'+day+'日'));
+    if(delta)assert.ok(get('quickReplayDay').textContent.includes('前日比：'+delta+' C'));
+    if(day===3)assert.match(get('quickReplayContext').textContent,/強制終了しました/);
+    if(day===4)assert.match(get('quickReplayContext').textContent,/運用に使われていません/);
+  }
+  assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+  assert.match(html,/<p id="speech"[^>]*role="status"[^>]*aria-live="polite"/);
+});
+
+test('preset replay never takes over the authored scene',async()=>{
+  const {get,fire}=await mount([{id:'preset',name:'他のAI',owned:true}]);
+  get('speech').textContent='自分の相棒';get('scene').dataset.mood='growth';
+  get('quickModel').value='preset';
+  await fire('quickForm','submit');await fire('quickRun');
+  for(let day=0;day<=12;day++) {
+    assert.equal(get('speech').textContent,'自分の相棒');
+    assert.equal(get('scene').dataset.mood,'growth');
+    await fire('quickFollowing');
+  }
+  await fire('quickAgain');assert.equal(get('scene').dataset.mood,'growth');
+});
+
+test('quick cleanup restores snapshot only while both scene values are still owned',async()=>{
+  for(const advanced of ['none','text','mood','both']) {
+    for(const [id,event] of [['quickAgain','click'],['quickAmount','input'],
+      ['quickModel','change'],['quickLeverage','change'],['quickForm','submit']]) {
+      const {get,fire}=await mount();
+      get('quickModel').value='self';
+      get('speech').textContent='元の台詞';get('scene').dataset.mood='growth';
+      await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+      if(advanced==='text'||advanced==='both')get('speech').textContent='詳しい練習';
+      if(advanced==='mood'||advanced==='both')get('scene').dataset.mood='thinking';
+      const text=get('speech').textContent,mood=get('scene').dataset.mood;
+      await fire(id,event);
+      assert.equal(get('speech').textContent,advanced==='none'?'元の台詞':text);
+      assert.equal(get('scene').dataset.mood,advanced==='none'?'growth':mood);
+      assert.equal(get('quickReplay').hidden,true);
+    }
+  }
+});
+
+test('new run and invalid, error or failed responses leave original scene restored',async()=>{
+  for(const failure of ['invalid','error','fetch']) {
+    const {get,fire,state}=await mount();
+    get('quickModel').value='self';
+    get('speech').textContent='前の声';get('scene').dataset.mood='ready';
+    await fire('quickForm','submit');await fire('quickRun');
+    await fire('quickForm','submit');
+    let finish;
+    state.practice=()=>new Promise((resolve,reject)=>{
+      finish=()=>failure==='fetch'?reject(Error('offline')):resolve(failure==='error'?{error:'失敗'}:{});
+    });
+    const running=fire('quickRun');
+    assert.equal(get('speech').textContent,'前の声');
+    finish();await running;
+    assert.equal(get('speech').textContent,'前の声');
+    assert.equal(get('scene').dataset.mood,'ready');
+    assert.equal(get('quickReplay').hidden,true);
+    assert.match(get('quickStatus').textContent,/試算できませんでした/);
+  }
+});
+
 
 const miniSlots=['Base','Outfit','Face','Hair','Portrait'];
 function assertMiniCleared(get) {
@@ -1140,4 +1228,117 @@ test('mini reveals atomically after all copies load and never retries an unchang
   assert.deepEqual(storageWrites,[]);
   await fire('quickAgain');assertMiniCleared(get);
   await fire('quickMiniHair','load');assertMiniCleared(get);
+});
+
+
+test('integrated replay has unique IDs and only the atomic mini image family',()=>{
+  const ids=htmlNodes().map(node=>node.id).filter(Boolean);
+  assert.equal(new Set(ids).size,ids.length);
+  assert.doesNotMatch(html,/id="quickReplay(?:Mini|Base|Outfit|Face|Hair|Portrait)"/);
+});
+
+test('empty image sources never reveal the mini despite reported load completion',async()=>{
+  for(const src of [undefined,'','   ']) {
+    const {get,fire}=await mount();
+    showComposite(get);
+    const base=get('artworkBase');
+    if(src===undefined)base.removeAttribute('src');else base.src=src;
+    base.complete=true;base.naturalWidth=150;
+    await fire('quickForm','submit');await fire('quickRun');
+    assertMiniCleared(get);
+  }
+});
+
+test('self replay navigation preserves source art and demo switch clears mini while respecting advanced scene',async()=>{
+  for(const advanced of ['none','text','mood','both']) {
+    const {get,fire,calls,storageWrites}=await mount([{id:'preset',name:'Preset',owned:true}]);
+    showComposite(get);
+    const sources=miniSlots.slice(0,4).map(slot=>get('artwork'+slot));
+    const originals=sources.map(source=>({...source.attributes}));
+    get('speech').textContent='元の声';get('scene').dataset.mood='growth';
+    get('quickModel').value='self';
+    await fire('quickForm','submit');await fire('quickRun');await loadMini(get,fire);
+    const assignments=miniSlots.map(slot=>get('quickMini'+slot).srcAssignments);
+    const before=calls.slice();
+    for(let day=1;day<=12;day++)await fire('quickFollowing');
+    for(let repeat=0;repeat<10;repeat++) {
+      for(const button of ['quickBestDay','quickWorstDay']) {
+        await fire(button);
+        for(const [index,slot] of miniSlots.slice(0,4).entries())
+          assert.equal(get('quickMini'+slot).src,originals[index].src);
+        assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+      }
+    }
+    assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+    assert.deepEqual(miniSlots.map(slot=>get('quickMini'+slot).srcAssignments),assignments);
+    if(advanced==='text'||advanced==='both')get('speech').textContent='詳しい練習';
+    if(advanced==='mood'||advanced==='both')get('scene').dataset.mood='thinking';
+    const text=get('speech').textContent,mood=get('scene').dataset.mood;
+    get('quickModel').value='preset';await fire('quickModel','change');
+    assertMiniCleared(get);
+    assert.deepEqual(calls,before);
+    await fire('quickForm','submit');await fire('quickRun');
+    assertMiniCleared(get);
+    assert.equal(get('speech').textContent,advanced==='none'?'元の声':text);
+    assert.equal(get('scene').dataset.mood,advanced==='none'?'growth':mood);
+    assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+    assert.deepEqual(storageWrites,[]);
+  }
+});
+
+test('result summary uses the submitted self, demo or literal user model name and change clears ownership',async()=>{
+  const malicious='<img onerror=alert(1)>';
+  for(const id of ['self','demo','owned']) {
+    const {get,fire,calls,state}=await mount([
+      {id:'demo',name:'デモAI',owned:true},{id:'owned',name:malicious,owned:true},
+    ]);
+    showComposite(get);
+    get('speech').textContent='元の声';get('scene').dataset.mood='growth';
+    get('quickModel').value=id;
+    const name=get('quickModel').selectedOptions[0].textContent;
+    const practice=state.practice;
+    let resolveResponse;
+    state.practice=body=>new Promise(resolve=>{resolveResponse=async()=>resolve(await practice(body));});
+    await fire('quickForm','submit');
+    // Even programmatic selection changes while awaiting a response cannot rename this request.
+    const running=fire('quickRun');
+    get('quickModel').value=id==='demo'?'self':'demo';
+    await resolveResponse();await running;await loadMini(get,fire);
+    assert.equal(calls.at(-1).body.model_id,id);
+    const summary=get('quickResult').children[1];
+    assert.ok(summary.textContent.startsWith('今回のAI：'+name+' ／ 試算額：'));
+    assert.equal(summary.children.length,0);
+    if(id==='owned')assert.ok(summary.textContent.includes(malicious));
+    assert.equal(get('quickResult').hidden,false);
+    const before=calls.slice();
+    await fire('quickModel','change');
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickNext').hidden,true);
+    assertMiniCleared(get);
+    assert.equal(get('speech').textContent,'元の声');
+    assert.equal(get('scene').dataset.mood,'growth');
+    for(const button of ['quickPrevious','quickFollowing','quickBestDay','quickWorstDay'])await fire(button);
+    assert.equal(get('quickReplayDay').textContent,'');
+    assert.deepEqual(calls,before);
+  }
+});
+
+test('base-only artwork reveals mini after load without waiting for hidden optional layers',async()=>{
+  const {get,fire}=await mount();
+  showComposite(get);
+  for(const slot of ['Outfit','Face','Hair']) {
+    get('artwork'+slot).hidden=true;
+    get('artwork'+slot).complete=false;get('artwork'+slot).naturalWidth=0;
+  }
+  await fire('quickForm','submit');await fire('quickRun');
+  assert.equal(get('quickMini').hidden,true);
+  assert.equal(get('quickMiniBase').src,get('artworkBase').src);
+  await fire('quickMiniBase','load');
+  assert.equal(get('quickMini').hidden,false);
+  assert.equal(get('quickMiniBase').hidden,false);
+  for(const slot of ['Outfit','Face','Hair']) {
+    assert.equal(get('quickMini'+slot).hidden,true);
+    assert.equal(get('quickMini'+slot).src,'');
+  }
 });

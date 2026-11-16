@@ -5,6 +5,32 @@ const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigi
 let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
+let replayIsSelf = false;
+// Module-local ownership: advanced scenes must survive quick-practice cleanup.
+let sceneVoice = null;
+function clearSceneVoice() {
+  if(sceneVoice && element('speech').textContent===sceneVoice.text &&
+      element('scene').dataset.mood===sceneVoice.mood) {
+    element('speech').textContent=sceneVoice.previous.text;
+    if(sceneVoice.previous.mood===undefined)delete element('scene').dataset.mood;
+    else element('scene').dataset.mood=sceneVoice.previous.mood;
+  }
+  sceneVoice=null;
+}
+function renderSceneVoice(text) {
+  if(!replayIsSelf)return;
+  const scene=element('scene'),speech=element('speech');
+  // If another module took over, its current scene becomes the restore point.
+  if(sceneVoice && (speech.textContent!==sceneVoice.text || scene.dataset.mood!==sceneVoice.mood))
+    sceneVoice=null;
+  const previous=sceneVoice?.previous || {text:speech.textContent,mood:scene.dataset.mood};
+  const delta=replayDay===0?0:replay.daily_balances[replayDay]-replay.daily_balances[replayDay-1];
+  const mood=replay.liquidated_at_step!==null && replayDay>=replay.liquidated_at_step ?
+    'cautious' : replayDay===0?'ready':delta<0?'cautious':delta>0?'happy':'thinking';
+  speech.textContent=text;
+  scene.dataset.mood=mood;
+  sceneVoice={previous,text,mood};
+}
 let replayModel = null;
 const miniLayers = ['Base','Outfit','Face','Hair'];
 function clearMini() {
@@ -93,6 +119,8 @@ function findReplayHighlights(balances,liquidatedAt) {
 }
 const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
+  clearSceneVoice();
+  replayIsSelf=false;
   replay=null;
   replayModel=null;
   clearMini();
@@ -122,7 +150,9 @@ function renderReplay() {
       '。投入した資金は尽きました。投入しなかった残高は'+money(BALANCE-replay.invested_coins)+' C残っています。' : '');
   const price=replay.daily_synthetic_prices[replayDay];
   const stopped=replay.liquidated_at_step;
-  element('quickTacticsDay').textContent=replayVoice(replay,replayDay);
+  const voice=replayVoice(replay,replayDay);
+  element('quickTacticsDay').textContent=voice;
+  renderSceneVoice(voice);
   element('quickReplayContext').textContent=replayDay===0 ?
     '開始前 ／ AI判断なし ／ 架空の開始価格：'+money(price) :
     (stopped!==null && replayDay>stopped ?
@@ -375,7 +405,7 @@ element('quickRun').addEventListener('click',async()=>{
     const heading=document.createElement('h3');
     heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='試算額：'+money(ordered.amount)+' C ／ '+
+    summary.textContent='今回のAI：'+ordered.model_name+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
       (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
         '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
         (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
@@ -398,6 +428,7 @@ element('quickRun').addEventListener('click',async()=>{
         label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
         (index===0?'増えた日なし':'減った日なし');
     }
+    replayIsSelf=ordered.model_id==='self';
     replay=value;
     replayModel=ordered.model_id;
     replayDay=0;

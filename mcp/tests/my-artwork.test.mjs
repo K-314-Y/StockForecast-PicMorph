@@ -419,21 +419,13 @@ test('reload with no pending images needs no confirmation; notice follows select
 });
 
 
-test('return scrolls to practice without changing pending previews or saved data or opening a modal',async()=>{
- const ui=await mountArtwork();
- await ui.select('base',[128,128]);
- const before=JSON.stringify(ui.state.record),src=ui.get('artworkBase').src;
- const calls=ui.calls.length,revoked=ui.revoked.length;
- await ui.fire('artworkReturn');
- assert.equal(ui.get('quickForm').scrolls,1);
- assert.equal(ui.get('artworkBase').src,src);
- assert.equal(ui.get('artworkPendingNotice').dataset.pending,'true');
- assert.equal(JSON.stringify(ui.state.record),before);
- assert.equal(ui.calls.length,calls);
- assert.equal(ui.revoked.length,revoked);
- assert.equal(ui.confirms.length,0);
- ui.get('quickForm').scrollIntoView=undefined;
- await ui.fire('artworkReturn');
+test('artwork return click has one owner in quick-home, preserving practice focus',async()=>{
+ const demo=await readFile(new URL('../../game_runtime/demo.mjs',import.meta.url),'utf8');
+ const quick=await readFile(new URL('../../game_runtime/quick-home.mjs',import.meta.url),'utf8');
+ const registration=/[\w$]+\(['"]artworkReturn['"]\)\??\.addEventListener\(['"]click['"]/g;
+ assert.equal([...demo.matchAll(registration)].length,0);
+ assert.equal([...quick.matchAll(registration)].length,1);
+ assert.match(quick,/element\('artworkReturn'\)\.addEventListener\('click',\(\)=>scrollAndFocus\('simpleHome','quickModel'\)\)/);
 });
 
 test('beforeunload warns only with pending images and cancellation retains object URLs until pagehide',async()=>{

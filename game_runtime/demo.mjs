@@ -813,9 +813,6 @@ for (const slot of artworkSlots) {
   $('artworkSave' + suffix)?.addEventListener('click', () => saveArtworkSlot(slot));
   $('artworkClear' + suffix)?.addEventListener('click', () => saveArtworkSlot(slot, true));
 }
-$('artworkReturn')?.addEventListener('click', () => {
-  $('quickForm')?.scrollIntoView?.({behavior:'instant', block:'start'});
-});
 $('showArtwork')?.addEventListener('click', showArtwork);
 $('showChibi')?.addEventListener('click', () => {
   $('skinSelect').value = '';
