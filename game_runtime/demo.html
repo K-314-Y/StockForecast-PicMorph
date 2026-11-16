@@ -161,6 +161,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .simple-home{max-width:750px;margin:18px auto}.simple-home .simple-balance{font-size:26px;color:var(--mint);font-weight:800;margin:7px 0}.simple-fields{display:grid;gap:12px;margin:17px 0}.simple-fields label{display:grid;gap:7px;font-weight:750}.simple-fields select,.simple-fields input{width:100%;min-height:50px;background:#101a2e;border:1px solid #7590af;border-radius:12px;padding:12px;color:#f6fbff;font:inherit;font-size:17px}.simple-fields input:focus-visible,.simple-fields select:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-fields .amount-entry{display:flex;align-items:center;gap:8px}.simple-fields .amount-entry input{flex:1;min-width:0}.simple-fields .amount-entry button{flex:none}.simple-home .simple-hint{font-size:13px;color:var(--soft);margin:4px 0}.simple-home .simple-error{color:#ffc8c8;min-height:1.4em}.simple-home .simple-confirm{border:1px solid #58758f;background:#101d31;border-radius:13px;padding:14px;margin:15px 0}.simple-home .simple-result{border:1px solid #638f81;background:#152b31;border-radius:13px;padding:14px;margin-top:18px}.quick-replay{margin-top:12px;padding:12px;border:1px solid #638f81;border-radius:12px}.quick-replay nav,.quick-replay [role="group"]{display:flex;flex-wrap:wrap;gap:10px}.quick-replay [role="group"]{margin-top:10px}.quick-replay button{min-height:44px}.quick-replay button:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.quick-replay button:disabled{opacity:.5;cursor:default}.advanced-entry{max-width:1024px;margin:16px auto}.advanced-entry>summary{display:list-item;cursor:pointer;font-weight:750;padding:16px 18px;background:#243653;border:1px solid var(--line);border-radius:13px}.advanced-entry[open]>summary{margin-bottom:18px}.advanced-entry>.panel{margin-left:0;margin-right:0}
 .simple-home .simple-risk{font-size:14px;line-height:1.8;border-left:3px solid #58758f;padding:8px 12px;margin:4px 0;background:#101d31}
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
+#quickTacticsDay{box-sizing:border-box;max-width:100%;margin:8px 0;padding:6px 8px;border:1px solid #849ab8;border-radius:10px 10px 10px 2px;color:#f2f6ff;background:#152238;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 </style>
 </head>
 <body><main>
@@ -226,6 +227,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <h3 id="quickReplayTitle">12日間を振り返る</h3>
   <p id="quickReplayDay" role="status" aria-live="polite" aria-atomic="true"></p>
   <p id="quickReplayContext" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="quickTacticsDay" aria-label="今回のAIからひとこと"></p>
   <nav aria-label="振り返る日を選ぶ">
    <button id="quickPrevious" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>前の日</button>
    <button id="quickFollowing" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>次の日</button>
