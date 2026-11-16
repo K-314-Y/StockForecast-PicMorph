@@ -10,7 +10,23 @@
 main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px,5vw,43px);margin:6px 0 10px}h2{font-size:21px;margin:0 0 12px}h3{margin:0 0 8px;font-size:17px}p{line-height:1.65}.sub,small{color:var(--soft)}small{line-height:1.6;display:block}.eyebrow{color:var(--mint);font-size:12px;letter-spacing:.12em;font-weight:800}
 .panel{border:1px solid var(--line);border-radius:20px;background:#1b2540;padding:21px;margin:19px 0;box-shadow:0 10px 35px #0002}
 .shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;margin:16px 0}.shop-item{border:1px solid #526b87;border-radius:13px;padding:13px;background:#162039}.shop-item p{font-size:13px;color:#c9d9e9}.shop-item .actions{margin:9px 0 0}
-.hero{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(0,1.2fr);gap:24px;align-items:center}
+.hero{display:block;min-inline-size:0}
+.front-character{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:center;border-color:#83cbb6}
+.front-character>*{min-inline-size:0}
+.front-character-copy{overflow-wrap:anywhere}
+.front-character .scene{min-height:360px}
+.front-character #artworkStage{width:min(220px,100%);height:auto;aspect-ratio:150/192}
+.front-character .actions button{max-inline-size:100%;white-space:normal}
+@media(max-width:680px){
+ .front-character{grid-template-columns:minmax(0,1fr);gap:14px}
+ /* Let speech and scaled text grow naturally; keep the entire character visible. */
+ .front-character .scene{min-height:275px;padding:10px 12px}
+ .front-character .scene>h2{margin-bottom:4px;overflow-wrap:anywhere;max-width:100%}
+ .front-character .speech{margin:0 0 8px;padding:8px 12px;min-height:0}
+ .front-character #artworkStage{width:min(150px,100%)}
+ .front-character .scene>:is(#chibi,#artworkStage,#portrait){flex-shrink:0}
+ .creator-grid select{min-width:0;width:100%;box-sizing:border-box}
+}
 .scene{min-height:320px;position:relative;display:flex;align-items:center;justify-content:flex-end;flex-direction:column;overflow:hidden;border-radius:18px;background:radial-gradient(ellipse at 50% 85%,#5977a880,transparent 62%),linear-gradient(145deg,#342e63,#213b59);padding:15px 12px}
 .scene:after{content:"";position:absolute;bottom:23px;width:175px;height:24px;border-radius:50%;background:#0004}
 .speech{position:relative;z-index:2;background:#f0fff7;color:#304155;font-weight:650;font-size:14px;border-radius:15px 15px 15px 4px;padding:10px 14px;max-width:95%;margin-bottom:24px;min-height:46px;text-align:center}
@@ -151,9 +167,33 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <span class="eyebrow">CREATURE LAB · NODE PRACTICE</span>
 <h1>自分で作った相棒で冒険</h1>
 <p class="sub">自分で作ったキャラクターと、保存したイラスト・判断ルールで架空の12日間を冒険しよう。</p>
+<section class="panel front-character" id="frontCharacter" aria-labelledby="frontCharacterTitle">
+ <div id="scene" class="scene" data-mood="ready">
+  <h2 id="companionName">私の相棒</h2>
+  <p id="speech" class="speech" role="status" aria-live="polite">いっしょに12日間を見てみよう！</p>
+  <div id="chibi" class="chibi" role="img" aria-label="紫髪とミント色の服を着たデモ用2Dの女の子キャラクター">
+   <div class="hair-back"></div><div class="dress"></div><div class="arm left"></div><div class="arm right"></div><div class="leg left"></div><div class="leg right"></div>
+   <div class="face"><div class="eye left"></div><div class="eye right"></div><div class="cheek left"></div><div class="cheek right"></div><div class="mouth"></div></div>
+   <div class="bangs"></div><div class="bow"></div><div class="acc-glasses"></div><div class="acc-star"></div>
+  </div>
+  <img id="portrait" alt="選択した保存下書きの外見" hidden>
+  <div id="artworkStage" role="img" aria-label="自分で制作したイラスト" hidden>
+   <img id="artworkBase" alt="完成イラスト" hidden>
+   <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
+  </div>
+  <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
+ </div>
+ <div class="front-character-copy">
+  <span class="eyebrow">MY CHARACTER / あなたの相棒</span>
+  <h2 id="frontCharacterTitle">自分で描いたキャラクターが主役</h2>
+  <div class="actions"><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button></div>
+  <p>未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示。</p>
+  <p class="sub">髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存。</p>
+ </div>
+</section>
 <section class="panel simple-home" id="simpleHome" aria-labelledby="simpleHomeTitle">
  <span class="eyebrow">EASY MODE · はじめての練習</span>
- <h2 id="simpleHomeTitle">AIにコインを任せてみよう</h2>
+ <h2 id="simpleHomeTitle">この相棒と12日間を練習</h2>
  <p class="simple-hint">架空相場の12ステップ（12日間）だけを試算します。コインの引き落とし・実際の注文はなく、実際の株価も使いません。練習用残高・結果は保存されません。倍率の強制終了判定は各日の終値のみで行う簡易方式です。</p>
  <p>練習用の仮想コイン（消費されません） <span class="simple-balance">10,000 C</span></p>
  <form id="quickForm" novalidate>
@@ -161,7 +201,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <label for="quickModel">① 練習に使うAIを選択
     <select id="quickModel" name="model" required aria-describedby="quickModelHelp"><option value="self">自分のAI（未作成なら標準AI）</option></select>
    </label>
-   <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button></div>
+   <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button></div>
    <p id="quickModelHelp" class="simple-hint">自分のAIは無料です。デモAIはショップ専用のコインで解放できます。</p>
    <label for="quickAmount">② 試算額を入力（練習用：1〜10,000 C）</label>
    <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError quickRisk"></div>
@@ -206,21 +246,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <details class="advanced-entry" id="advancedEntry" open>
 <summary>もっと詳しい機能を開く（AI作成・モデルショップ・研究・育成）</summary>
 <section class="panel hero" aria-label="冒険を始める">
- <div id="scene" class="scene" data-mood="ready">
-  <h2 id="companionName">私の相棒</h2>
-  <p id="speech" class="speech" role="status" aria-live="polite">いっしょに12日間を見てみよう！</p>
-  <div id="chibi" class="chibi" role="img" aria-label="紫髪とミント色の服を着たデモ用2Dの女の子キャラクター">
-   <div class="hair-back"></div><div class="dress"></div><div class="arm left"></div><div class="arm right"></div><div class="leg left"></div><div class="leg right"></div>
-   <div class="face"><div class="eye left"></div><div class="eye right"></div><div class="cheek left"></div><div class="cheek right"></div><div class="mouth"></div></div>
-   <div class="bangs"></div><div class="bow"></div><div class="acc-glasses"></div><div class="acc-star"></div>
-  </div>
-  <img id="portrait" alt="選択した保存下書きの外見" hidden>
-  <div id="artworkStage" role="img" aria-label="自分で制作したイラスト" hidden>
-   <img id="artworkBase" alt="完成イラスト" hidden>
-   <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
-  </div>
-  <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
- </div>
+
  <div>
   <span class="eyebrow">STEP 01 / 練習</span><h2>冒険をスタート</h2>
   <p>予測モデルの判断で仮想コインを動かします。実際の取引や今日の株価予測ではありません。</p>

@@ -69,6 +69,137 @@ async function mount(models=[]) {
   return {get,calls,scrolls,storageWrites,document,state,fire:(id,event)=>get(id).fire(event)};
 }
 
+// Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
+function htmlNodes() {
+  const stack=[],nodes=[];
+  const voidTags=new Set(['area','base','br','col','embed','hr','img','input','link','meta','source','track','wbr']);
+  for(const match of html.matchAll(/<(\/?)([a-z][\w-]*)\b([^>]*)>/gi)) {
+    const [,closing,tag,attributes]=match;
+    if(closing){assert.equal(stack.pop()?.tag,tag);continue;}
+    const node={tag,id:attributes.match(/\bid="([^"]+)"/)?.[1],attributes,
+      parents:stack.map(parent=>parent.id),offset:match.index};
+    nodes.push(node);
+    if(!voidTags.has(tag))stack.push(node);
+  }
+  assert.equal(stack.length,0);
+  return nodes;
+}
+
+test('the single original scene is the first game panel, outside advanced training',()=>{
+  const nodes=htmlNodes();
+  const get=id=>nodes.find(node=>node.id===id);
+  const front=get('frontCharacter');
+  assert.equal(front.tag,'section');
+  assert.deepEqual(front.parents,[undefined,undefined,undefined]); // html > body > main
+  assert.doesNotMatch(front.attributes,/\bhidden\b/);
+  assert.equal(nodes.find(node=>node.tag==='section').id,'frontCharacter');
+  assert.ok(front.offset<get('scene').offset);
+  assert.ok(get('scene').offset<get('simpleHome').offset);
+  assert.ok(get('simpleHome').offset<get('advancedEntry').offset);
+  for(const id of ['scene','companionName','speech','chibi','portrait','artworkStage',
+    'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption']) {
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+    assert.ok(get(id).parents.includes('frontCharacter'),id);
+    assert.ok(!get(id).parents.includes('advancedEntry'),id);
+    if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
+  }
+  const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
+  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork']);
+  for(const button of buttons)assert.match(button.attributes,/type="button"/);
+  for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
+    assert.ok(get(id).parents.includes('simpleHome'),id);
+  for(const id of ['play','companionControls','artworkControls','artworkWorkshop','brainControls',
+    'modelLabSection','modelShopSection','arenaSection','growthInfo'])
+    assert.ok(get(id).parents.includes('advancedEntry'),id);
+  assert.match(html,/未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示/);
+  assert.match(html,/髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存/);
+});
+
+test('both front editing actions precede the short save explanation',()=>{
+  const nodes=htmlNodes();
+  const front=nodes.filter(node=>node.parents.includes('frontCharacter'));
+  const heading=front.find(node=>node.id==='frontCharacterTitle');
+  const paragraphs=front.filter(node=>node.tag==='p'&&node.offset>heading.offset);
+  assert.equal(paragraphs.length,2);
+  for(const id of ['quickCustomize','quickArtwork']) {
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+    const button=front.find(node=>node.id===id);
+    assert.equal(button.tag,'button');
+    assert.match(button.attributes,/type="button"/);
+    assert.ok(button.offset>heading.offset);
+    assert.ok(button.offset<paragraphs[0].offset,id+' must be before explanatory copy');
+  }
+  const copy=html.slice(paragraphs[0].offset,html.indexOf('</section>',paragraphs[0].offset));
+  assert.ok(copy.replace(/<[^>]*>/g,'').trim().length<=120,'keep the front hint short');
+});
+
+test('front actions reuse editor and artwork navigation, focus without saves or mutations',async()=>{
+  const {get,fire,calls,storageWrites,scrolls,document}=await mount();
+  const before=calls.slice();
+  for(const [button,target,opened] of [
+    ['quickCustomize','companionEditorTitle',['advancedEntry','companionControls']],
+    ['quickArtwork','artworkTitle',['advancedEntry','artworkControls','artworkWorkshop']],
+  ]) {
+    for(const id of opened)get(id).open=false;
+    await fire(button);
+    for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(document.activeElement,get(target));
+    assert.equal(get(target).focusOptions.preventScroll,true);
+    assert.equal(scrolls.at(-1),get(target==='artworkTitle'?'artworkControls':target));
+    assert.deepEqual(calls,before);
+    assert.deepEqual(storageWrites,[]);
+  }
+  assert.match(script,/element\('quickCustomize'\)\.addEventListener\('click',openEditor\)/);
+  assert.match(script,/element\('quickArtwork'\)\.addEventListener\('click',openArtwork\)/);
+});
+
+test('front layout stacks on mobile, wraps long text and keeps native focus and touch targets',()=>{
+  assert.match(html,/\.hero\{display:block;min-inline-size:0\}/);
+  assert.match(html,/\.front-character\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/);
+  assert.match(html,/@media\(max-width:680px\)\{\s*\.front-character\{grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(html,/\.front-character>\*\{min-inline-size:0\}/);
+  assert.match(html,/\.front-character-copy\{overflow-wrap:anywhere\}/);
+  assert.match(html,/\.front-character \.actions button\{max-inline-size:100%;white-space:normal\}/);
+  assert.match(html,/button\{[^}]*min-height:44px/);
+  assert.match(html,/button:focus-visible[^}]*outline:3px/);
+  assert.match(html,/\.actions\{[^}]*flex-wrap:wrap/);
+});
+
+test('mobile front stage overrides desktop spacing while allowing speech and font scaling to grow',()=>{
+  const css=html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const mobile=css.slice(css.indexOf('@media(max-width:680px){'),css.indexOf('\n.scene{'));
+  // Match the desktop selector specificity: a generic .scene mobile rule loses to it.
+  assert.match(mobile,/\.front-character \.scene\{min-height:275px;padding:10px 12px\}/);
+  assert.match(mobile,/\.front-character \.speech\{margin:0 0 8px;padding:8px 12px;min-height:0\}/);
+  assert.match(mobile,/\.front-character \.scene>h2\{[^}]*overflow-wrap:anywhere;max-width:100%/);
+  assert.match(mobile,/\.front-character #artworkStage\{width:min\(150px,100%\)\}/);
+  assert.match(mobile,/\.front-character \.scene>:is\(#chibi,#artworkStage,#portrait\)\{flex-shrink:0\}/);
+  assert.doesNotMatch(mobile,/(?:^|[;{])(?:height|max-height):/);
+  assert.doesNotMatch(css,/position:\s*(?:fixed|sticky)/);
+});
+
+test('mobile creator select can shrink within its grid without clipping the page',()=>{
+  const css=html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const mobile=css.slice(css.indexOf('@media(max-width:680px){'),css.indexOf('\n.scene{'));
+  const rule=mobile.match(/\.creator-grid select\{([^}]+)\}/)?.[1];
+  assert.ok(rule,'constrain the native select only at mobile widths');
+  const declarations=Object.fromEntries(rule.split(';').map(part=>part.split(':').map(s=>s.trim())));
+  assert.equal(declarations['min-width'],'0');
+  assert.equal(declarations.width,'100%');
+  assert.equal(declarations['box-sizing'],'border-box');
+  assert.doesNotMatch(css,/overflow-x:\s*(?:hidden|clip)/);
+  assert.match(css,/\.creator-grid\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  const select=html.match(/<select id="creatorApproach"[^>]*>[\s\S]*?<\/select>/)[0];
+  assert.deepEqual([...select.matchAll(/<option value="([^"]+)"/g)].map(match=>match[1]),
+    ['trend','momentum','reversion','volatility']);
+  assert.doesNotMatch(select,/\b(?:disabled|hidden)\b/);
+});
+
+test('practice heading connects the companion to twelve days and retains the standard AI fallback',()=>{
+  assert.match(html,/<h2 id="simpleHomeTitle">この相棒と12日間を練習<\/h2>/);
+  assert.match(html,/<select id="quickModel"[^>]*>[\s\S]*?<option value="self">自分のAI（未作成なら標準AI）<\/option>/);
+});
+
 test('shop and editor navigation opens details, scrolls and focuses the destination',async()=>{
   const {get,fire,scrolls,document}=await mount();
   for(const id of ['quickShop','quickNextShop']) {
