@@ -5,6 +5,32 @@ const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigi
 let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
+let replayIsSelf = false;
+// Module-local ownership: advanced scenes must survive quick-practice cleanup.
+let sceneVoice = null;
+function clearSceneVoice() {
+  if(sceneVoice && element('speech').textContent===sceneVoice.text &&
+      element('scene').dataset.mood===sceneVoice.mood) {
+    element('speech').textContent=sceneVoice.previous.text;
+    if(sceneVoice.previous.mood===undefined)delete element('scene').dataset.mood;
+    else element('scene').dataset.mood=sceneVoice.previous.mood;
+  }
+  sceneVoice=null;
+}
+function renderSceneVoice(text) {
+  if(!replayIsSelf)return;
+  const scene=element('scene'),speech=element('speech');
+  // If another module took over, its current scene becomes the restore point.
+  if(sceneVoice && (speech.textContent!==sceneVoice.text || scene.dataset.mood!==sceneVoice.mood))
+    sceneVoice=null;
+  const previous=sceneVoice?.previous || {text:speech.textContent,mood:scene.dataset.mood};
+  const delta=replayDay===0?0:replay.daily_balances[replayDay]-replay.daily_balances[replayDay-1];
+  const mood=replay.liquidated_at_step!==null && replayDay>=replay.liquidated_at_step ?
+    'cautious' : replayDay===0?'ready':delta<0?'cautious':delta>0?'happy':'thinking';
+  speech.textContent=text;
+  scene.dataset.mood=mood;
+  sceneVoice={previous,text,mood};
+}
 function replayVoice(value,day) {
   if(day===0)return 'さあ、12日間の作戦を一緒に振り返ろう！';
   const stopped=value.liquidated_at_step;
@@ -33,7 +59,47 @@ function findReplayHighlights(balances,liquidatedAt) {
   return [best,worst];
 }
 const signedMoney = value => (value>=0?'+':'')+money(value);
+const miniLayers = ['Base','Outfit','Face','Hair','Portrait'];
+function clearReplayIdentity() {
+  element('quickReplayIdentity').hidden=true;
+  element('quickReplayOwner').textContent='';
+  element('quickReplayMini').hidden=true;
+  for(const layer of miniLayers) {
+    const image=element('quickReplay'+layer);
+    if(!image.hidden)image.hidden=true;
+    if(image.getAttribute('src')!==null)image.removeAttribute('src');
+  }
+}
+function renderReplayIdentity() {
+  element('quickReplayIdentity').hidden=false;
+  const owner=element('quickReplayOwner');
+  const visible=node=>node && !node.hidden;
+  const stage=element('artworkStage'),base=element('artworkBase');
+  const layered=replayIsSelf && visible(stage) && visible(base) && base.src;
+  let copied=false;
+  for(const layer of miniLayers) {
+    const target=element('quickReplay'+layer);
+    const source=layer==='Portrait' ? element('portrait') : element('artwork'+layer);
+    const shown=replayIsSelf && (layer==='Portrait' ? !visible(stage) : layered) &&
+      visible(source) && !!source.src;
+    if(shown) {
+      if(target.src!==source.src)target.src=source.src;
+      copied=true;
+    } else if(target.getAttribute('src')!==null)target.removeAttribute('src');
+    if(target.hidden===!!shown)target.hidden=!shown;
+  }
+  if(!replayIsSelf) {
+    owner.textContent='別のAIの練習結果です。自作キャラの成績ではありません。';
+    if(!element('quickReplayMini').hidden)element('quickReplayMini').hidden=true;
+    return;
+  }
+  if(element('quickReplayMini').hidden===copied)element('quickReplayMini').hidden=!copied;
+  owner.textContent=copied?'自作キャラと振り返る':'相棒の外見は上の画面で確認できます';
+}
 function clearReplay() {
+  clearReplayIdentity();
+  clearSceneVoice();
+  replayIsSelf=false;
   replay=null;
   replayHighlights=null;
   element('quickTacticsDay').textContent='';
@@ -52,6 +118,7 @@ function clearReplay() {
 }
 function renderReplay() {
   if(!replay)return;
+  renderReplayIdentity();
   const balance=replay.daily_balances[replayDay];
   element('quickReplayDay').textContent='第'+replayDay+'日（0〜12日） ／ 練習用の全残高：'+
     money(balance)+' C ／ 累計損益：'+signedMoney(balance-BALANCE)+
@@ -61,7 +128,9 @@ function renderReplay() {
       '。投入した資金は尽きました。投入しなかった残高は'+money(BALANCE-replay.invested_coins)+' C残っています。' : '');
   const price=replay.daily_synthetic_prices[replayDay];
   const stopped=replay.liquidated_at_step;
-  element('quickTacticsDay').textContent=replayVoice(replay,replayDay);
+  const voice=replayVoice(replay,replayDay);
+  element('quickTacticsDay').textContent=voice;
+  renderSceneVoice(voice);
   element('quickReplayContext').textContent=replayDay===0 ?
     '開始前 ／ AI判断なし ／ 架空の開始価格：'+money(price) :
     (stopped!==null && replayDay>stopped ?
@@ -336,6 +405,7 @@ element('quickRun').addEventListener('click',async()=>{
         label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
         (index===0?'増えた日なし':'減った日なし');
     }
+    replayIsSelf=ordered.model_id==='self';
     replay=value;
     replayDay=0;
     renderReplay();
