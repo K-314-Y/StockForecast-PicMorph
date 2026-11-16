@@ -67,6 +67,8 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #portrait{z-index:1;max-width:94%;width:220px;height:194px;object-fit:contain;margin-bottom:6px;filter:drop-shadow(0 8px 10px #0004)}
 #artworkStage{position:relative;width:150px;height:192px;margin-bottom:7px;z-index:1}
 #artworkStage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
+#artworkSteps{font-size:15px;line-height:1.55;font-weight:600;color:#edf7fb}
+#artworkPendingNotice[data-pending='true']{font-weight:800;color:#ffdc94;border-left:3px solid #ffdc94;padding-left:10px}
 #artworkBase{z-index:0}#artworkOutfit{z-index:1}#artworkFace{z-index:2}#artworkHair{z-index:3}
 .artwork-slot{border-top:1px solid var(--line);padding:10px 0}.artwork-slot label{display:block;font-weight:650}
 .artwork-slot input{display:block;width:100%;max-width:100%;margin:8px 0}.artwork-slot .actions{gap:6px}
@@ -266,7 +268,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </details>
   <details id="artworkControls" class="appearance-controls" open>
    <summary id="artworkTitle" class="simple-target">私のイラストを重ねる</summary>
-   <p id="artworkSteps" class="creator-note"><strong>ゲームで使う最短手順：</strong>原画を選択 → base SAVE → 画像工房で白マスク → 修正したカラーPNGをダウンロード → 対応する部位を選択してSAVE → 練習へ戻る。評価用の正解データとは別です。画像はこのPCで使い、外部転送・自動反映はありません。</p>
+   <p id="artworkSteps" class="creator-note">①完成イラストを選ぶ → ② SAVE → ③ 練習へ戻る。これだけで自作キャラで遊べます。<br>髪・顔・服の分割や画像工房は、あとからこだわりたい人向けの任意機能です。評価用の正解データとは別です。画像はこのPCで使い、外部転送・自動反映はありません。</p>
    <p>自分で制作した完成イラストを1枚選ぶだけで、上のゲーム画面に表示できます。選んだ直後は未保存です。各画像の <strong>SAVE</strong> を押すと、このPCに保存して再読込後も使えます。</p>
    <p class="creator-note">自動切り抜き・自動分割は行いません。髪・顔・服は任意です。人や別アプリであらかじめ切り抜いた、完成イラストと同じサイズの透明キャンバスのPNG/WebPを使うと位置がそろいます。重なる順は完成イラスト→服→顔→髪です。元の画像データは加工しません。</p>
    <small>1枚450KB、4枚で合計2MBまで。完成イラスト：PNG/JPEG/WebP。任意レイヤー：透明PNG/WebP。</small>
@@ -314,6 +316,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="cropStatus" role="status" aria-live="polite">編集台は未読込です。透明PNGはSAVEするまでは保存されません。</p>
    </details>
    <div class="actions"><button id="showArtwork" type="button">自分のイラストに切り替える</button><button id="showChibi" type="button">カスタムchibiに切り替える</button><button id="reloadArtwork" type="button">未保存を破棄して再取得</button><button id="artworkReturn" type="button">練習へ戻る</button></div>
+   <p id="artworkPendingNotice" aria-live="polite" style="font-weight:700">保存前の変更はありません。</p>
    <p id="artworkStatus" role="status" aria-live="polite">イラストの保存状況を読み込んでいます…</p>
   </details>
   <details id="skinControls" class="appearance-controls">

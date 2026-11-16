@@ -133,27 +133,30 @@ test('game includes manual image layer inputs, keeps legacy DRAFT and CSS select
  assert.match(js,/URL\.createObjectURL/);
  assert.match(js,/revokeObjectURL/);
  assert.doesNotMatch(js,/innerHTML|localStorage/);
- assert.match(html,/原画を選択 → base SAVE → 画像工房で白マスク → 修正したカラーPNGをダウンロード → 対応する部位を選択してSAVE → 練習へ戻る/);
+ assert.match(html,/①完成イラストを選ぶ → ② SAVE → ③ 練習へ戻る。これだけで自作キャラで遊べます。/);
+ assert.match(html,/髪・顔・服の分割や画像工房は、あとからこだわりたい人向けの任意機能です。/);
+ assert.match(html,/<p id="artworkPendingNotice" aria-live="polite"/);
  assert.match(html,/評価用の正解データとは別/);
  assert.match(html,/外部転送・自動反映はありません/);
 });
 
 // Exercise the actual browser module with controlled image decode events and no disk writes.
-async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
+async function mountArtwork({baseSize=[128,128],storedHairSize=null,baseExists=true}={}) {
  const script=await readFile(new URL('../../game_runtime/demo.mjs',import.meta.url),'utf8');
- const nodes=new Map(),calls=[],confirms=[],revoked=[],images=new Map(),files=new Map();
+ const nodes=new Map(),calls=[],confirms=[],revoked=[],images=new Map(),files=new Map(),windowHandlers={};
  class Element {
    constructor(){this.handlers={};this.children=[];this.attributes={};this.dataset={};this.value='';this.textContent='';}
    set innerHTML(_){throw Error('HTML insertion forbidden');}
    setAttribute(name,value){this.attributes[name]=value;}
    addEventListener(name,fn){this.handlers[name]=fn;}
+   scrollIntoView(options){this.scrolls=(this.scrolls||0)+1;this.scrollOptions=options;}
    replaceChildren(...children){this.children=children;}
    append(child){this.children.push(child);}
    async fire(name='click'){await this.handlers[name]?.({preventDefault(){}});}
  }
  const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  const state={accept:false,record:{revision:1,created:true,slots:Object.fromEntries(slots.map(slot=>
-   [slot,{exists:slot==='base'||(slot==='hair'&&storedHairSize!==null),mime:'image/png',size:88}]))}};
+   [slot,{exists:(slot==='base'&&baseExists)||(slot==='hair'&&storedHairSize!==null),mime:'image/png',size:88}]))}};
  const sizes={base:baseSize,hair:storedHairSize};
  const settle=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  const fetch=async(path,options)=>{
@@ -161,6 +164,7 @@ async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
    calls.push({path,body});
    let value;
    if(path==='/api/artwork') {
+     if(!body && state.getArtwork) await state.getArtwork();
      if(body) {
        assert.equal(body.expected_revision,state.record.revision);
        state.record={...state.record,revision:state.record.revision+1,slots:{...state.record.slots,
@@ -189,7 +193,7 @@ async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
    URL:{createObjectURL(file){const url='blob:test-'+files.size;files.set(url,file);return url;},
      revokeObjectURL:url=>revoked.push(url)},
    btoa:value=>Buffer.from(value,'binary').toString('base64'),
-   window:{confirm(message){confirms.push(message);return state.accept;},addEventListener(){}}});
+   window:{confirm(message){confirms.push(message);return state.accept;},addEventListener(name,fn){windowHandlers[name]=fn;}}});
  await settle();
  async function select(slot,dimensions,extra={}) {
    const input=get('artworkFile'+slot[0].toUpperCase()+slot.slice(1));
@@ -197,7 +201,7 @@ async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
      arrayBuffer:async()=>Uint8Array.of(1,2,3).buffer,...extra}];
    await input.fire('change');await settle();
  }
- return {get,calls,confirms,revoked,images,state,select,settle,
+ return {get,calls,confirms,revoked,images,state,select,settle,windowHandlers,
    writes:()=>calls.filter(call=>call.body),fire:(id,event)=>get(id).fire(event)};
 }
 
@@ -273,6 +277,7 @@ test('unsaved base cannot bypass the stored base check; saving base rechecks lay
  assert.match(ui.get('artworkInfoOutfit').textContent,/保存済みbase（128×128px）.*先に新しいbaseをSAVE/);
  await ui.fire('artworkSaveOutfit');
  assert.equal(ui.writes().length,0);
+ ui.state.accept=true;
  await ui.fire('artworkSaveBase');await ui.settle();
  assert.equal(ui.get('artworkSaveOutfit').disabled,false);
  assert.equal(ui.writes().length,1);
@@ -281,4 +286,181 @@ test('unsaved base cannot bypass the stored base check; saving base rechecks lay
  await ui.fire('artworkClearBase');await ui.settle();
  assert.equal(ui.get('artworkSaveOutfit').disabled,false);
  assert.match(ui.get('artworkInfoOutfit').textContent,/base寸法が確認できない/);
+});
+
+// Synthetic VM state only: cancellation must preserve both stored and pending artwork.
+for (const action of ['Clear', 'Save']) {
+ test(`base ${action} confirms before writes and cancellation preserves all UI state`,async()=>{
+   const ui=await mountArtwork({storedHairSize:[128,128]});
+   await ui.select('base',[128,128]);
+   await ui.select('face',[128,128]);
+   ui.get('artworkFileBase').value='synthetic-base.png';
+   ui.get('skinSelect').value='synthetic-selection';
+   const record=JSON.stringify(ui.state.record);
+   const input=ui.get('artworkFileBase').files;
+   const snapshot=()=>JSON.stringify(['artworkBase','artworkFace','artworkInfoBase','artworkStatus','skinSelect','skinCaption','artworkFileBase'].map(id=>{
+     const n=ui.get(id);return [n.src,n.value,n.textContent,n.disabled,n.hidden,n.attributes];
+   }));
+   const before=snapshot(),revoked=[...ui.revoked];
+   await ui.fire('artwork'+action+'Base');
+   assert.equal(ui.writes().length,0);
+   assert.equal(JSON.stringify(ui.state.record),record);
+   assert.equal(snapshot(),before);
+   assert.equal(ui.get('artworkFileBase').files,input);
+   assert.deepEqual(ui.revoked,revoked);
+   assert.equal(ui.confirms.length,1);
+   assert.match(ui.confirms[0],action==='Clear'?/このPC.*削除/:/base.*既存.*置き換え/);
+   assert.match(ui.confirms[0],action==='Clear'?/他の部位は変更しません/:/髪・顔・服.*変更しません/);
+   ui.state.accept=true;
+   await ui.fire('artwork'+action+'Base');await ui.settle();
+   assert.deepEqual(ui.writes(),[{path:'/api/artwork',body:{expected_revision:1,slot:'base',
+     image:action==='Clear'?null:{mime:'image/png',base64:'AQID'}}}]);
+   assert.equal(ui.state.record.revision,2);
+   for(const slot of ['hair','face','outfit']) assert.deepEqual(ui.state.record.slots[slot],JSON.parse(record).slots[slot]);
+   assert.match(ui.get('artworkInfoFace').textContent,/未保存/);
+ });
+}
+test('initial base SAVE needs no confirmation and writes only base',async()=>{
+ const ui=await mountArtwork({baseExists:false});
+ await ui.select('base',[128,128]);
+ await ui.fire('artworkSaveBase');await ui.settle();
+ assert.equal(ui.confirms.length,0);
+ assert.deepEqual(ui.writes(),[{path:'/api/artwork',body:{expected_revision:1,slot:'base',image:{mime:'image/png',base64:'AQID'}}}]);
+});
+test('CLEAR of saved hair confirms and preserves its pending preview on cancel',async()=>{
+ const ui=await mountArtwork({storedHairSize:[128,128]});
+ await ui.select('hair',[128,128]);
+ const src=ui.get('artworkHair').src;
+ await ui.fire('artworkClearHair');
+ assert.equal(ui.writes().length,0);
+ assert.equal(ui.get('artworkHair').src,src);
+ assert.match(ui.confirms[0],/髪.*このPC.*削除/);
+ ui.state.accept=true;
+ await ui.fire('artworkClearHair');
+ assert.deepEqual(ui.writes(),[{path:'/api/artwork',body:{expected_revision:1,slot:'hair',image:null}}]);
+ assert.equal(ui.state.record.slots.base.exists,true);
+});
+
+test('reload cancellation preserves all pending UI and makes no GET',async()=>{
+ const ui=await mountArtwork();
+ await ui.select('base',[128,128]);
+ await ui.select('face',[128,128]);
+ ui.get('artworkFileBase').value='synthetic.png';
+ const snapshot=()=>JSON.stringify(['artworkBase','artworkFace','artworkFileBase','artworkStatus','skinCaption','artworkPendingNotice','reloadArtwork'].map(id=>ui.get(id)));
+ const before=snapshot(),calls=ui.calls.length,revoked=[...ui.revoked];
+ await ui.fire('reloadArtwork');
+ assert.equal(ui.calls.length,calls);
+ assert.equal(snapshot(),before);
+ assert.deepEqual(ui.revoked,revoked);
+ assert.match(ui.confirms.at(-1),/未保存.*破棄/);
+ assert.match(ui.confirms.at(-1),/SAVEしていない画像は失われます/);
+});
+
+test('confirmed reload waits for successful GET before discarding previews and restores fetched metadata',async()=>{
+ const ui=await mountArtwork();
+ await ui.select('base',[128,128]);
+ ui.get('artworkFileBase').value='synthetic.png';
+ const src=ui.get('artworkBase').src,revoked=[...ui.revoked];
+ let complete;
+ ui.state.getArtwork=()=>new Promise(resolve=>{complete=resolve;});
+ ui.state.accept=true;
+ const loading=ui.fire('reloadArtwork');
+ await ui.settle();
+ assert.equal(ui.calls.at(-1).path,'/api/artwork');
+ assert.equal(ui.calls.at(-1).body,undefined);
+ assert.equal(ui.get('artworkBase').src,src);
+ assert.equal(ui.get('artworkFileBase').value,'synthetic.png');
+ assert.deepEqual(ui.revoked,revoked);
+ assert.match(ui.get('artworkPendingNotice').textContent,/未保存の画像があります/);
+ ui.state.record={...ui.state.record,revision:9};
+ complete();await loading;await ui.settle();
+ assert.ok(ui.revoked.includes(src));
+ assert.equal(ui.get('artworkFileBase').value,'');
+ assert.match(ui.get('artworkBase').src,/revision=9|[?&]v=9/);
+ assert.match(ui.get('artworkStatus').textContent,/revision 9/);
+ assert.equal(ui.get('artworkPendingNotice').textContent,'保存前の変更はありません。');
+});
+
+test('failed reload preserves pending display and saved revision for subsequent SAVE',async()=>{
+ const ui=await mountArtwork();
+ await ui.select('base',[128,128]);
+ ui.get('artworkFileBase').value='synthetic.png';
+ const src=ui.get('artworkBase').src,caption=ui.get('skinCaption').textContent,revoked=[...ui.revoked];
+ ui.state.accept=true;
+ ui.state.getArtwork=async()=>{throw Error('synthetic GET failure');};
+ await ui.fire('reloadArtwork');
+ assert.equal(ui.get('artworkBase').src,src);
+ assert.equal(ui.get('skinCaption').textContent,caption);
+ assert.equal(ui.get('artworkFileBase').value,'synthetic.png');
+ assert.deepEqual(ui.revoked,revoked);
+ assert.match(ui.get('artworkStatus').textContent,/読み込めません/);
+ assert.equal(ui.get('artworkPendingNotice').textContent,'未保存の画像があります。SAVEするまで保存されません。');
+ assert.equal(ui.get('artworkSaveBase').disabled,false);
+ await ui.fire('artworkSaveBase');
+ assert.equal(ui.writes()[0].body.expected_revision,1);
+ assert.equal(ui.get('artworkPendingNotice').textContent,'保存前の変更はありません。');
+});
+
+test('reload with no pending images needs no confirmation; notice follows selection, cancel and save',async()=>{
+ const ui=await mountArtwork();
+ assert.equal(ui.get('artworkPendingNotice').textContent,'保存前の変更はありません。');
+ const count=ui.calls.length;
+ await ui.fire('reloadArtwork');
+ assert.equal(ui.confirms.length,0);
+ assert.equal(ui.calls.length,count+1);
+ await ui.select('base',[128,128]);
+ assert.equal(ui.get('artworkPendingNotice').textContent,'未保存の画像があります。SAVEするまで保存されません。');
+ await ui.fire('artworkSaveBase');
+ assert.match(ui.get('artworkPendingNotice').textContent,/未保存の画像があります/);
+ ui.state.accept=true;
+ await ui.fire('artworkSaveBase');
+ assert.equal(ui.get('artworkPendingNotice').textContent,'保存前の変更はありません。');
+});
+
+
+test('return scrolls to practice without changing pending previews or saved data or opening a modal',async()=>{
+ const ui=await mountArtwork();
+ await ui.select('base',[128,128]);
+ const before=JSON.stringify(ui.state.record),src=ui.get('artworkBase').src;
+ const calls=ui.calls.length,revoked=ui.revoked.length;
+ await ui.fire('artworkReturn');
+ assert.equal(ui.get('quickForm').scrolls,1);
+ assert.equal(ui.get('artworkBase').src,src);
+ assert.equal(ui.get('artworkPendingNotice').dataset.pending,'true');
+ assert.equal(JSON.stringify(ui.state.record),before);
+ assert.equal(ui.calls.length,calls);
+ assert.equal(ui.revoked.length,revoked);
+ assert.equal(ui.confirms.length,0);
+ ui.get('quickForm').scrollIntoView=undefined;
+ await ui.fire('artworkReturn');
+});
+
+test('beforeunload warns only with pending images and cancellation retains object URLs until pagehide',async()=>{
+ const ui=await mountArtwork();
+ const event=()=>({prevented:0,returnValue:undefined,preventDefault(){this.prevented++;}});
+ const clean=event();ui.windowHandlers.beforeunload(clean);
+ assert.equal(clean.prevented,0);assert.equal(clean.returnValue,undefined);
+ assert.equal(ui.get('artworkPendingNotice').dataset.pending,'false');
+ await ui.select('base',[128,128]);
+ const src=ui.get('artworkBase').src,revoked=ui.revoked.length;
+ const pending=event();ui.windowHandlers.beforeunload(pending);
+ assert.equal(pending.prevented,1);assert.equal(pending.returnValue,'');
+ assert.equal(ui.revoked.length,revoked);assert.equal(ui.get('artworkBase').src,src);
+ assert.equal(ui.get('artworkPendingNotice').dataset.pending,'true');
+ assert.equal(ui.writes().length,0);assert.equal(ui.confirms.length,0);
+ ui.state.accept=true;await ui.fire('artworkSaveBase');await ui.settle();
+ const saved=event();ui.windowHandlers.beforeunload(saved);
+ assert.equal(saved.prevented,0);assert.equal(saved.returnValue,undefined);
+ assert.equal(ui.get('artworkPendingNotice').dataset.pending,'false');
+ await ui.select('face',[128,128]);
+ const lastRevoked=ui.revoked.length;
+ ui.windowHandlers.pagehide();assert.ok(ui.revoked.length>lastRevoked);
+});
+
+test('artwork instructions and pending warning use narrow readable CSS rules',async()=>{
+ const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
+ assert.match(html,/#artworkSteps\{font-size:15px;line-height:1\.55;font-weight:600;color:#edf7fb\}/);
+ assert.match(html,/#artworkPendingNotice\[data-pending='true'\]\{[^}]*font-weight:800;[^}]*border-left:3px solid/);
+ assert.match(html,/①完成イラストを選ぶ → ② SAVE → ③ 練習へ戻る/);
+ assert.match(html,/髪・顔・服の分割や画像工房は、あとからこだわりたい人向けの任意機能/);
 });
