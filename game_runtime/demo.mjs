@@ -53,6 +53,7 @@ function refreshButtons() {
   $('reloadLook').disabled = busy || lookSaving;
   for (const id of lookIds) $(id).disabled = busy || lookSaving;
   $('play').disabled = busy || companionSaving || ticket !== null || handoffPending || handoffInvalid;
+  $('adventureMode').disabled = $('play').disabled;
   $('saveCompanion').disabled = busy || companionSaving || savedCompanion === null;
   $('reloadCompanion').disabled = busy || companionSaving;
   for (const id of creatorIds) $(id).disabled = busy || companionSaving;
@@ -160,6 +161,16 @@ function showResult(value) {
     throw Error('練習結果の形式が不正です');
   }
   result = value;
+  const allocations = ['mine','owl','turtle'].map(slot => value.characters?.[slot]?.allocation_pct);
+  const [mine, owl, turtle] = allocations;
+  const allocationValid = allocations.every(n => Number.isInteger(n) && n >= 0 && n <= 100) &&
+    mine + owl + turtle <= 100;
+  const practiceLabel = mine === 100 && owl === 0 && turtle === 0 ? 'ひとり練習' :
+    mine === 50 && owl === 50 && turtle === 0 ? 'チーム練習' : '練習';
+  $('resultAllocation').textContent = allocationValid ?
+    practiceLabel + ' / APIで確認した配分：自分の相棒（mine）' + mine +
+    '%・フクロウ（owl）' + owl + '%・カメ（turtle）' + turtle + '%' :
+    '配分を確認できません。API応答に有効なキャラ別配分がありません。';
   const trained = value.brain?.kind === 'trained_practice_only';
   $('resultTitle').textContent = resultName() + 'の12日間の練習結果';
   $('resultCompanion').textContent = trained ?
@@ -210,8 +221,11 @@ async function play() {
   scene('thinking', '未来は見ないで、今日の判断を考えているよ…');
   $('status').textContent = 'Pythonで予測判断を作成し、Node.jsで架空コインを計算しています…';
   try {
+    const mode = $('adventureMode').value;
+    if (mode !== 'solo' && mode !== 'team') throw Error('冒険の作戦を選び直してください');
     const selectedId = $('brainSelect').value;
-    const payload = {allocations: {mine: 100, owl: 0, turtle: 0}};
+    const payload = {allocations: mode === 'team' ?
+      {mine: 50, owl: 50, turtle: 0} : {mine: 100, owl: 0, turtle: 0}};
     if (selectedId) {
       if (!/^tv_[0-9a-f]{32}$/.test(selectedId)) throw Error('練習版IDが不正です');
       payload.trained_version_id = selectedId;

@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {runInNewContext} from 'node:vm';
+import {createGrowthStore} from '../../game_runtime/growth.mjs';
 
 const root = new URL('../../game_runtime/', import.meta.url);
 const script = await readFile(new URL('demo.mjs', root), 'utf8');
@@ -25,7 +28,7 @@ class FakeNode {
   async fire(name = 'click') { return this.handlers[name]?.(); }
 }
 
-function practice() {
+function practice(allocations = {mine:100,owl:0,turtle:0}) {
   return {
     mode: 'PRACTICE_SYNTHETIC_ONLY',
     decisions: Array.from({length: 12}, (_, i) => ({
@@ -34,6 +37,8 @@ function practice() {
     equity_path: Array.from({length: 13}, (_, i) => 1000 + i * 10),
     final_coins: 1120, profit_coins: 120, max_drawdown_pct: 5,
     training_ticket: 'a'.repeat(48),
+    characters: Object.fromEntries(Object.entries(allocations).map(([slot,allocation_pct]) =>
+      [slot,{allocation_pct}])),
   };
 }
 function growth(xp, revision, gear) {
@@ -48,9 +53,11 @@ function growth(xp, revision, gear) {
 }
 
 async function mount({practiceError=false, deferredClaim=null, initialXp=0, initialGear='none',
-  claimXp=30, claimError=false, refreshError=false}={}) {
+  claimXp=30, claimError=false, refreshError=false, deferredPractice=null,
+  practiceResponse=null, growthStore=null}={}) {
   const nodes = new Map(), calls = [];
   let xp = initialXp, revision = 0, gear = initialGear, completed = false;
+  let ticketAllocations = null;
   const get = id => {
     if (!nodes.has(id)) nodes.set(id, new FakeNode());
     return nodes.get(id);
@@ -60,15 +67,24 @@ async function mount({practiceError=false, deferredClaim=null, initialXp=0, init
     calls.push({path,body,method:options?.method});
     if (path === '/api/growth') {
       if (completed && refreshError) return {ok:false,json:async()=>({error:'再取得失敗'})};
+      if (growthStore) return {ok:true,json:()=>growthStore.public()};
       return {ok:true,json:async()=>growth(xp,revision,gear)};
     }
     if (path === '/api/practice') {
+      if (deferredPractice) await deferredPractice.promise;
       if (practiceError) return {ok:false,json:async()=>({error:'練習データを取得できません'})};
-      return {ok:true,json:async()=>practice()};
+      ticketAllocations = body.allocations;
+      return {ok:true,json:async()=>practiceResponse ?? practice(body.allocations)};
     }
     if (path === '/api/training/complete') {
       if (deferredClaim) await deferredClaim.promise;
       assert.equal(body.ticket, 'a'.repeat(48));
+      if (growthStore) {
+        assert.ok(ticketAllocations, 'claim requires a practice ticket');
+        const allocations = ticketAllocations;
+        ticketAllocations = null;
+        return {ok:true,json:()=>growthStore.complete(allocations,body.expected_growth_revision)};
+      }
       assert.equal(body.expected_growth_revision,revision);
       completed = true;
       if (claimError) return {ok:false,json:async()=>({error:'受取失敗'})};
@@ -85,6 +101,8 @@ async function mount({practiceError=false, deferredClaim=null, initialXp=0, init
     }
     throw Error('unexpected fetch: ' + path);
   };
+  // Match the native select's initial selection in demo.html.
+  get('adventureMode').value = 'solo';
   runInNewContext(script, {
     document: {getElementById:get,createElement:()=>new FakeNode()},
     fetch,
@@ -111,6 +129,132 @@ test('Node practice UI shows 12 days and requires deliberate reward disposal bef
   assert.equal(calls.filter(item=>item.path==='/api/training/complete').length,0);
 });
 
+test('adventure select has exactly two labelled choices and starts with solo payload', async () => {
+  const select = html.match(/<select id="adventureMode"[^>]*>([\s\S]*?)<\/select>/);
+  assert.ok(select);
+  assert.equal((select[1].match(/<option /g) || []).length,2);
+  assert.match(select[1],/value="solo" selected>ひとりで挑戦（自分の相棒100%）/);
+  assert.match(select[1],/value="team">フクロウと挑戦（自分の相棒50%・フクロウ50%）/);
+  assert.match(html,/<label for="adventureMode">冒険の作戦<\/label>/);
+  assert.match(select[0],/aria-describedby="adventureNote"/);
+  assert.match(html,/同じ架空資産に対する2キャラの配分/);
+  assert.match(html,/銘柄分散や実際の投資ではありません/);
+  assert.match(html,/受取は練習後の「XPを受け取る」ボタンだけ/);
+  const {get,fire,calls} = await mount();
+  assert.equal(get('adventureMode').disabled,false);
+  await fire('play');
+  assert.deepEqual(calls.find(item=>item.path==='/api/practice').body,
+    {allocations:{mine:100,owl:0,turtle:0}});
+  assert.match(get('resultAllocation').textContent,/ひとり練習.*mine）100%.*owl）0%.*turtle）0%/);
+});
+
+test('team sends exact 50/50 payload and locks selection during practice and pending ticket', async () => {
+  let resolve;
+  const deferredPractice = {promise:new Promise(r=>{resolve=r;})};
+  const {get,fire,calls} = await mount({deferredPractice});
+  get('adventureMode').value = 'team';
+  const pending = fire('play');
+  assert.equal(get('adventureMode').disabled,true);
+  assert.equal(get('play').disabled,true);
+  await fire('play');
+  assert.equal(calls.filter(item=>item.path==='/api/practice').length,1);
+  assert.deepEqual(calls.find(item=>item.path==='/api/practice').body,
+    {allocations:{mine:50,owl:50,turtle:0}});
+  resolve(); await pending;
+  assert.match(get('resultAllocation').textContent,/チーム練習.*mine）50%.*owl）50%.*turtle）0%/);
+  assert.match(get('resultCompanion').textContent,/未作成の標準モデル/);
+  assert.match(get('growthInfo').textContent,/0 XP/);
+  assert.equal(get('adventureMode').disabled,true);
+  await fire('play');
+  assert.equal(calls.filter(item=>item.path==='/api/practice').length,1);
+  await fire('discard');
+  assert.equal(get('adventureMode').disabled,true);
+  await fire('discard');
+  assert.equal(get('adventureMode').disabled,false);
+});
+
+test('result allocation follows API characters even when selection differs or metadata is absent', async () => {
+  const mismatched = await mount({practiceResponse:practice()});
+  mismatched.get('adventureMode').value = 'team';
+  await mismatched.fire('play');
+  assert.match(mismatched.get('resultAllocation').textContent,/ひとり練習.*mine）100%/);
+  assert.doesNotMatch(mismatched.get('resultAllocation').textContent,/チーム練習/);
+  for (const characters of [undefined, {}, {mine:{allocation_pct:50}},
+    {mine:{allocation_pct:'50'},owl:{allocation_pct:50},turtle:{allocation_pct:0}}]) {
+    const {get,fire} = await mount({practiceResponse:{...practice(),characters}});
+    get('adventureMode').value = 'team';
+    await fire('play');
+    assert.equal(get('result').hidden,false);
+    assert.match(get('resultAllocation').textContent,/配分を確認できません.*API応答/);
+    assert.doesNotMatch(get('resultAllocation').textContent,/チーム練習|50%|100%/);
+  }
+});
+
+test('invalid adventure modes never reach practice API and valid selection recovers', async () => {
+  const {get,fire,calls} = await mount();
+  for (const mode of ['', 'owl', 'TEAM', 'constructor', '__proto__']) {
+    get('adventureMode').value = mode;
+    await fire('play');
+    assert.match(get('status').textContent,/作戦を選び直してください/);
+    assert.equal(get('play').disabled,false);
+    assert.equal(get('adventureMode').disabled,false);
+    assert.equal(get('claim').disabled,true);
+  }
+  assert.equal(calls.filter(item=>item.path==='/api/practice').length,0);
+  get('adventureMode').value = 'team';
+  await fire('play');
+  assert.equal(get('result').hidden,false);
+});
+
+test('malformed results restore controls and allow a successful retry', async () => {
+  const response = {...practice(), decisions:[]};
+  const {get,fire,calls} = await mount({practiceResponse:response});
+  get('adventureMode').value = 'team';
+  await fire('play');
+  assert.equal(get('result').hidden,true);
+  assert.equal(get('claim').disabled,true);
+  assert.equal(get('play').disabled,false);
+  assert.equal(get('adventureMode').disabled,false);
+  assert.match(get('status').textContent,/練習結果の形式が不正/);
+  assert.match(get('growthInfo').textContent,/0 XP/);
+  Object.assign(response,practice({mine:50,owl:50,turtle:0}));
+  await fire('play');
+  assert.equal(get('result').hidden,false);
+  assert.equal(get('adventureMode').disabled,true);
+  assert.equal(calls.filter(item=>item.path==='/api/training/complete').length,0);
+});
+
+test('team claims use existing growth store: 40 XP only after explicit claim and no repeat XP', async t => {
+  for (const soloFirst of [false,true]) {
+    const dir = await mkdtemp(join(tmpdir(),'creature-team-'));
+    t.after(()=>rm(dir,{recursive:true,force:true}));
+    const growthStore = createGrowthStore({file:join(dir,'growth.json'),legacyFile:join(dir,'absent.json')});
+    const {get,fire,calls} = await mount({growthStore});
+    if (soloFirst) {
+      await fire('play'); await fire('claim');
+      assert.match(get('growthInfo').textContent,/30 XP/);
+    }
+    get('adventureMode').value = 'team';
+    await fire('play');
+    const before = soloFirst ? 30 : 0;
+    assert.equal((await growthStore.public()).slots.find(x=>x.slot==='mine').xp,before);
+    assert.match(get('growthInfo').textContent,new RegExp(before + ' XP'));
+    assert.equal(get('adventureMode').disabled,true);
+    await fire('claim');
+    assert.match(get('growthInfo').textContent,/40 XP/);
+    assert.match(get('reward').textContent,new RegExp('mine: \\+' + (40-before) + ' XP'));
+    assert.match(get('growthCelebration').textContent,/静寂の輪/);
+    assert.equal(get('adventureMode').disabled,false);
+    const claimCount = calls.filter(x=>x.path==='/api/training/complete').length;
+    await fire('claim');
+    assert.equal(calls.filter(x=>x.path==='/api/training/complete').length,claimCount);
+    await fire('play'); await fire('claim');
+    assert.match(get('reward').textContent,/mine: \+0 XP/);
+    assert.match(get('growthInfo').textContent,/40 XP/);
+    assert.equal(get('growthCelebration').textContent,'');
+  }
+});
+
 test('XP is awarded once, unlocks gear, and replays without extra claim', async () => {
   const {get,fire,calls} = await mount();
   await fire('play');
@@ -135,6 +279,7 @@ test('pending reward blocks concurrent replay and leaves XP unchanged until serv
   await fire('play');
   const pending=fire('claim');
   assert.equal(get('play').disabled,true);
+  assert.equal(get('adventureMode').disabled,true);
   assert.match(get('growthInfo').textContent,/0 XP/);
   assert.equal(get('growthCelebration').textContent,'');
   assert.notEqual(get('scene').dataset.growing,'true');
@@ -142,6 +287,7 @@ test('pending reward blocks concurrent replay and leaves XP unchanged until serv
   assert.equal(calls.filter(item=>item.path==='/api/practice').length,1);
   resolve();await pending;
   assert.match(get('growthInfo').textContent,/30 XP/);
+  assert.equal(get('adventureMode').disabled,false);
 });
 
 test('practice failure never enables claim or pretends XP has been earned', async () => {
@@ -150,6 +296,7 @@ test('practice failure never enables claim or pretends XP has been earned', asyn
   assert.equal(get('result').hidden,true);
   assert.equal(get('claim').disabled,true);
   assert.equal(get('play').disabled,false);
+  assert.equal(get('adventureMode').disabled,false);
   assert.match(get('status').textContent,/失敗/);
   assert.equal(get('growthCelebration').textContent,'');
   assert.notEqual(get('scene').dataset.growing,'true');
