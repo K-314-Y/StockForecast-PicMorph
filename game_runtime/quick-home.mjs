@@ -4,9 +4,28 @@ const BALANCE = 10000;
 const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigits:2});
 let replay = null;
 let replayDay = 0;
+let replayHighlights = null;
+const highlightButtons = [['quickBestDay','一番増えた日'],['quickWorstDay','一番減った日']];
+function findReplayHighlights(balances,liquidatedAt) {
+  let best=null,worst=null;
+  const last=Number.isInteger(liquidatedAt)?liquidatedAt:12;
+  for(let day=1;day<=last;day++) {
+    const delta=balances[day]-balances[day-1];
+    if(delta>0 && (!best || delta>best.delta))best={day,delta};
+    if(delta<0 && (!worst || delta<worst.delta))worst={day,delta};
+  }
+  return [best,worst];
+}
 const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
   replay=null;
+  replayHighlights=null;
+  for(const [id,label] of highlightButtons) {
+    const button=element(id);
+    if(document.activeElement===button)button.blur?.();
+    button.disabled=true;
+    button.textContent=label;
+  }
   replayDay=0;
   element('quickReplay').hidden=true;
   element('quickReplayDay').textContent='';
@@ -43,6 +62,14 @@ for(const [id,delta] of [['quickPrevious',-1],['quickFollowing',1]]) {
   element(id).addEventListener('click',()=>{
     if(!replay)return;
     replayDay=Math.max(0,Math.min(12,replayDay+delta));
+    renderReplay();
+  });
+}
+for(const [index,[id]] of highlightButtons.entries()) {
+  element(id).addEventListener('click',()=>{
+    const highlight=replayHighlights?.[index];
+    if(!replay || !highlight)return;
+    replayDay=highlight.day;
     renderReplay();
   });
 }
@@ -283,6 +310,14 @@ element('quickRun').addEventListener('click',async()=>{
       '強制終了は日足終値だけの近似です。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
     footnote.className='simple-hint';
     panel.append(heading,summary,footnote);
+    replayHighlights=findReplayHighlights(value.daily_balances,value.liquidated_at_step);
+    for(const [index,[id,label]] of highlightButtons.entries()) {
+      const highlight=replayHighlights[index];
+      element(id).disabled=!highlight;
+      element(id).textContent=highlight ?
+        label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
+        (index===0?'増えた日なし':'減った日なし');
+    }
     replay=value;
     replayDay=0;
     renderReplay();
@@ -296,6 +331,7 @@ element('quickRun').addEventListener('click',async()=>{
     statusField.textContent='試算できませんでした：'+error.message;
   }finally{setBusy(false);}
 });
+clearReplay();
 renderValidation();
 loadModels();
 element('advancedEntry').addEventListener('toggle',()=>{
