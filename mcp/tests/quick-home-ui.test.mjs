@@ -7,30 +7,42 @@ const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.m
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
 async function mount(models=[]) {
-  const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],imageMutations=[];
+  const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
+  let observeSource=()=>{};
   let document;
   class Element {
     constructor(tagName) {
       this.tagName=tagName.toUpperCase();
       this.children=[];this.handlers={};this.attributes={};this.dataset={};
       this.textContent='';this._value='';this.hidden=false;this.open=false;this.disabled=false;
+      this.complete=false;this.naturalWidth=0;this.style={};this.srcAssignments=0;
     }
     set innerHTML(value){throw Error('HTML insertion forbidden');}
     get value(){return this._value;}
     set value(value){this._value=String(value);}
     get selectedOptions(){return this.children.filter(option=>option.value===this.value);}
-    get src(){return this.attributes.src;}
-    set src(value){this.attributes.src=String(value);imageMutations.push({node:this,action:'set',value:String(value)});}
+    get src(){return this.getAttribute('src')||'';}
+    set src(value){this.setAttribute('src',value);}
     getAttribute(key){return this.attributes[key]??null;}
-    setAttribute(key,value){this.attributes[key]=String(value);}
-    removeAttribute(key){if(key==='src')imageMutations.push({node:this,action:'remove'});delete this.attributes[key];}
+    setAttribute(key,value){
+      this.attributes[key]=String(value);
+      if(key==='src' && this.tagName==='IMG'){
+        this.complete=false;this.naturalWidth=0;this.srcAssignments++;
+      }
+    }
+    removeAttribute(key){delete this.attributes[key];if(key==='src'){this.complete=false;this.naturalWidth=0;}}
     addEventListener(name,handler){this.handlers[name]=handler;}
     replaceChildren(...children){this.children=children;if(this.tagName==='SELECT')this.value='';}
     append(...children){this.children.push(...children);}
     focus(options){document.activeElement=this;this.focusOptions=options;}
     blur(){if(document.activeElement===this)document.activeElement=null;}
     scrollIntoView(){scrolls.push(this);}
-    async fire(name='click'){await this.handlers[name]?.({preventDefault(){}});}
+    async fire(name='click'){
+      if(this.tagName==='IMG' && (name==='load'||name==='error')){
+        this.complete=true;this.naturalWidth=name==='load'?150:0;
+      }
+      await this.handlers[name]?.({preventDefault(){}});
+    }
   }
   for(const [,tag,attributes,id] of html.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) {
     const node=new Element(tag);
@@ -64,12 +76,18 @@ async function mount(models=[]) {
     removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
     clear:()=>storageWrites.push(['clear']),
   };
-  const context={document,fetch,localStorage:storage,sessionStorage:storage};
+  const context={document,fetch,localStorage:storage,sessionStorage:storage,
+    getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
+    MutationObserver:class {
+      constructor(callback){observeSource=callback;}
+      observe(target,options){assert.equal(target,nodes.get('scene'));assert.equal(options.subtree,true);}
+    }};
   context.window=context;
   runInNewContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
-  return {get,calls,scrolls,storageWrites,imageMutations,document,state,fire:(id,event)=>get(id).fire(event)};
+  return {get,calls,scrolls,storageWrites,document,state,sourceChanged:()=>observeSource(),
+    fire:(id,event)=>get(id).fire(event)};
 }
 
 // Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
@@ -229,6 +247,8 @@ test('artwork shortcut expands the workshop and returns to practice without requ
   assert.match(html,/id="quickCustomize"[^>]*>自分のAIを作る・編集する/);
   get('quickAmount').value='2345';
   get('quickLeverage').value='3';
+  get('artworkBase').src='blob:unsaved-selection';
+  get('artworkFileBase').value='selected.png';
   await fire('quickForm','submit');
   const priorCalls=calls.length;
   for(let attempt=0;attempt<2;attempt++) {
@@ -241,6 +261,8 @@ test('artwork shortcut expands the workshop and returns to practice without requ
     await fire('artworkReturn');
     assert.equal(scrolls.at(-1),get('simpleHome'));
     assert.equal(document.activeElement,get('quickModel'));
+    assert.equal(get('artworkBase').src,'blob:unsaved-selection');
+    assert.equal(get('artworkFileBase').value,'selected.png');
   }
   assert.equal(calls.length,priorCalls);
   assert.equal(get('quickAmount').value,'2345');
@@ -986,143 +1008,337 @@ test('new run and invalid, error or failed responses leave original scene restor
 });
 
 
-test('replay identity stays beside speech within replay and has compact accessible layers',()=>{
-  const nodes=htmlNodes(),get=id=>nodes.find(n=>n.id===id);
-  for(const id of ['quickReplayIdentity','quickReplayOwner','quickReplayMini','quickTacticsDay'])
-    assert.ok(get(id).parents.includes('quickReplay'));
-  assert.match(get('quickReplayMini').attributes,/role="img" aria-label="[^"]+"/);
-  for(const layer of ['Base','Outfit','Face','Hair','Portrait']) {
-    assert.ok(get('quickReplay'+layer).parents.includes('quickReplayMini'));
-    assert.match(get('quickReplay'+layer).attributes,/alt=""/);
+const miniSlots=['Base','Outfit','Face','Hair','Portrait'];
+function assertMiniCleared(get) {
+  assert.equal(get('quickMini').hidden,true);
+  for(const slot of miniSlots) {
+    assert.equal(get('quickMini'+slot).hidden,true,slot);
+    assert.equal(get('quickMini'+slot).getAttribute('src'),null,slot);
   }
-  assert.match(html,/#quickReplayMini\{position:relative;width:72px;height:80px/);
-  assert.match(html,/@media\(max-width:480px\)\{\.quick-replay-reaction/);
-  assert.match(html,/quick-replay-reaction\{[^}]*flex-wrap:wrap/);
-});
-
-test('self replay copies only displayed original layers and clears on reset and error',async()=>{
-  const {get,fire,calls,storageWrites,state}=await mount();
+}
+async function loadMini(get,fire) {
+  for(const slot of miniSlots) {
+    const image=get('quickMini'+slot);
+    if(image.src && !image.complete)await fire('quickMini'+slot,'load');
+  }
+}
+function showComposite(get) {
+  get('chibi').hidden=true;
+  get('portrait').hidden=true;
   get('artworkStage').hidden=false;
-  for(const layer of ['Base','Outfit','Face','Hair']) {
-    get('artwork'+layer).hidden=false;
-    get('artwork'+layer).src='https://existing.invalid/'+layer+'.png';
+  for(const slot of miniSlots.slice(0,4)) {
+    const image=get('artwork'+slot);
+    image.src='blob:current-'+slot;
+    image.hidden=false;image.complete=true;image.naturalWidth=150;
+    image.parentElement=get('artworkStage');
   }
-  const run=async()=>{get('quickModel').value='self';get('quickAmount').value='100';await fire('quickForm','submit');await fire('quickRun');};
-  await run();
-  for(const layer of ['Base','Outfit','Face','Hair']) {
-    assert.equal(get('quickReplay'+layer).src,get('artwork'+layer).src);
-    assert.equal(get('quickReplay'+layer).hidden,false);
-  }
-  const count=calls.length;
-  get('artworkHair').hidden=true;
-  await fire('quickFollowing');
-  assert.equal(get('quickReplayHair').hidden,true);
-  assert.equal(get('quickReplayHair').src,undefined);
-  assert.equal(calls.length,count);assert.deepEqual(storageWrites,[]);
-  await fire('quickAgain');
-  const cleared=()=>{
-    assert.equal(get('quickReplayIdentity').hidden,true);
-    assert.equal(get('quickReplayOwner').textContent,'');
-    for(const layer of ['Base','Outfit','Face','Hair','Portrait']) {
-      assert.equal(get('quickReplay'+layer).hidden,true);
-      assert.equal(get('quickReplay'+layer).src,undefined);
-    }
-  };
-  cleared();
-  get('artworkStage').hidden=true;
-  await run();
-  assert.equal(get('quickReplayMini').hidden,true);
-  assert.equal(get('quickReplayOwner').textContent,'相棒の外見は上の画面で確認できます');
-  get('portrait').hidden=false;get('portrait').src='https://existing.invalid/front.png';
-  await fire('quickFollowing');
-  assert.equal(get('quickReplayPortrait').src,get('portrait').src);
-  assert.equal(get('quickReplayBase').hidden,true);
-  await fire('quickAgain');
-  state.practice=async()=>{throw Error('offline');};
-  await run();cleared();
-});
+  get('artworkStage').parentElement=get('scene');
+}
 
-test('preset replay never borrows original artwork or changes upper scene',async()=>{
-  const {get,fire,calls,storageWrites}=await mount([{id:'preset',name:'Preset',owned:true}]);
-  get('artworkStage').hidden=false;get('artworkBase').hidden=false;
-  get('artworkBase').src='https://existing.invalid/own.png';
-  get('speech').textContent='自分の相棒';get('scene').dataset.mood='ready';
-  get('quickModel').value='preset';get('quickAmount').value='100';
+test('mini composite preserves all source layers, ordering, text safety and original images',async()=>{
+  const {get,fire,calls,storageWrites,sourceChanged}=await mount();
+  assertMiniCleared(get);
+  showComposite(get);
+  const originals=miniSlots.slice(0,4).map(slot=>({src:get('artwork'+slot).src,
+    hidden:get('artwork'+slot).hidden}));
   await fire('quickForm','submit');await fire('quickRun');
-  const count=calls.length;
-  for(const button of ['quickFollowing','quickBestDay','quickWorstDay','quickPrevious']) {
-    await fire(button);
-    assert.equal(get('quickReplayOwner').textContent,'別のAIの練習結果です。自作キャラの成績ではありません。');
-    assert.equal(get('quickReplayMini').hidden,true);
-    assert.equal(get('quickReplayBase').src,undefined);
-    assert.equal(get('speech').textContent,'自分の相棒');
-    assert.equal(get('scene').dataset.mood,'ready');
-    assert.equal(get('artworkBase').src,'https://existing.invalid/own.png');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    assert.equal(get('quickMini'+slot).src,originals[index].src);
+    assert.equal(get('quickMini'+slot).hidden,false);
+    assert.match(html,new RegExp('#quickMini'+slot+'\\{z-index:'+index+'\\}'));
   }
-  assert.equal(calls.length,count);assert.deepEqual(storageWrites,[]);
+  assert.equal(get('quickMiniPortrait').hidden,true);
+  const before=calls.length;
+  get('artworkFace').hidden=true;
+  sourceChanged();
+  assert.equal(get('quickMiniFace').hidden,true);
+  assert.equal(get('quickMiniFace').src,'');
+  get('artworkHair').src='blob:unsaved-hair';
+  await fire('artworkHair','load');
+  assert.equal(get('quickMiniHair').src,'blob:unsaved-hair');
+  assert.match(html,/aria-label="現在表示中の相棒のイラスト"/);
+  assert.doesNotMatch(get('quickTacticsDay').textContent,/<img|blob:|保存済み/);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    assert.equal(get('artwork'+slot).src,slot==='Hair'?'blob:unsaved-hair':originals[index].src);
+    assert.equal(get('artwork'+slot).hidden,slot==='Face');
+  }
+  await fire('quickBestDay');await fire('quickWorstDay');
+  assert.equal(calls.length,before);
+  assert.deepEqual(storageWrites,[]);
+  const nodes=htmlNodes();
+  for(const slot of miniSlots) {
+    const matches=nodes.filter(node=>node.id==='quickMini'+slot);
+    assert.equal(matches.length,1);
+    assert.ok(matches[0].parents.includes('quickReplay'));
+    assert.doesNotMatch(matches[0].attributes,/\bsrc=/);
+  }
+  assert.match(html,/#quickMini\{[^}]*width:80px;[^}]*aspect-ratio:150\/192/);
+  assert.match(html,/#quickMini img\{[^}]*object-fit:contain/);
+});
+
+test('mini waits for every visible layer and responds to loading, errors and artwork resets',async()=>{
+  const {get,fire,sourceChanged}=await mount();
+  showComposite(get);
+  get('artworkHair').complete=false;
+  get('artworkHair').naturalWidth=0;
+  await fire('quickForm','submit');await fire('quickRun');
+  assertMiniCleared(get);
+  get('artworkHair').complete=true;get('artworkHair').naturalWidth=150;
+  await fire('artworkHair','load');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const slot of miniSlots.slice(0,4)) {
+    const source=get('artwork'+slot);
+    source.naturalWidth=0;
+    await fire('artwork'+slot,'error');
+    assertMiniCleared(get);
+    source.naturalWidth=150;
+    await fire('artwork'+slot,'load');
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+    source.removeAttribute('src');sourceChanged();
+    assertMiniCleared(get);
+    source.src='blob:restored-'+slot;source.complete=true;source.naturalWidth=150;sourceChanged();
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  }
+  get('artworkStage').hidden=true;get('chibi').hidden=false;sourceChanged();
+  assertMiniCleared(get);
+  showComposite(get);sourceChanged();
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const [id,property,value] of [['scene','display','none'],['artworkStage','visibility','hidden'],
+    ['artworkBase','opacity','0']]) {
+    get(id).style[property]=value;sourceChanged();assertMiniCleared(get);
+    delete get(id).style[property];sourceChanged();
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  }
+});
+
+test('mini uses loaded visible blueprint portrait and hides CSS fallback or missing art',async()=>{
+  const {get,fire,sourceChanged}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');
+  assertMiniCleared(get);
+  showComposite(get);
+  get('artworkStage').hidden=true;
+  const portrait=get('portrait');
+  portrait.hidden=false;portrait.src='data:image/png;base64,original';
+  sourceChanged();assertMiniCleared(get);
+  portrait.complete=true;portrait.naturalWidth=150;
+  await fire('portrait','load');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  assert.equal(get('quickMiniPortrait').src,portrait.src);
+  assert.equal(get('quickMiniPortrait').hidden,false);
+  for(const slot of miniSlots.slice(0,4))assert.equal(get('quickMini'+slot).src,'');
+  portrait.naturalWidth=0;await fire('portrait','error');assertMiniCleared(get);
+  portrait.hidden=true;get('chibi').hidden=false;sourceChanged();assertMiniCleared(get);
+});
+
+test('demo AI never borrows self art; every review reset clears all preview sources',async()=>{
+  for(const [id,event] of [['quickAmount','input'],['quickModel','change'],
+    ['quickLeverage','change'],['quickTen','click'],['quickHalf','click'],
+    ['quickAll','click'],['quickForm','submit'],['quickAgain','click']]) {
+    const {get,fire,sourceChanged,calls,storageWrites}=await mount([
+      {id:'demo',name:'<img src=x onerror=alert(1)>',owned:true},
+    ]);
+    showComposite(get);
+    await fire('quickForm','submit');await fire('quickRun');
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+    await fire(id,event);assertMiniCleared(get);
+    sourceChanged();await fire('artworkBase','load');assertMiniCleared(get);
+    get('quickModel').value='demo';
+    await fire('quickModel','change');
+    await fire('quickForm','submit');await fire('quickRun');
+    assertMiniCleared(get);
+    await fire('quickFollowing');sourceChanged();assertMiniCleared(get);
+    assert.doesNotMatch(get('quickTacticsDay').textContent,/<img|onerror/);
+    assert.equal(calls.filter(call=>call.path==='/api/quick-practice').length,2);
+    assert.ok(calls.every(call=>['/api/model-shop','/api/quick-practice'].includes(call.path)));
+    assert.deepEqual(storageWrites,[]);
+  }
+});
+
+test('mini remains cleared during pending retry and failed result, even on source load',async()=>{
+  const {get,fire,state}=await mount();
+  showComposite(get);
+  await fire('quickForm','submit');await fire('quickRun');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  await fire('quickForm','submit');
+  let finish;
+  state.practice=()=>new Promise(resolve=>{finish=resolve;});
+  const running=fire('quickRun');
+  assertMiniCleared(get);
+  await fire('artworkBase','load');assertMiniCleared(get);
+  finish({error:'<img src=x onerror=alert(1)>'});
+  await running;
+  assertMiniCleared(get);
+  assert.match(get('quickStatus').textContent,/<img src=x/); // Literal text, never inserted HTML.
+  assert.equal(get('artworkBase').src,'blob:current-Base');
+});
+
+test('mini reveals atomically after all copies load and never retries an unchanged failed src',async()=>{
+  const {get,fire,sourceChanged,calls,storageWrites}=await mount();
+  showComposite(get);
+  await fire('quickForm','submit');await fire('quickRun');
+  const before=calls.slice();
+  assert.equal(get('quickMini').hidden,true);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    const copy=get('quickMini'+slot);
+    assert.equal(copy.complete,false);
+    assert.equal(copy.naturalWidth,0);
+    await fire('quickMini'+slot,'load');
+    assert.equal(get('quickMini').hidden,index!==3);
+  }
+  const hair=get('quickMiniHair');
+  await fire('quickMiniHair','error');
+  assert.equal(get('quickMini').hidden,true);
+  const assignments=hair.srcAssignments;
+  sourceChanged();await fire('quickFollowing');await fire('quickMiniHair','error');
+  assert.equal(hair.srcAssignments,assignments);
+  assert.equal(get('quickMini').hidden,true);
+  get('artworkHair').src='blob:replacement';sourceChanged();
+  assertMiniCleared(get);
+  await fire('artworkHair','load');
+  assert.equal(hair.src,'blob:replacement');
+  assert.equal(get('quickMini').hidden,true);
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  get('artworkFace').hidden=true;sourceChanged();
+  assert.equal(get('quickMiniFace').src,'');
+  assert.equal(get('quickMini').hidden,false);
+  get('artworkFace').hidden=false;sourceChanged();
+  assert.equal(get('quickMini').hidden,true);
+  await fire('quickMiniFace','load');
+  assert.equal(get('quickMini').hidden,false);
+  // A loaded replacement source must also wait for its newly assigned copy.
+  get('artworkHair').src='blob:loaded-replacement';
+  get('artworkHair').complete=true;get('artworkHair').naturalWidth=150;
+  sourceChanged();
+  assert.equal(get('quickMini').hidden,true);
+  assert.equal(hair.complete,false);
+  await fire('quickMiniHair','load');
+  assert.equal(get('quickMini').hidden,false);
+  assert.deepEqual(calls,before);
+  assert.deepEqual(storageWrites,[]);
+  await fire('quickAgain');assertMiniCleared(get);
+  await fire('quickMiniHair','load');assertMiniCleared(get);
 });
 
 
-test('mini image sources stay untouched through twelve days and update only changed layers',async()=>{
-  for(const portrait of [false,true]) {
-    const {get,fire,imageMutations,calls}=await mount();
-    get('artworkStage').hidden=portrait;
-    for(const layer of ['Base','Outfit','Face','Hair']) {
-      get('artwork'+layer).hidden=false;
-      get('artwork'+layer).src='https://existing.invalid/'+layer+'.png';
-    }
-    get('portrait').hidden=false;get('portrait').src='https://existing.invalid/portrait.png';
-    get('quickModel').value='self';
+test('integrated replay has unique IDs and only the atomic mini image family',()=>{
+  const ids=htmlNodes().map(node=>node.id).filter(Boolean);
+  assert.equal(new Set(ids).size,ids.length);
+  assert.doesNotMatch(html,/id="quickReplay(?:Mini|Base|Outfit|Face|Hair|Portrait)"/);
+});
+
+test('empty image sources never reveal the mini despite reported load completion',async()=>{
+  for(const src of [undefined,'','   ']) {
+    const {get,fire}=await mount();
+    showComposite(get);
+    const base=get('artworkBase');
+    if(src===undefined)base.removeAttribute('src');else base.src=src;
+    base.complete=true;base.naturalWidth=150;
     await fire('quickForm','submit');await fire('quickRun');
-    const mini=new Set(['Base','Outfit','Face','Hair','Portrait'].map(layer=>get('quickReplay'+layer)));
-    const mutations=()=>imageMutations.filter(change=>mini.has(change.node));
-    imageMutations.length=0;
+    assertMiniCleared(get);
+  }
+});
+
+test('self replay navigation preserves source art and demo switch clears mini while respecting advanced scene',async()=>{
+  for(const advanced of ['none','text','mood','both']) {
+    const {get,fire,calls,storageWrites}=await mount([{id:'preset',name:'Preset',owned:true}]);
+    showComposite(get);
+    const sources=miniSlots.slice(0,4).map(slot=>get('artwork'+slot));
+    const originals=sources.map(source=>({...source.attributes}));
+    get('speech').textContent='元の声';get('scene').dataset.mood='growth';
+    get('quickModel').value='self';
+    await fire('quickForm','submit');await fire('quickRun');await loadMini(get,fire);
+    const assignments=miniSlots.map(slot=>get('quickMini'+slot).srcAssignments);
     const before=calls.slice();
     for(let day=1;day<=12;day++)await fire('quickFollowing');
-    assert.deepEqual(mutations(),[]);
+    for(let repeat=0;repeat<10;repeat++) {
+      for(const button of ['quickBestDay','quickWorstDay']) {
+        await fire(button);
+        for(const [index,slot] of miniSlots.slice(0,4).entries())
+          assert.equal(get('quickMini'+slot).src,originals[index].src);
+        assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+      }
+    }
+    assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+    assert.deepEqual(miniSlots.map(slot=>get('quickMini'+slot).srcAssignments),assignments);
+    if(advanced==='text'||advanced==='both')get('speech').textContent='詳しい練習';
+    if(advanced==='mood'||advanced==='both')get('scene').dataset.mood='thinking';
+    const text=get('speech').textContent,mood=get('scene').dataset.mood;
+    get('quickModel').value='preset';await fire('quickModel','change');
+    assertMiniCleared(get);
     assert.deepEqual(calls,before);
-    const source=get(portrait?'portrait':'artworkFace');
-    const target=get(portrait?'quickReplayPortrait':'quickReplayFace');
-    source.src='https://existing.invalid/changed.png';
-    await fire('quickPrevious');
-    assert.deepEqual(mutations(),[{node:target,action:'set',value:source.src}]);
-    imageMutations.length=0;
-    await fire('quickPrevious');assert.deepEqual(mutations(),[]);
-    await fire('quickAgain');
-    assert.equal(mutations().length,portrait?1:4);
-    assert.ok(mutations().every(change=>change.action==='remove'));
-    imageMutations.length=0;
-    await fire('quickAgain');assert.deepEqual(mutations(),[]);
+    await fire('quickForm','submit');await fire('quickRun');
+    assertMiniCleared(get);
+    assert.equal(get('speech').textContent,advanced==='none'?'元の声':text);
+    assert.equal(get('scene').dataset.mood,advanced==='none'?'growth':mood);
+    assert.deepEqual(sources.map(source=>({...source.attributes})),originals);
+    assert.deepEqual(storageWrites,[]);
   }
 });
 
-test('switching from self profit to another AI restores only the owned scene and clears art once',async()=>{
-  for(const advanced of ['none','text','mood','both']) {
-    const {get,fire,calls,imageMutations}=await mount([{id:'preset',name:'Preset',owned:true}]);
-    get('speech').textContent='前の台詞';get('scene').dataset.mood='growth';
-    get('artworkStage').hidden=false;get('artworkBase').hidden=false;
-    get('artworkBase').src='https://existing.invalid/base.png';
-    get('quickModel').value='self';
-    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
-    assert.equal(get('scene').dataset.mood,'happy');
-    assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
-    if(advanced==='text'||advanced==='both')get('speech').textContent='詳しい練習の台詞';
-    if(advanced==='mood'||advanced==='both')get('scene').dataset.mood='thinking';
-    const text=get('speech').textContent,mood=get('scene').dataset.mood;
-    const before=calls.slice();imageMutations.length=0;
-    get('quickModel').value='preset';await fire('quickModel','change');
-    assert.equal(get('speech').textContent,advanced==='none'?'前の台詞':text);
-    assert.equal(get('scene').dataset.mood,advanced==='none'?'growth':mood);
-    assert.equal(get('quickReplayMini').hidden,true);
-    const target=get('quickReplayBase');
-    assert.deepEqual(imageMutations,[{node:target,action:'remove'}]);
-    assert.equal(target.src,undefined);assert.equal(target.hidden,true);
-    await fire('quickModel','change');assert.equal(imageMutations.length,1);
+test('result summary uses the submitted self, demo or literal user model name and change clears ownership',async()=>{
+  const malicious='<img onerror=alert(1)>';
+  for(const id of ['self','demo','owned']) {
+    const {get,fire,calls,state}=await mount([
+      {id:'demo',name:'デモAI',owned:true},{id:'owned',name:malicious,owned:true},
+    ]);
+    showComposite(get);
+    get('speech').textContent='元の声';get('scene').dataset.mood='growth';
+    get('quickModel').value=id;
+    const name=get('quickModel').selectedOptions[0].textContent;
+    const practice=state.practice;
+    let resolveResponse;
+    state.practice=body=>new Promise(resolve=>{resolveResponse=async()=>resolve(await practice(body));});
+    await fire('quickForm','submit');
+    // Even programmatic selection changes while awaiting a response cannot rename this request.
+    const running=fire('quickRun');
+    get('quickModel').value=id==='demo'?'self':'demo';
+    await resolveResponse();await running;await loadMini(get,fire);
+    assert.equal(calls.at(-1).body.model_id,id);
+    const summary=get('quickResult').children[1];
+    assert.ok(summary.textContent.startsWith('今回のAI：'+name+' ／ 試算額：'));
+    assert.equal(summary.children.length,0);
+    if(id==='owned')assert.ok(summary.textContent.includes(malicious));
+    assert.equal(get('quickResult').hidden,false);
+    const before=calls.slice();
+    await fire('quickModel','change');
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickNext').hidden,true);
+    assertMiniCleared(get);
+    assert.equal(get('speech').textContent,'元の声');
+    assert.equal(get('scene').dataset.mood,'growth');
+    for(const button of ['quickPrevious','quickFollowing','quickBestDay','quickWorstDay'])await fire(button);
+    assert.equal(get('quickReplayDay').textContent,'');
     assert.deepEqual(calls,before);
-    await fire('quickForm','submit');await fire('quickRun');
-    assert.equal(get('quickReplayOwner').textContent,'別のAIの練習結果です。自作キャラの成績ではありません。');
-    assert.equal(get('quickReplayMini').hidden,true);
-    assert.equal(get('speech').textContent,advanced==='none'?'前の台詞':text);
-    assert.equal(get('scene').dataset.mood,advanced==='none'?'growth':mood);
+  }
+});
+
+test('base-only artwork reveals mini after load without waiting for hidden optional layers',async()=>{
+  const {get,fire}=await mount();
+  showComposite(get);
+  for(const slot of ['Outfit','Face','Hair']) {
+    get('artwork'+slot).hidden=true;
+    get('artwork'+slot).complete=false;get('artwork'+slot).naturalWidth=0;
+  }
+  await fire('quickForm','submit');await fire('quickRun');
+  assert.equal(get('quickMini').hidden,true);
+  assert.equal(get('quickMiniBase').src,get('artworkBase').src);
+  await fire('quickMiniBase','load');
+  assert.equal(get('quickMini').hidden,false);
+  assert.equal(get('quickMiniBase').hidden,false);
+  for(const slot of ['Outfit','Face','Hair']) {
+    assert.equal(get('quickMini'+slot).hidden,true);
+    assert.equal(get('quickMini'+slot).src,'');
   }
 });

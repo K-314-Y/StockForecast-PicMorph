@@ -31,6 +31,65 @@ function renderSceneVoice(text) {
   scene.dataset.mood=mood;
   sceneVoice={previous,text,mood};
 }
+let replayModel = null;
+const miniLayers = ['Base','Outfit','Face','Hair'];
+function clearMini() {
+  element('quickMini').hidden=true;
+  for(const slot of [...miniLayers,'Portrait']) {
+    const image=element('quickMini'+slot);
+    image.hidden=true;
+    image.removeAttribute('src');
+  }
+}
+function imageVisible(node) {
+  if(!node)return false;
+  for(let current=node;current;current=current.parentElement) {
+    if(current.hidden)return false;
+    const style=getComputedStyle(current);
+    if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||
+       style.opacity==='0')return false;
+  }
+  return true;
+}
+const imageReady = image => image.getAttribute('src')?.trim() &&
+  image.complete && image.naturalWidth>0;
+function syncMini() {
+  // Hide before changing any copy; reveal only the complete current composite.
+  element('quickMini').hidden=true;
+  // Never borrow the player's artwork for another model's result voice.
+  if(!replay || replayModel!=='self' || element('quickModel').value!=='self' || element('quickReplay').hidden ||
+     imageVisible(element('chibi'))) {clearMini();return;}
+  let pairs=[];
+  if(imageVisible(element('portrait'))) {
+    pairs=[[element('portrait'),element('quickMiniPortrait')]];
+  } else if(imageVisible(element('artworkStage')) && imageVisible(element('artworkBase'))) {
+    pairs=miniLayers.map(slot=>[element('artwork'+slot),element('quickMini'+slot)])
+      .filter(([source])=>imageVisible(source));
+  }
+  // A pending optional layer must not turn a composite into a base-only portrait.
+  if(!pairs.length || pairs.some(([source])=>!imageReady(source))) {clearMini();return;}
+  const selected=new Set(pairs.map(([,target])=>target));
+  for(const slot of [...miniLayers,'Portrait']) {
+    const target=element('quickMini'+slot);
+    if(!selected.has(target)){target.hidden=true;target.removeAttribute('src');}
+  }
+  for(const [source,target] of pairs) {
+    const src=source.getAttribute('src');
+    if(target.getAttribute('src')!==src)target.setAttribute('src',src);
+    target.hidden=false;
+  }
+  element('quickMini').hidden=!pairs.every(([source,target])=>
+    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));
+}
+for(const id of ['portrait',...miniLayers.map(slot=>'artwork'+slot),
+  ...[...miniLayers,'Portrait'].map(slot=>'quickMini'+slot)]) {
+  element(id).addEventListener('load',syncMini);
+  element(id).addEventListener('error',syncMini);
+}
+// The existing editor owns all source mutations, including resets without load events.
+if(typeof MutationObserver!=='undefined')new MutationObserver(syncMini).observe(element('scene'),{
+  subtree:true,attributes:true,attributeFilter:['src','hidden','style','class'],
+});
 function replayVoice(value,day) {
   if(day===0)return 'さあ、12日間の作戦を一緒に振り返ろう！';
   const stopped=value.liquidated_at_step;
@@ -59,48 +118,12 @@ function findReplayHighlights(balances,liquidatedAt) {
   return [best,worst];
 }
 const signedMoney = value => (value>=0?'+':'')+money(value);
-const miniLayers = ['Base','Outfit','Face','Hair','Portrait'];
-function clearReplayIdentity() {
-  element('quickReplayIdentity').hidden=true;
-  element('quickReplayOwner').textContent='';
-  element('quickReplayMini').hidden=true;
-  for(const layer of miniLayers) {
-    const image=element('quickReplay'+layer);
-    if(!image.hidden)image.hidden=true;
-    if(image.getAttribute('src')!==null)image.removeAttribute('src');
-  }
-}
-function renderReplayIdentity() {
-  element('quickReplayIdentity').hidden=false;
-  const owner=element('quickReplayOwner');
-  const visible=node=>node && !node.hidden;
-  const stage=element('artworkStage'),base=element('artworkBase');
-  const layered=replayIsSelf && visible(stage) && visible(base) && base.src;
-  let copied=false;
-  for(const layer of miniLayers) {
-    const target=element('quickReplay'+layer);
-    const source=layer==='Portrait' ? element('portrait') : element('artwork'+layer);
-    const shown=replayIsSelf && (layer==='Portrait' ? !visible(stage) : layered) &&
-      visible(source) && !!source.src;
-    if(shown) {
-      if(target.src!==source.src)target.src=source.src;
-      copied=true;
-    } else if(target.getAttribute('src')!==null)target.removeAttribute('src');
-    if(target.hidden===!!shown)target.hidden=!shown;
-  }
-  if(!replayIsSelf) {
-    owner.textContent='別のAIの練習結果です。自作キャラの成績ではありません。';
-    if(!element('quickReplayMini').hidden)element('quickReplayMini').hidden=true;
-    return;
-  }
-  if(element('quickReplayMini').hidden===copied)element('quickReplayMini').hidden=!copied;
-  owner.textContent=copied?'自作キャラと振り返る':'相棒の外見は上の画面で確認できます';
-}
 function clearReplay() {
-  clearReplayIdentity();
   clearSceneVoice();
   replayIsSelf=false;
   replay=null;
+  replayModel=null;
+  clearMini();
   replayHighlights=null;
   element('quickTacticsDay').textContent='';
   for(const [id,label] of highlightButtons) {
@@ -118,7 +141,6 @@ function clearReplay() {
 }
 function renderReplay() {
   if(!replay)return;
-  renderReplayIdentity();
   const balance=replay.daily_balances[replayDay];
   element('quickReplayDay').textContent='第'+replayDay+'日（0〜12日） ／ 練習用の全残高：'+
     money(balance)+' C ／ 累計損益：'+signedMoney(balance-BALANCE)+
@@ -144,6 +166,7 @@ function renderReplay() {
   element('quickPrevious').disabled=replayDay===0;
   element('quickFollowing').disabled=replayDay===12;
   element('quickReplay').hidden=false;
+  syncMini();
 }
 for(const [id,delta] of [['quickPrevious',-1],['quickFollowing',1]]) {
   element(id).addEventListener('click',()=>{
@@ -382,7 +405,7 @@ element('quickRun').addEventListener('click',async()=>{
     const heading=document.createElement('h3');
     heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='試算額：'+money(ordered.amount)+' C ／ '+
+    summary.textContent='今回のAI：'+ordered.model_name+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
       (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
         '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
         (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
@@ -407,6 +430,7 @@ element('quickRun').addEventListener('click',async()=>{
     }
     replayIsSelf=ordered.model_id==='self';
     replay=value;
+    replayModel=ordered.model_id;
     replayDay=0;
     renderReplay();
     panel.hidden=false;
