@@ -131,6 +131,7 @@ test('UI selects a saved brain separately from appearance and pins execution att
     }
     throw Error('Unexpected request: '+path);
   };
+  get('adventureMode').value='solo';
   runInNewContext(gameJs,{document:{getElementById:get,createElement:()=>new Element()},fetch:fetchFake});
   await new Promise(resolve=>setImmediate(resolve));
   await get('loadBrains').fire();
