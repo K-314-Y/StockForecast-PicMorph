@@ -5,6 +5,22 @@ const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigi
 let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
+function replayVoice(value,day) {
+  if(day===0)return 'さあ、12日間の作戦を一緒に振り返ろう！';
+  const stopped=value.liquidated_at_step;
+  if(stopped!==null && day>stopped)return 'もう投入分は運用されていないけど、相場はまだ動いてるね。';
+  if(day===stopped)return 'あっ…ここで投入したコインが尽きちゃった。悔しい！';
+  if(day===replayHighlights?.[0]?.day)return 'やった！ここが一番残高の増えた日だね。';
+  if(day===replayHighlights?.[1]?.day)return 'うわっ、ここが一番残高の減った日だね…。';
+  // Price direction describes the market, independently of the full wallet delta.
+  const previous=value.daily_synthetic_prices[day-1];
+  const price=value.daily_synthetic_prices[day];
+  if(price===previous)return '今日は値動きがなかったね。';
+  if(value.daily_ai_signals[day-1]==='LONG')return price>previous ?
+    '株を持つ方針の日に上がった！ちょっと嬉しいね。' : '株を持つ方針の日に下がっちゃった…。';
+  return price<previous ? '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。' :
+    '上がった日は現金で待ったんだね。乗り遅れたかも。';
+}
 const highlightButtons = [['quickBestDay','一番増えた日'],['quickWorstDay','一番減った日']];
 function findReplayHighlights(balances,liquidatedAt) {
   let best=null,worst=null;
@@ -20,6 +36,7 @@ const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
   replay=null;
   replayHighlights=null;
+  element('quickTacticsDay').textContent='';
   for(const [id,label] of highlightButtons) {
     const button=element(id);
     if(document.activeElement===button)button.blur?.();
@@ -44,6 +61,7 @@ function renderReplay() {
       '。投入した資金は尽きました。投入しなかった残高は'+money(BALANCE-replay.invested_coins)+' C残っています。' : '');
   const price=replay.daily_synthetic_prices[replayDay];
   const stopped=replay.liquidated_at_step;
+  element('quickTacticsDay').textContent=replayVoice(replay,replayDay);
   element('quickReplayContext').textContent=replayDay===0 ?
     '開始前 ／ AI判断なし ／ 架空の開始価格：'+money(price) :
     (stopped!==null && replayDay>stopped ?

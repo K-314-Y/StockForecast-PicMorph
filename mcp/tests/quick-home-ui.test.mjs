@@ -523,6 +523,7 @@ test('input, model, leverage, shortcuts, new practice and retry clear replay sta
     assert.equal(get('quickReplay').hidden,true,id);
     assert.equal(get('quickReplayDay').textContent,'',id);
     assert.equal(get('quickReplayContext').textContent,'',id);
+    assert.equal(get('quickTacticsDay').textContent,'',id);
     assert.equal(get('quickPrevious').disabled,true);
     assert.equal(get('quickFollowing').disabled,true);
     await fire('quickFollowing');
@@ -553,11 +554,13 @@ test('invalid signals and synthetic prices reject the entire result and clear co
     assert.match(get('quickStatus').textContent,/練習結果の形式が不正です/);
     for(const id of ['quickReplay','quickResult','quickNext'])assert.equal(get(id).hidden,true);
     assert.equal(get('quickReplayContext').textContent,'');
+    assert.equal(get('quickTacticsDay').textContent,'');
   }
   state.practice=async()=>({error:'通信エラー'});
   await fire('quickForm','submit');
   await fire('quickRun');
   assert.equal(get('quickReplayContext').textContent,'');
+  assert.equal(get('quickTacticsDay').textContent,'');
 });
 
 test('replay highlights are result-only native buttons and jump using full wallet deltas',async()=>{
@@ -644,7 +647,7 @@ test('replay highlights clear during retry and after API or validation errors',a
   const {get,fire,state}=await mount();
   const valid=await state.practice({amount:1000,leverage:1});
   for(const failure of [{error:'通信エラー'},{...valid,daily_balances:[]},
-    {...valid,liquidated_at_step:1.5}]) {
+    {...valid,liquidated_at_step:1.5},{...valid,normal_profit_coins:NaN}]) {
     state.practice=async()=>valid;
     await fire('quickForm','submit');
     await fire('quickRun');
@@ -653,6 +656,7 @@ test('replay highlights clear during retry and after API or validation errors',a
     let finish;
     state.practice=()=>new Promise(resolve=>{finish=resolve;});
     const running=fire('quickRun');
+    assert.equal(get('quickTacticsDay').textContent,'');
     assert.equal(get('quickReplay').hidden,true);
     for(const id of ['quickBestDay','quickWorstDay'])assert.equal(get(id).disabled,true);
     finish(failure);
@@ -665,5 +669,101 @@ test('replay highlights clear during retry and after API or validation errors',a
     }
     assert.equal(get('quickReplay').hidden,true);
     assert.equal(get('quickReplayDay').textContent,'');
+    assert.equal(get('quickTacticsDay').textContent,'');
+  }
+});
+
+
+test('result voice follows best/worst clicks without model-name spoofing, requests or persistence',async()=>{
+  const name='<img src=x onerror=alert(1)>自作キャラ';
+  for(const model of ['self','owned']) {
+    const {get,fire,calls,storageWrites}=await mount([{id:'owned',name,owned:true}]);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickTacticsDay').textContent,'');
+    assert.equal(get('quickTacticsSummary'),undefined);
+    assert.doesNotMatch(script+html,/方向に合った|逆方向|summarizeTactics|quickTacticsSummary/);
+    assert.match(html,/<p id="quickTacticsDay" aria-label="今回のAIからひとこと"><\/p>/);
+    get('quickModel').value=model;
+    get('quickAmount').value='2345';
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.equal(get('quickTacticsDay').textContent,'さあ、12日間の作戦を一緒に振り返ろう！');
+    const before=calls.length;
+    await fire('quickBestDay');
+    assert.equal(get('quickTacticsDay').textContent,'やった！ここが一番残高の増えた日だね。');
+    await fire('quickWorstDay'); // CASH + falling price still has a full-wallet loss.
+    assert.equal(get('quickTacticsDay').textContent,'うわっ、ここが一番残高の減った日だね…。');
+    assert.match(get('quickReplayDay').textContent,/前日比：-15 C/);
+    for(let day=3;day<=12;day++)await fire('quickFollowing');
+    assert.doesNotMatch(get('quickTacticsDay').textContent,/自作キャラ|<img|損失なし|必ず利益/);
+    assert.equal(calls.length,before);
+    assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+    assert.deepEqual(storageWrites,[]);
+    assert.equal(get('quickModel').value,model);
+    assert.equal(get('quickAmount').value,'2345');
+  }
+});
+
+test('voice distinguishes original price direction and flat days independently of wallet',async()=>{
+  const {get,fire,state}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  state.practice=async()=>({...valid,final_balance:10000,profit_coins:0,
+    daily_balances:Array(13).fill(10000),
+    daily_synthetic_prices:[100,110,100,100,90,100,100,100+1e-12,100,100,100,100,100],
+    daily_ai_signals:['LONG','LONG','LONG','CASH','CASH','CASH','LONG','CASH','LONG','CASH','LONG','CASH']});
+  await fire('quickForm','submit');await fire('quickRun');
+  const expected=[
+    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
+    '株を持つ方針の日に下がっちゃった…。',
+    '今日は値動きがなかったね。',
+    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。',
+    '上がった日は現金で待ったんだね。乗り遅れたかも。',
+    '今日は値動きがなかったね。',
+    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
+    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。'];
+  for(const text of expected) {
+    await fire('quickFollowing');assert.equal(get('quickTacticsDay').textContent,text);
+  }
+});
+
+test('all CASH in falling market never describes avoidance as profit or zero wallet loss',async()=>{
+  for(const fee of [0,1]) {
+    const {get,fire,state}=await mount();
+    const valid=await state.practice({amount:1000,leverage:1});
+    state.practice=async()=>({...valid,final_balance:10000-fee*12,profit_coins:-fee*12,
+      daily_balances:Array.from({length:13},(_,i)=>10000-fee*i),
+      daily_synthetic_prices:Array.from({length:13},(_,i)=>100-i),
+      daily_ai_signals:Array(12).fill('CASH')});
+    await fire('quickForm','submit');await fire('quickRun');
+    assert.equal(get('quickBestDay').disabled,true);
+    for(let day=1;day<=12;day++) {
+      await fire('quickFollowing');
+      assert.equal(get('quickTacticsDay').textContent,fee && day===1 ?
+        'うわっ、ここが一番残高の減った日だね…。' :
+        '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。');
+      assert.doesNotMatch(get('quickTacticsDay').textContent,/損失なし|損失ゼロ|無損失|無傷|ダメージなし|残高は減らない|利益が出|儲か/);
+    }
+  }
+});
+
+test('25x stopout voice takes priority over worst day and changes after stopout',async()=>{
+  for(const stop of [1,2,12]) for(const signal of ['LONG','CASH']) for(const direction of [-1,1]) {
+    const {get,fire,state,calls}=await mount();
+    const valid=await state.practice({amount:1000,leverage:25});
+    state.practice=async()=>({...valid,final_balance:9000,profit_coins:-1000,liquidated_at_step:stop,
+      daily_balances:Array.from({length:13},(_,i)=>i<stop?10000:9000),
+      daily_ai_signals:Array(12).fill(signal),
+      daily_synthetic_prices:Array.from({length:13},(_,i)=>100+direction*i)});
+    get('quickLeverage').value='25';await fire('quickLeverage','change');
+    await fire('quickForm','submit');await fire('quickRun');
+    const before=calls.length;
+    await fire('quickWorstDay');
+    assert.equal(get('quickTacticsDay').textContent,'あっ…ここで投入したコインが尽きちゃった。悔しい！');
+    for(let day=stop+1;day<=12;day++) {
+      await fire('quickFollowing');
+      assert.equal(get('quickTacticsDay').textContent,'もう投入分は運用されていないけど、相場はまだ動いてるね。');
+    }
+    assert.equal(get('quickLeverage').value,'25');
+    assert.equal(calls.length,before);
   }
 });
