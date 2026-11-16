@@ -139,7 +139,7 @@ test('game includes manual image layer inputs, keeps legacy DRAFT and CSS select
 });
 
 // Exercise the actual browser module with controlled image decode events and no disk writes.
-async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
+async function mountArtwork({baseSize=[128,128],storedHairSize=null,storedSlots=null}={}) {
  const script=await readFile(new URL('../../game_runtime/demo.mjs',import.meta.url),'utf8');
  const nodes=new Map(),calls=[],confirms=[],revoked=[],images=new Map(),files=new Map();
  class Element {
@@ -153,7 +153,7 @@ async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
  }
  const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  const state={accept:false,record:{revision:1,created:true,slots:Object.fromEntries(slots.map(slot=>
-   [slot,{exists:slot==='base'||(slot==='hair'&&storedHairSize!==null),mime:'image/png',size:88}]))}};
+   [slot,{exists:storedSlots ? storedSlots.includes(slot) : slot==='base'||(slot==='hair'&&storedHairSize!==null),mime:'image/png',size:88}]))}};
  const sizes={base:baseSize,hair:storedHairSize};
  const settle=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  const fetch=async(path,options)=>{
@@ -281,4 +281,43 @@ test('unsaved base cannot bypass the stored base check; saving base rechecks lay
  await ui.fire('artworkClearBase');await ui.settle();
  assert.equal(ui.get('artworkSaveOutfit').disabled,false);
  assert.match(ui.get('artworkInfoOutfit').textContent,/base寸法が確認できない/);
+});
+
+
+test('front scene keeps all four saved layers and restores on reload without auto-save',async()=>{
+ const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
+ const front=html.slice(html.indexOf('id="frontCharacter"'),html.indexOf('id="simpleHome"'));
+ for(const id of ['scene','companionName','speech','chibi','portrait','artworkStage',
+   'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption']) {
+   assert.equal(html.split('id="'+id+'"').length-1,1,id);
+   assert.ok(front.includes('id="'+id+'"'),id);
+ }
+ for(const storedSlots of [[],['base'],slots]) {
+   const ui=await mountArtwork({storedSlots});
+   const before=JSON.stringify(ui.state.record);
+   for(let reload=0;reload<2;reload++) {
+     assert.equal(ui.get('companionName').textContent,'私の相棒');
+     assert.notEqual(ui.get('portrait').hidden,false);
+     if(storedSlots.includes('base')) {
+       assert.equal(ui.get('artworkStage').hidden,true,'wait for base decode');
+       for(const slot of slots) {
+         const image=ui.get('artwork'+slot[0].toUpperCase()+slot.slice(1));
+         assert.equal(image.hidden,!storedSlots.includes(slot));
+         assert.equal(image.src,storedSlots.includes(slot)?'/api/artwork/image/'+slot+'?revision=1':'');
+       }
+       await ui.get('artworkBase').onload();
+       assert.equal(ui.get('artworkStage').hidden,false);
+       assert.equal(ui.get('chibi').hidden,true);
+       assert.match(ui.get('skinCaption').textContent,/私のイラスト（保存済み）/);
+     } else {
+       assert.notEqual(ui.get('chibi').hidden,true);
+       assert.notEqual(ui.get('artworkStage').hidden,false);
+     }
+     assert.equal(ui.writes().length,0);
+     assert.equal(JSON.stringify(ui.state.record),before);
+     if(reload===0){await ui.fire('reloadArtwork');await ui.settle();}
+   }
+   assert.equal(ui.calls.filter(call=>call.path==='/api/artwork').length,2);
+   assert.deepEqual(ui.confirms,[]);
+ }
 });

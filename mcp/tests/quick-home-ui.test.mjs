@@ -68,6 +68,84 @@ async function mount(models=[]) {
   return {get,calls,scrolls,storageWrites,document,state,fire:(id,event)=>get(id).fire(event)};
 }
 
+// Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
+function htmlNodes() {
+  const stack=[],nodes=[];
+  const voidTags=new Set(['area','base','br','col','embed','hr','img','input','link','meta','source','track','wbr']);
+  for(const match of html.matchAll(/<(\/?)([a-z][\w-]*)\b([^>]*)>/gi)) {
+    const [,closing,tag,attributes]=match;
+    if(closing){assert.equal(stack.pop()?.tag,tag);continue;}
+    const node={tag,id:attributes.match(/\bid="([^"]+)"/)?.[1],attributes,
+      parents:stack.map(parent=>parent.id),offset:match.index};
+    nodes.push(node);
+    if(!voidTags.has(tag))stack.push(node);
+  }
+  assert.equal(stack.length,0);
+  return nodes;
+}
+
+test('the single original scene is the first game panel, outside advanced training',()=>{
+  const nodes=htmlNodes();
+  const get=id=>nodes.find(node=>node.id===id);
+  const front=get('frontCharacter');
+  assert.equal(front.tag,'section');
+  assert.deepEqual(front.parents,[undefined,undefined,undefined]); // html > body > main
+  assert.doesNotMatch(front.attributes,/\bhidden\b/);
+  assert.equal(nodes.find(node=>node.tag==='section').id,'frontCharacter');
+  assert.ok(front.offset<get('scene').offset);
+  assert.ok(get('scene').offset<get('simpleHome').offset);
+  assert.ok(get('simpleHome').offset<get('advancedEntry').offset);
+  for(const id of ['scene','companionName','speech','chibi','portrait','artworkStage',
+    'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption']) {
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+    assert.ok(get(id).parents.includes('frontCharacter'),id);
+    assert.ok(!get(id).parents.includes('advancedEntry'),id);
+    if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
+  }
+  const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
+  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork']);
+  for(const button of buttons)assert.match(button.attributes,/type="button"/);
+  for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
+    assert.ok(get(id).parents.includes('simpleHome'),id);
+  for(const id of ['play','companionControls','artworkControls','artworkWorkshop','brainControls',
+    'modelLabSection','modelShopSection','arenaSection','growthInfo'])
+    assert.ok(get(id).parents.includes('advancedEntry'),id);
+  assert.match(html,/保存した完成イラスト.*ページを再読み込みしてもここに表示/);
+  assert.match(html,/サンプルのカスタムchibiを仮表示.*あなたの自作イラストではありません/);
+});
+
+test('front actions reuse editor and artwork navigation, focus without saves or mutations',async()=>{
+  const {get,fire,calls,storageWrites,scrolls,document}=await mount();
+  const before=calls.slice();
+  for(const [button,target,opened] of [
+    ['quickCustomize','companionEditorTitle',['advancedEntry','companionControls']],
+    ['quickArtwork','artworkTitle',['advancedEntry','artworkControls','artworkWorkshop']],
+  ]) {
+    for(const id of opened)get(id).open=false;
+    await fire(button);
+    for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(document.activeElement,get(target));
+    assert.equal(get(target).focusOptions.preventScroll,true);
+    assert.equal(scrolls.at(-1),get(target==='artworkTitle'?'artworkControls':target));
+    assert.deepEqual(calls,before);
+    assert.deepEqual(storageWrites,[]);
+  }
+  assert.match(script,/element\('quickCustomize'\)\.addEventListener\('click',openEditor\)/);
+  assert.match(script,/element\('quickArtwork'\)\.addEventListener\('click',openArtwork\)/);
+});
+
+test('front layout stacks on mobile, wraps long text and keeps native focus and touch targets',()=>{
+  assert.match(html,/\.hero\{display:block;min-inline-size:0\}/);
+  assert.match(html,/\.front-character\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/);
+  assert.match(html,/@media\(max-width:680px\)\{\.front-character\{grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(html,/\.front-character>\*\{min-inline-size:0\}/);
+  assert.match(html,/\.front-character-copy\{overflow-wrap:anywhere\}/);
+  assert.match(html,/\.front-character \.actions button\{max-inline-size:100%;white-space:normal\}/);
+  assert.match(html,/button\{[^}]*min-height:44px/);
+  assert.match(html,/button:focus-visible[^}]*outline:3px/);
+  assert.match(html,/\.actions\{[^}]*flex-wrap:wrap/);
+});
+
 test('shop and editor navigation opens details, scrolls and focuses the destination',async()=>{
   const {get,fire,scrolls,document}=await mount();
   for(const id of ['quickShop','quickNextShop']) {
