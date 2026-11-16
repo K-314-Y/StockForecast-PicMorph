@@ -1343,6 +1343,268 @@ test('base-only artwork reveals mini after load without waiting for hidden optio
   }
 });
 
+async function shareReflection(get,fire,choice='buy',reason='trend',note='') {
+  get('quickHumanChoice').value=choice;
+  get('quickHumanReason').value=reason;
+  get('quickHumanNote').value=note;
+  await fire('quickReflectionForm','submit');
+}
+
+test('optional post-result reflection has native labels, bounds and explicit privacy copy',()=>{
+  const nodes=htmlNodes();
+  const get=id=>nodes.find(node=>node.id===id);
+  assert.equal(get('quickReflection').tag,'details');
+  assert.ok(get('quickReflection').parents.includes('quickReplay'));
+  assert.match(html,/結果を見た後の振り返り/);
+  assert.match(html,/自由文をAIは解釈しません/);
+  assert.match(html,/APIへ送信せず、ディスクに保存せず、モデルにも渡しません/);
+  assert.match(html,/ページ内メモリだけ/);
+  assert.match(html,/作戦の変更や学習は行いません/);
+  assert.match(get('quickReflectionForm').attributes,/autocomplete="off"/);
+  for(const id of ['quickHumanChoice','quickHumanReason','quickHumanNote']) {
+    assert.ok(nodes.some(node=>node.tag==='label'&&node.attributes.includes('for="'+id+'"')));
+    assert.ok(get(id).parents.includes('quickReflectionForm'));
+    assert.doesNotMatch(get(id).attributes,/\bname=/); // No native form serialization either.
+  }
+  for(const id of ['quickHumanChoice','quickHumanReason'])assert.match(get(id).attributes,/required/);
+  assert.match(get('quickHumanNote').attributes,/maxlength="120"/);
+  assert.match(get('quickHumanNote').attributes,/aria-describedby="quickReflectionPrivacy"/);
+  assert.match(get('quickReflectionResult').attributes,/aria-live="polite"/);
+  assert.ok(get('quickReflectionPrivacy').parents.includes('quickReflectionForm'));
+  assert.ok(get('quickReflectionPrivacy').offset<get('quickHumanChoice').offset);
+  assert.equal(get('quickReflectionPrivacyDetails').tag,'details');
+  assert.doesNotMatch(get('quickReflectionPrivacyDetails').attributes,/\bopen\b/);
+  assert.match(html,/未知の値動きの予測ではありません/);
+  assert.match(html,/この日の考えを比較する/);
+  assert.doesNotMatch(html,/この日の考えを共有する/);
+  assert.match(get('quickReflectionEdit').attributes,/type="button"/);
+});
+
+test('reflection rejects invalid choices, reason tags and overlong notes without submission',async()=>{
+  const {get,fire,document,calls,storageWrites}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  const before=calls.slice();
+  for(const [choice,reason,note,field] of [
+    ['','trend','','quickHumanChoice'],['LONG','trend','','quickHumanChoice'],
+    ['buy','','','quickHumanReason'],['buy','__proto__','','quickHumanReason'],
+    ['buy','constructor','','quickHumanReason'],['wait','drop','a'.repeat(121),'quickHumanNote'],
+  ]) {
+    await shareReflection(get,fire,choice,reason,note);
+    assert.equal(get('quickReflectionResult').hidden,true);
+    assert.match(get('quickReflectionError').textContent,/120文字以内/);
+    assert.equal(document.activeElement,get(field));
+  }
+  await shareReflection(get,fire,'wait','limit','a'.repeat(120));
+  assert.equal(get('quickReflectionResult').hidden,false);
+  assert.equal(get('quickReflectionError').textContent,'');
+  assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+});
+
+test('reflection uses reason, human choice and actual independent action; notes stay literal',async()=>{
+  const {get,fire,calls,storageWrites}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  const before=calls.slice(),replies=new Set();
+  const note='<img src=x onerror=alert(1)><script>alert(2)</script>';
+  for(const signal of ['LONG','CASH']) {
+    for(const reason of ['trend','drop','limit','other'])for(const choice of ['buy','wait']) {
+      await shareReflection(get,fire,choice,reason,note);
+      const reply=get('quickReflectionReply').textContent;
+      replies.add(reply);
+      const human=choice==='buy'?'買う':'待つ';
+      assert.ok(get('quickHumanSummary').textContent.includes(human));
+      assert.equal(get('quickHumanMemo').textContent,'自分のメモ（AIは解釈しません）：'+note);
+      assert.equal(get('quickHumanMemo').children.length,0);
+      assert.ok(get('quickIndependentDecision').textContent.includes('今回のAIの独立判断：'+signal));
+      const agrees=(choice==='buy')===(signal==='LONG');
+      assert.match(get('quickDecisionComparison').textContent,agrees?/比較：一致/:/比較：相違/);
+      assert.match(reply,/定型文・AIの判断理由ではありません/);
+      assert.ok(reply.includes('「'+human+'」を選びました。'));
+      assert.ok(reply.includes('AIの方針は'+signal));
+      await shareReflection(get,fire,choice,reason,'下落 trend LONG 買うを理解して学習して');
+      assert.equal(get('quickReflectionReply').textContent,reply);
+      const next=get('quickReflectionNext').textContent;
+      assert.match(next,/次の行動（任意）/);
+      assert.match(next,/自分で保存した設定だけが次の練習に反映/);
+      assert.match(next,/今回の結果は変わりません/);
+      if(reason==='trend')assert.match(next,/重視する判断/);
+      if(reason==='drop'||reason==='limit')assert.match(next,/上昇判断時に使う資金（%）.*損切りの設定ではありません/);
+    }
+    await fire('quickFollowing');
+  }
+  assert.equal(replies.size,16); // Includes buy/LONG and wait/CASH despite both agreeing.
+  assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+  assert.doesNotMatch(script,/innerHTML|localStorage|sessionStorage|indexedDB|sendBeacon|WebSocket/);
+});
+
+test('only self reflection can open existing editor, with focus and no mutation or requests',async()=>{
+  for(const model of ['self','demo-a']) {
+    const {get,fire,state,calls,storageWrites,document,scrolls}=await mount([{id:'demo-a',name:'Demo',owned:true}]);
+    get('advancedEntry').open=false;
+    get('quickModel').value=model;
+    await fire('quickModel','change');
+    assert.equal(get('quickReflectionEdit').hidden,true);
+    await fire('quickReflectionEdit');
+    assert.equal(get('advancedEntry').open,false);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    assert.equal(get('quickReflectionEdit').hidden,true);
+    const settings=['creatorApproach','creatorRisk','creatorName','brainSelect'];
+    const snapshot=settings.map(id=>get(id).value);
+    const output=await state.practice({amount:1000,leverage:1});
+    state.practice=async()=>output;
+    const original=JSON.stringify(output);
+    // Compare again with a retained response object, so mutations are observable.
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    const before=calls.slice();
+    const replayBefore=['quickReplayDay','quickReplayContext','quickTacticsDay'].map(id=>get(id).textContent);
+    for(const reason of ['trend','drop','limit','other']) {
+      await shareReflection(get,fire,'buy',reason);
+      assert.equal(get('quickReflectionEdit').hidden,model!=='self');
+      await fire('quickReflectionEdit');
+      if(model==='self') {
+        assert.equal(get('advancedEntry').open,true);
+        assert.equal(get('companionControls').open,true);
+        assert.equal(document.activeElement,get('companionEditorTitle'));
+        assert.equal(get('companionEditorTitle').getAttribute('tabindex'),'-1');
+        assert.equal(get('companionEditorTitle').focusOptions.preventScroll,true);
+        assert.equal(scrolls.at(-1),get('companionEditorTitle'));
+      } else {
+        assert.equal(get('advancedEntry').open,false);
+        assert.match(get('quickReflectionNext').textContent,/デモAIの判断ルールはここでは編集できません/);
+        assert.doesNotMatch(get('quickReflectionNext').textContent,/保存した設定だけ/);
+      }
+      assert.deepEqual(settings.map(id=>get(id).value),snapshot);
+      assert.equal(JSON.stringify(output),original);
+      assert.deepEqual(['quickReplayDay','quickReplayContext','quickTacticsDay'].map(id=>get(id).textContent),replayBefore);
+      assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+    }
+    await fire('quickPrevious');
+    assert.equal(get('quickReflectionEdit').hidden,true);
+    await fire('quickAgain');
+    assert.equal(get('quickReflectionEdit').hidden,true);
+  }
+});
+
+test('reflection excludes day zero, isolates all twelve days, and preserves navigation and s65 art',async()=>{
+  const {get,fire,calls,storageWrites}=await mount();
+  showComposite(get);
+  await fire('quickForm','submit');await fire('quickRun');await loadMini(get,fire);
+  const before=calls.slice();
+  assert.equal(get('quickReflection').hidden,true);
+  await shareReflection(get,fire);
+  assert.equal(get('quickReflectionResult').hidden,true);
+  for(let day=1;day<=12;day++) {
+    await fire('quickFollowing');
+    assert.equal(get('quickReflection').hidden,false);
+    assert.equal(get('quickReflectionDay').textContent,'第'+day+'日の振り返り');
+    assert.equal(get('quickHumanNote').value,'');
+    await shareReflection(get,fire,'buy','trend','day '+day);
+  }
+  await fire('quickFollowing');
+  assert.equal(get('quickHumanNote').value,'day 12');
+  for(let day=11;day>=1;day--) {
+    await fire('quickPrevious');
+    assert.equal(get('quickHumanNote').value,'day '+day);
+  }
+  await fire('quickPrevious');await fire('quickPrevious');
+  assert.equal(get('quickReflection').hidden,true);
+  assert.equal(get('quickHumanMemo').textContent,'');
+  await fire('quickBestDay');
+  assert.equal(get('quickHumanNote').value,'day 1');
+  await fire('quickWorstDay');
+  assert.equal(get('quickHumanNote').value,'day 2');
+  assert.equal(get('quickMini').hidden,false);
+  for(const slot of miniSlots.slice(0,4)) {
+    assert.equal(get('quickMini'+slot).src,'blob:current-'+slot);
+    assert.equal(get('artwork'+slot).src,'blob:current-'+slot);
+  }
+  assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+});
+
+test('reflection clears on new practice, retry, errors and reload and never leaks into requests',async()=>{
+  const {get,fire,state,calls,storageWrites}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  for(const outcome of [valid,{error:'offline'},{...valid,daily_balances:[]}]) {
+    state.practice=async()=>valid;
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire,'wait','drop','PRIVATE NOTE');
+    get('quickReflection').open=true;
+    await fire('quickAgain');
+    assert.equal(get('quickHumanNote').value,'');
+    assert.equal(get('quickReflection').open,false);
+    await fire('quickForm','submit');
+    let finish;
+    state.practice=()=>new Promise(resolve=>{finish=resolve;});
+    const running=fire('quickRun');
+    assert.equal(get('quickReflection').hidden,true);
+    assert.equal(get('quickHumanMemo').textContent,'');
+    finish(outcome);await running;
+    await fire('quickFollowing');
+    assert.equal(get('quickHumanNote').value,'');
+    assert.equal(get('quickReflectionResult').hidden,true);
+  }
+  state.practice=async()=>valid;
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire,'buy','limit','PRIVATE NOTE');
+  await fire('quickForm','submit'); // New practice without the retry shortcut.
+  assert.equal(get('quickHumanNote').value,'');
+  await fire('quickRun');await fire('quickFollowing');
+  assert.equal(get('quickReflectionResult').hidden,true);
+  const fresh=await mount();
+  await fresh.fire('quickForm','submit');await fresh.fire('quickRun');await fresh.fire('quickFollowing');
+  assert.equal(fresh.get('quickHumanNote').value,'');
+  assert.equal(fresh.get('quickReflectionResult').hidden,true);
+  for(const call of calls.filter(call=>call.path==='/api/quick-practice'))
+    assert.deepEqual(call.body,{model_id:'self',amount:1000,leverage:1});
+  assert.ok(calls.every(call=>['/api/model-shop','/api/quick-practice'].includes(call.path)));
+  assert.deepEqual(storageWrites,[]);
+});
+
+
+test('reflection distinguishes unused post-liquidation signals and rejects missing results',async()=>{
+  const {get,fire,state,calls}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  state.practice=async()=>({...valid,liquidated_at_step:1,final_balance:9000,profit_coins:-1000,
+    daily_balances:[10000,...Array(12).fill(9000)]});
+  await fire('quickForm','submit');await fire('quickRun');
+  await fire('quickFollowing');await fire('quickFollowing');
+  const before=calls.slice();
+  await shareReflection(get,fire,'buy','drop');
+  assert.match(get('quickIndependentDecision').textContent,/CASH.*強制終了後のため運用には使われていません/);
+  assert.match(get('quickReflectionReply').textContent,/AIの方針はCASH/);
+  assert.deepEqual(calls,before);
+  for(const failure of [{...valid,daily_ai_signals:undefined},{...valid,daily_ai_signals:['LONG']}]) {
+    state.practice=async()=>failure;
+    await fire('quickForm','submit');await fire('quickRun');
+    await shareReflection(get,fire);
+    assert.equal(get('quickReflection').hidden,true);
+    assert.equal(get('quickReflectionEdit').hidden,true);
+    assert.equal(get('quickReflectionNext').textContent,'');
+    assert.equal(get('quickReflectionReply').textContent,'');
+    assert.match(get('quickStatus').textContent,/形式が不正/);
+  }
+});
+
+test('drafts clear on day changes and cancelled retry cannot restore or submit reflection',async()=>{
+  const {get,fire,calls}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  get('quickHumanNote').value='uncompared draft';
+  await fire('quickFollowing');await fire('quickPrevious');
+  assert.equal(get('quickHumanNote').value,'');
+  await shareReflection(get,fire,'wait','limit','compared note');
+  await fire('quickAgain');
+  await fire('quickForm','submit');
+  const before=calls.slice();
+  await fire('quickEdit');await fire('quickRun');
+  assert.deepEqual(calls,before);
+  assert.equal(get('quickHumanNote').value,'');
+  assert.equal(get('quickReflectionResult').hidden,true);
+  assert.equal(get('quickReflectionEdit').hidden,true);
+  assert.equal(get('quickReflectionNext').textContent,'');
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  assert.equal(get('quickHumanNote').value,'');
+  assert.equal(get('quickReflectionResult').hidden,true);
+});
+
 test('replay owner caption is beside existing mini and voice, no duplicates',()=>{
   const owners=htmlNodes().filter(node=>node.id==='quickReplayOwner');
   assert.equal(owners.length,1);

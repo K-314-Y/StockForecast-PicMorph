@@ -252,6 +252,32 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <button id="quickBestDay" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>一番増えた日</button>
    <button id="quickWorstDay" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>一番減った日</button>
   </div>
+  <details id="quickReflection" hidden>
+   <summary>この日の自分の考えを相棒と振り返る（任意・結果を見た後）</summary>
+   <p id="quickReflectionHelp">第1〜12日から、振り返りたい日だけ選べます。これは結果を見た後の振り返りです。全日分の入力は不要です。比較前の入力は日を変えると消えます。</p>
+   <form id="quickReflectionForm" aria-label="この日の人間の振り返り" aria-describedby="quickReflectionHelp quickReflectionPrivacy" autocomplete="off">
+    <p id="quickReflectionPrivacy" class="simple-hint">メモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。</p>
+    <details id="quickReflectionPrivacyDetails">
+     <summary>比較と入力の扱いについて</summary>
+     <p>結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
+    </details>
+    <p id="quickReflectionDay"></p>
+    <label for="quickHumanChoice">自分ならどうする？</label>
+    <select id="quickHumanChoice" required><option value="">選んでください</option><option value="buy">買う</option><option value="wait">待つ</option></select>
+    <label for="quickHumanReason">重視した理由</label>
+    <select id="quickHumanReason" required><option value="">選んでください</option><option value="trend">値動きの流れ</option><option value="drop">下落リスク</option><option value="limit">損失を抑えたい</option><option value="other">その他</option></select>
+    <label for="quickHumanNote">ひとことメモ（任意・120文字まで）</label>
+    <input id="quickHumanNote" aria-describedby="quickReflectionPrivacy" type="text" maxlength="120" autocomplete="off">
+    <button type="submit">この日の考えを比較する</button>
+    <p id="quickReflectionError" role="alert"></p>
+   </form>
+   <div id="quickReflectionResult" role="status" aria-live="polite" aria-atomic="true" hidden>
+    <p id="quickHumanSummary"></p><p id="quickHumanMemo"></p>
+    <p id="quickIndependentDecision"></p><p id="quickDecisionComparison"></p><p id="quickReflectionReply"></p>
+    <p id="quickReflectionNext"></p>
+   </div>
+   <button id="quickReflectionEdit" type="button" aria-controls="advancedEntry companionControls" hidden>判断ルールを見直す</button>
+  </details>
  </section>
  <div id="quickNext" hidden>
   <p id="quickGrowthHelp" class="simple-hint">今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPとレベル、達成した課題を冒険記録で確認できます。どちらも架空相場の練習で、実相場の予測力を示すものではありません。</p>
