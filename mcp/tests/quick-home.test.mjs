@@ -4,6 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
+import {validateCompanion} from '../../game_runtime/companion.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 const MODEL={fast_window:3,slow_window:9,risk_fraction:.35,
   plugin_weights:{trend:100,momentum:0,volatility:0,reversion:0},
@@ -22,8 +23,8 @@ async function withServer(fn,options={}){
   const server=createGameServer({
     store:{public:async()=>snapshot().growth,complete:()=>{writes++;throw Error('XP write')},
       equip:()=>{writes++;throw Error('gear write')}},
-    companionStore:{read:async()=>companion,save:()=>{writes++;throw Error('companion write')}},
-    modelShopStore:shop,
+    companionStore:{read:async()=>options.companion??companion,save:()=>{writes++;throw Error('companion write')}},
+    modelShopStore:options.modelShopStore??shop,
     loadSnapshot:options.loadSnapshot|| (async()=>snapshot()),
     predict:async plan=>{predictions++;return pythonPredict(plan);},
   });
@@ -46,6 +47,7 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       const {status,data}=await post(base,{amount,model_id:'self'});
       assert.equal(status,200,JSON.stringify(data));
       assert.equal(data.mode,'SIMPLE_SYNTHETIC_PRACTICE_ONLY');
+      assert.equal(data.companion_name,null);
       assert.equal(data.invested_coins,amount);
       assert.equal(data.leverage,1,'legacy requests remain x1');
       assert.equal(data.normal_profit_coins,data.profit_coins);
@@ -151,4 +153,29 @@ test('cannot use others model without purchase; single owned id usable',async()=
     assert.equal((await shop.public()).coins,120);
     assert.deepEqual(read(),{writes:0,predictions:1});
   });
+});
+
+test('saved companion attribution is server-backed, self-only and read-only',async()=>{
+  const saved={revision:1,created:true,companion:validateCompanion({
+    name:'検証<&"相棒',hair_color:'#8882db',clothing_color:'#92e1d4',
+    approach:'trend',risk_percent:35,
+  })};
+  const before=structuredClone(saved);
+  let licenses=0;
+  await withServer(async({base,read})=>{
+    const self=await post(base,{amount:1000,model_id:'self'});
+    const demo=await post(base,{amount:1000,model_id:'demo_stub'});
+    assert.equal(self.status,200,JSON.stringify(self.data));
+    assert.equal(demo.status,200,JSON.stringify(demo.data));
+    assert.equal(self.data.companion_name,saved.companion.name);
+    assert.equal(demo.data.companion_name,null);
+    const {companion_name:selfName,model_id:selfId,...selfResult}=self.data;
+    const {companion_name:demoName,model_id:demoId,...demoResult}=demo.data;
+    assert.deepEqual(selfResult,demoResult,'attribution leaves calculation and prices identical');
+    assert.deepEqual(saved,before);
+    assert.equal(licenses,1);
+    assert.deepEqual(read(),{writes:0,predictions:2});
+  },{companion:saved,modelShopStore:{licensedModel:async id=>{
+    assert.equal(id,'demo_stub');licenses++;return structuredClone(MODEL);
+  }}});
 });

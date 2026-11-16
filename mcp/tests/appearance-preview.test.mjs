@@ -77,7 +77,7 @@ test('catalog-derived lookup blocks deleted/non-image drafts without proxying im
 
 class Element {
   constructor(){
-    this.handlers={};this.children=[];this.attributes={};this.value='';
+    this.handlers={};this.children=[];this.attributes={};this.dataset={};this.value='';
     this.hidden=false;this.disabled=false;this.textContent='';
   }
   addEventListener(k,fn){this.handlers[k]=fn;}
@@ -92,16 +92,27 @@ async function mount(drafts=catalog().drafts) {
     if(!nodes.has(id))nodes.set(id,new Element());
     return nodes.get(id);
   };
-  const fetch=async path=>{
+  const fetch=async (path,options)=>{
     calls.push(path);
+    assert.equal(options?.method ?? 'GET','GET','preview must only read metadata');
     if(path==='/api/growth')return {ok:true,json:async()=>({
       revision:0,slots:[{slot:'mine',level:1,xp:0,gear:'none',
         gear_options:[{id:'none',unlocked:true,name:'装備なし',icon:'·'}]}]})};
     if(path==='/api/appearance/drafts')return {ok:true,json:async()=>({drafts})};
+    if(path==='/api/looks')return {ok:true,json:async()=>({revision:0,created:false,
+      look:{hair_style:'bob',expression:'cheerful',accessory:'ribbon'}})};
+    if(path==='/api/companion')return {ok:true,json:async()=>({revision:0,created:false,
+      companion:{name:'私の相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35}})};
+    if(path==='/api/artwork')return {ok:true,json:async()=>({revision:0,created:false,
+      slots:Object.fromEntries(['base','hair','face','outfit'].map(slot=>[slot,{exists:false,mime:null,size:0}]))})};
     throw Error('unexpected browser fetch '+path);
   };
   runInNewContext(script,{document:{getElementById:$,createElement:()=>new Element()},fetch});
+  // Drain initialization fetch/json continuations before firing UI events or ending a test.
   await new Promise(resolve=>setImmediate(resolve));
+  assert.match($('lookStatus').textContent,/パーツは未保存/);
+  assert.match($('companionStatus').textContent,/まだ未作成/);
+  assert.match($('artworkStatus').textContent,/まだ画像は保存されていません/);
   return {get:$,calls,click:async(id,evt='click')=>$(id).click(evt)};
 }
 test('UI keeps draft visuals separate from saved companion rules, falls back on deleted image, never contacts Python directly',async()=>{

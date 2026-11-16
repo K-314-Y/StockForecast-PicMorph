@@ -491,7 +491,10 @@ element('quickRun').addEventListener('click',async()=>{
     const heading=document.createElement('h3');
     heading.textContent='12日間の試算結果';
     const summary=document.createElement('p');
-    summary.textContent='今回のAI：'+ordered.model_name+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
+    const resultModelName=ordered.model_id==='self' &&
+      typeof value.companion_name==='string' && value.companion_name.trim() ?
+      '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
+    summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
       (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
         '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
         (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
