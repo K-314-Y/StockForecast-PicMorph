@@ -38,6 +38,7 @@ async function mount({created=false,conflict=false}={}) {
     else throw Error('unexpected '+path);
     return {ok:true,json:async()=>value};
   };
+  get('adventureMode').value='solo';
   runInNewContext(script,{document:{getElementById:get,createElement:()=>new Element()},fetch});
   await new Promise(r=>setImmediate(r));
   return {get,calls,fire:(id,event)=>get(id).fire(event)};
