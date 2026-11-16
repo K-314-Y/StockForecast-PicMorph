@@ -69,6 +69,137 @@ async function mount(models=[]) {
   return {get,calls,scrolls,storageWrites,document,state,fire:(id,event)=>get(id).fire(event)};
 }
 
+// Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
+function htmlNodes() {
+  const stack=[],nodes=[];
+  const voidTags=new Set(['area','base','br','col','embed','hr','img','input','link','meta','source','track','wbr']);
+  for(const match of html.matchAll(/<(\/?)([a-z][\w-]*)\b([^>]*)>/gi)) {
+    const [,closing,tag,attributes]=match;
+    if(closing){assert.equal(stack.pop()?.tag,tag);continue;}
+    const node={tag,id:attributes.match(/\bid="([^"]+)"/)?.[1],attributes,
+      parents:stack.map(parent=>parent.id),offset:match.index};
+    nodes.push(node);
+    if(!voidTags.has(tag))stack.push(node);
+  }
+  assert.equal(stack.length,0);
+  return nodes;
+}
+
+test('the single original scene is the first game panel, outside advanced training',()=>{
+  const nodes=htmlNodes();
+  const get=id=>nodes.find(node=>node.id===id);
+  const front=get('frontCharacter');
+  assert.equal(front.tag,'section');
+  assert.deepEqual(front.parents,[undefined,undefined,undefined]); // html > body > main
+  assert.doesNotMatch(front.attributes,/\bhidden\b/);
+  assert.equal(nodes.find(node=>node.tag==='section').id,'frontCharacter');
+  assert.ok(front.offset<get('scene').offset);
+  assert.ok(get('scene').offset<get('simpleHome').offset);
+  assert.ok(get('simpleHome').offset<get('advancedEntry').offset);
+  for(const id of ['scene','companionName','speech','chibi','portrait','artworkStage',
+    'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption']) {
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+    assert.ok(get(id).parents.includes('frontCharacter'),id);
+    assert.ok(!get(id).parents.includes('advancedEntry'),id);
+    if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
+  }
+  const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
+  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork']);
+  for(const button of buttons)assert.match(button.attributes,/type="button"/);
+  for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
+    assert.ok(get(id).parents.includes('simpleHome'),id);
+  for(const id of ['play','companionControls','artworkControls','artworkWorkshop','brainControls',
+    'modelLabSection','modelShopSection','arenaSection','growthInfo'])
+    assert.ok(get(id).parents.includes('advancedEntry'),id);
+  assert.match(html,/未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示/);
+  assert.match(html,/髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存/);
+});
+
+test('both front editing actions precede the short save explanation',()=>{
+  const nodes=htmlNodes();
+  const front=nodes.filter(node=>node.parents.includes('frontCharacter'));
+  const heading=front.find(node=>node.id==='frontCharacterTitle');
+  const paragraphs=front.filter(node=>node.tag==='p'&&node.offset>heading.offset);
+  assert.equal(paragraphs.length,2);
+  for(const id of ['quickCustomize','quickArtwork']) {
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+    const button=front.find(node=>node.id===id);
+    assert.equal(button.tag,'button');
+    assert.match(button.attributes,/type="button"/);
+    assert.ok(button.offset>heading.offset);
+    assert.ok(button.offset<paragraphs[0].offset,id+' must be before explanatory copy');
+  }
+  const copy=html.slice(paragraphs[0].offset,html.indexOf('</section>',paragraphs[0].offset));
+  assert.ok(copy.replace(/<[^>]*>/g,'').trim().length<=120,'keep the front hint short');
+});
+
+test('front actions reuse editor and artwork navigation, focus without saves or mutations',async()=>{
+  const {get,fire,calls,storageWrites,scrolls,document}=await mount();
+  const before=calls.slice();
+  for(const [button,target,opened] of [
+    ['quickCustomize','companionEditorTitle',['advancedEntry','companionControls']],
+    ['quickArtwork','artworkTitle',['advancedEntry','artworkControls','artworkWorkshop']],
+  ]) {
+    for(const id of opened)get(id).open=false;
+    await fire(button);
+    for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(document.activeElement,get(target));
+    assert.equal(get(target).focusOptions.preventScroll,true);
+    assert.equal(scrolls.at(-1),get(target==='artworkTitle'?'artworkControls':target));
+    assert.deepEqual(calls,before);
+    assert.deepEqual(storageWrites,[]);
+  }
+  assert.match(script,/element\('quickCustomize'\)\.addEventListener\('click',openEditor\)/);
+  assert.match(script,/element\('quickArtwork'\)\.addEventListener\('click',openArtwork\)/);
+});
+
+test('front layout stacks on mobile, wraps long text and keeps native focus and touch targets',()=>{
+  assert.match(html,/\.hero\{display:block;min-inline-size:0\}/);
+  assert.match(html,/\.front-character\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/);
+  assert.match(html,/@media\(max-width:680px\)\{\s*\.front-character\{grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(html,/\.front-character>\*\{min-inline-size:0\}/);
+  assert.match(html,/\.front-character-copy\{overflow-wrap:anywhere\}/);
+  assert.match(html,/\.front-character \.actions button\{max-inline-size:100%;white-space:normal\}/);
+  assert.match(html,/button\{[^}]*min-height:44px/);
+  assert.match(html,/button:focus-visible[^}]*outline:3px/);
+  assert.match(html,/\.actions\{[^}]*flex-wrap:wrap/);
+});
+
+test('mobile front stage overrides desktop spacing while allowing speech and font scaling to grow',()=>{
+  const css=html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const mobile=css.slice(css.indexOf('@media(max-width:680px){'),css.indexOf('\n.scene{'));
+  // Match the desktop selector specificity: a generic .scene mobile rule loses to it.
+  assert.match(mobile,/\.front-character \.scene\{min-height:275px;padding:10px 12px\}/);
+  assert.match(mobile,/\.front-character \.speech\{margin:0 0 8px;padding:8px 12px;min-height:0\}/);
+  assert.match(mobile,/\.front-character \.scene>h2\{[^}]*overflow-wrap:anywhere;max-width:100%/);
+  assert.match(mobile,/\.front-character #artworkStage\{width:min\(150px,100%\)\}/);
+  assert.match(mobile,/\.front-character \.scene>:is\(#chibi,#artworkStage,#portrait\)\{flex-shrink:0\}/);
+  assert.doesNotMatch(mobile,/(?:^|[;{])(?:height|max-height):/);
+  assert.doesNotMatch(css,/position:\s*(?:fixed|sticky)/);
+});
+
+test('mobile creator select can shrink within its grid without clipping the page',()=>{
+  const css=html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const mobile=css.slice(css.indexOf('@media(max-width:680px){'),css.indexOf('\n.scene{'));
+  const rule=mobile.match(/\.creator-grid select\{([^}]+)\}/)?.[1];
+  assert.ok(rule,'constrain the native select only at mobile widths');
+  const declarations=Object.fromEntries(rule.split(';').map(part=>part.split(':').map(s=>s.trim())));
+  assert.equal(declarations['min-width'],'0');
+  assert.equal(declarations.width,'100%');
+  assert.equal(declarations['box-sizing'],'border-box');
+  assert.doesNotMatch(css,/overflow-x:\s*(?:hidden|clip)/);
+  assert.match(css,/\.creator-grid\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  const select=html.match(/<select id="creatorApproach"[^>]*>[\s\S]*?<\/select>/)[0];
+  assert.deepEqual([...select.matchAll(/<option value="([^"]+)"/g)].map(match=>match[1]),
+    ['trend','momentum','reversion','volatility']);
+  assert.doesNotMatch(select,/\b(?:disabled|hidden)\b/);
+});
+
+test('practice heading connects the companion to twelve days and retains the standard AI fallback',()=>{
+  assert.match(html,/<h2 id="simpleHomeTitle">この相棒と12日間を練習<\/h2>/);
+  assert.match(html,/<select id="quickModel"[^>]*>[\s\S]*?<option value="self">自分のAI（未作成なら標準AI）<\/option>/);
+});
+
 test('shop and editor navigation opens details, scrolls and focuses the destination',async()=>{
   const {get,fire,scrolls,document}=await mount();
   for(const id of ['quickShop','quickNextShop']) {
@@ -523,6 +654,7 @@ test('input, model, leverage, shortcuts, new practice and retry clear replay sta
     assert.equal(get('quickReplay').hidden,true,id);
     assert.equal(get('quickReplayDay').textContent,'',id);
     assert.equal(get('quickReplayContext').textContent,'',id);
+    assert.equal(get('quickTacticsDay').textContent,'',id);
     assert.equal(get('quickPrevious').disabled,true);
     assert.equal(get('quickFollowing').disabled,true);
     await fire('quickFollowing');
@@ -553,11 +685,13 @@ test('invalid signals and synthetic prices reject the entire result and clear co
     assert.match(get('quickStatus').textContent,/練習結果の形式が不正です/);
     for(const id of ['quickReplay','quickResult','quickNext'])assert.equal(get(id).hidden,true);
     assert.equal(get('quickReplayContext').textContent,'');
+    assert.equal(get('quickTacticsDay').textContent,'');
   }
   state.practice=async()=>({error:'通信エラー'});
   await fire('quickForm','submit');
   await fire('quickRun');
   assert.equal(get('quickReplayContext').textContent,'');
+  assert.equal(get('quickTacticsDay').textContent,'');
 });
 
 test('replay highlights are result-only native buttons and jump using full wallet deltas',async()=>{
@@ -644,7 +778,7 @@ test('replay highlights clear during retry and after API or validation errors',a
   const {get,fire,state}=await mount();
   const valid=await state.practice({amount:1000,leverage:1});
   for(const failure of [{error:'通信エラー'},{...valid,daily_balances:[]},
-    {...valid,liquidated_at_step:1.5}]) {
+    {...valid,liquidated_at_step:1.5},{...valid,normal_profit_coins:NaN}]) {
     state.practice=async()=>valid;
     await fire('quickForm','submit');
     await fire('quickRun');
@@ -653,6 +787,7 @@ test('replay highlights clear during retry and after API or validation errors',a
     let finish;
     state.practice=()=>new Promise(resolve=>{finish=resolve;});
     const running=fire('quickRun');
+    assert.equal(get('quickTacticsDay').textContent,'');
     assert.equal(get('quickReplay').hidden,true);
     for(const id of ['quickBestDay','quickWorstDay'])assert.equal(get(id).disabled,true);
     finish(failure);
@@ -665,5 +800,101 @@ test('replay highlights clear during retry and after API or validation errors',a
     }
     assert.equal(get('quickReplay').hidden,true);
     assert.equal(get('quickReplayDay').textContent,'');
+    assert.equal(get('quickTacticsDay').textContent,'');
+  }
+});
+
+
+test('result voice follows best/worst clicks without model-name spoofing, requests or persistence',async()=>{
+  const name='<img src=x onerror=alert(1)>自作キャラ';
+  for(const model of ['self','owned']) {
+    const {get,fire,calls,storageWrites}=await mount([{id:'owned',name,owned:true}]);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickTacticsDay').textContent,'');
+    assert.equal(get('quickTacticsSummary'),undefined);
+    assert.doesNotMatch(script+html,/方向に合った|逆方向|summarizeTactics|quickTacticsSummary/);
+    assert.match(html,/<p id="quickTacticsDay" aria-label="今回のAIからひとこと"><\/p>/);
+    get('quickModel').value=model;
+    get('quickAmount').value='2345';
+    await fire('quickForm','submit');
+    await fire('quickRun');
+    assert.equal(get('quickTacticsDay').textContent,'さあ、12日間の作戦を一緒に振り返ろう！');
+    const before=calls.length;
+    await fire('quickBestDay');
+    assert.equal(get('quickTacticsDay').textContent,'やった！ここが一番残高の増えた日だね。');
+    await fire('quickWorstDay'); // CASH + falling price still has a full-wallet loss.
+    assert.equal(get('quickTacticsDay').textContent,'うわっ、ここが一番残高の減った日だね…。');
+    assert.match(get('quickReplayDay').textContent,/前日比：-15 C/);
+    for(let day=3;day<=12;day++)await fire('quickFollowing');
+    assert.doesNotMatch(get('quickTacticsDay').textContent,/自作キャラ|<img|損失なし|必ず利益/);
+    assert.equal(calls.length,before);
+    assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+    assert.deepEqual(storageWrites,[]);
+    assert.equal(get('quickModel').value,model);
+    assert.equal(get('quickAmount').value,'2345');
+  }
+});
+
+test('voice distinguishes original price direction and flat days independently of wallet',async()=>{
+  const {get,fire,state}=await mount();
+  const valid=await state.practice({amount:1000,leverage:1});
+  state.practice=async()=>({...valid,final_balance:10000,profit_coins:0,
+    daily_balances:Array(13).fill(10000),
+    daily_synthetic_prices:[100,110,100,100,90,100,100,100+1e-12,100,100,100,100,100],
+    daily_ai_signals:['LONG','LONG','LONG','CASH','CASH','CASH','LONG','CASH','LONG','CASH','LONG','CASH']});
+  await fire('quickForm','submit');await fire('quickRun');
+  const expected=[
+    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
+    '株を持つ方針の日に下がっちゃった…。',
+    '今日は値動きがなかったね。',
+    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。',
+    '上がった日は現金で待ったんだね。乗り遅れたかも。',
+    '今日は値動きがなかったね。',
+    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
+    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。'];
+  for(const text of expected) {
+    await fire('quickFollowing');assert.equal(get('quickTacticsDay').textContent,text);
+  }
+});
+
+test('all CASH in falling market never describes avoidance as profit or zero wallet loss',async()=>{
+  for(const fee of [0,1]) {
+    const {get,fire,state}=await mount();
+    const valid=await state.practice({amount:1000,leverage:1});
+    state.practice=async()=>({...valid,final_balance:10000-fee*12,profit_coins:-fee*12,
+      daily_balances:Array.from({length:13},(_,i)=>10000-fee*i),
+      daily_synthetic_prices:Array.from({length:13},(_,i)=>100-i),
+      daily_ai_signals:Array(12).fill('CASH')});
+    await fire('quickForm','submit');await fire('quickRun');
+    assert.equal(get('quickBestDay').disabled,true);
+    for(let day=1;day<=12;day++) {
+      await fire('quickFollowing');
+      assert.equal(get('quickTacticsDay').textContent,fee && day===1 ?
+        'うわっ、ここが一番残高の減った日だね…。' :
+        '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。');
+      assert.doesNotMatch(get('quickTacticsDay').textContent,/損失なし|損失ゼロ|無損失|無傷|ダメージなし|残高は減らない|利益が出|儲か/);
+    }
+  }
+});
+
+test('25x stopout voice takes priority over worst day and changes after stopout',async()=>{
+  for(const stop of [1,2,12]) for(const signal of ['LONG','CASH']) for(const direction of [-1,1]) {
+    const {get,fire,state,calls}=await mount();
+    const valid=await state.practice({amount:1000,leverage:25});
+    state.practice=async()=>({...valid,final_balance:9000,profit_coins:-1000,liquidated_at_step:stop,
+      daily_balances:Array.from({length:13},(_,i)=>i<stop?10000:9000),
+      daily_ai_signals:Array(12).fill(signal),
+      daily_synthetic_prices:Array.from({length:13},(_,i)=>100+direction*i)});
+    get('quickLeverage').value='25';await fire('quickLeverage','change');
+    await fire('quickForm','submit');await fire('quickRun');
+    const before=calls.length;
+    await fire('quickWorstDay');
+    assert.equal(get('quickTacticsDay').textContent,'あっ…ここで投入したコインが尽きちゃった。悔しい！');
+    for(let day=stop+1;day<=12;day++) {
+      await fire('quickFollowing');
+      assert.equal(get('quickTacticsDay').textContent,'もう投入分は運用されていないけど、相場はまだ動いてるね。');
+    }
+    assert.equal(get('quickLeverage').value,'25');
+    assert.equal(calls.length,before);
   }
 });
