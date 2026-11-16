@@ -29,7 +29,7 @@ async function mount({created=false,conflict=false}={}) {
         saved={revision:saved.revision+1,created:true,companion:body.companion};
       }
       value=JSON.parse(JSON.stringify(saved));
-    } else if(path==='/api/growth') value={revision:0,slots:[{slot:'mine',level:1,xp:0,gear:'none',gear_options:[]}]};
+    } else if(path==='/api/growth') value={revision:0,slots:[{slot:'mine',level:1,xp:0,achievements:[]}]};
     else if(path==='/api/practice') value={mode:'PRACTICE_SYNTHETIC_ONLY',companion_name:saved.companion.name,
       companion_created:saved.created,companion_revision:saved.revision,approach:saved.companion.approach,
       risk_percent:saved.companion.risk_percent,final_coins:10000,profit_coins:0,max_drawdown_pct:0,

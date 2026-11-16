@@ -210,7 +210,7 @@ function showResult(data) {
   match=data;
   $('arenaOutput').hidden=false;
   $('arenaSummary').textContent='同じ12日・各'+coins(data.initial_coins_per_model)+
-    'コイン・手数料'+coins(data.fee_rate_pct)+'%・装備なし。買って保有した場合：'+
+    'コイン・手数料'+coins(data.fee_rate_pct)+'%。買って保有した場合：'+
     signed(data.benchmark_buy_hold_pct)+'%。XPなし、架空データのみ。';
   drawChart(data);
   const container=$('arenaStandings');

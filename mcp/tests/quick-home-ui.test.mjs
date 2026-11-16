@@ -184,7 +184,7 @@ test('growth bridge after practice only opens, scrolls and focuses the existing 
   ]);
   const priorCalls=calls.slice();
   const preserved=['quickModel','quickAmount','quickLeverage','quickResult','quickReplay',
-    'quickReplayDay','quickReview','quickNext','growthInfo','currentGear','gear','reward','claim','play'];
+    'quickReplayDay','quickReview','quickNext','growthInfo','growthAchievements','reward','claim','play'];
   const snapshot=()=>preserved.map(id=>{
     const node=get(id);
     return {id,value:node.value,text:node.textContent,hidden:node.hidden,disabled:node.disabled,
@@ -214,7 +214,8 @@ test('growth bridge after practice only opens, scrolls and focuses the existing 
 test('growth bridge uses a native button with adjacent XP and synthetic practice boundaries',()=>{
   const next=html.match(/<div id="quickNext" hidden>([\s\S]*?)<p id="quickStatus"/)[1];
   assert.match(next,/<button id="quickGrow"[^>]*type="button"[^>]*aria-controls="advancedEntry"[^>]*aria-describedby="quickGrowthHelp">相棒を育てる冒険へ<\/button>/);
-  assert.match(next,/id="quickGrowthHelp"[^>]*>今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPがたまると装備が解放されます。/);
+  assert.match(next,/id="quickGrowthHelp"[^>]*>今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPとレベル、達成した課題を冒険記録で確認できます。/);
+  assert.doesNotMatch(next,/装備|focus_lens|spark_charm|calm_halo/);
   assert.match(next,/どちらも架空相場の練習で、実相場の予測力を示すものではありません。/);
   for(const id of ['quickAgain','quickNextShop'])assert.ok(next.includes('id="'+id+'"'));
   assert.match(html,/<button id="claim" type="button" class="primary" disabled>XPを受け取る<\/button>/);

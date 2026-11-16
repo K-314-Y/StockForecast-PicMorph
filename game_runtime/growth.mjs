@@ -1,5 +1,5 @@
 /**
- * Local-only tutorial XP and gear storage owned by the Node game.
+ * Local-only tutorial XP storage owned by the Node game.
  * Compatible with growth.py schema 1, but NEVER writes to the Python file.
  * One process is the sole writer. No online auth/multi-user support yet.
  */
@@ -18,13 +18,8 @@ const CHALLENGES = Object.freeze({
   diversify_slots: {name:'2体以上に配分', xp:10},
   full_allocation: {name:'合計100%を配分', xp:10},
 });
-const GEAR = Object.freeze([
-  {id:'none', name:'装備なし', icon:'·', unlock_xp:0, plugin:null, bonus:0},
-  {id:'focus_lens', name:'集中レンズ', icon:'🔎', unlock_xp:20, plugin:'trend', bonus:10},
-  {id:'spark_charm', name:'ひらめきの飾り', icon:'⚡', unlock_xp:30, plugin:'momentum', bonus:15},
-  {id:'calm_halo', name:'静寂の輪', icon:'🛡️', unlock_xp:40, plugin:'volatility', bonus:15},
-]);
-const GEARS = new Map(GEAR.map(x => [x.id, x]));
+// Read-only schema-1 metadata. Never exposed or applied to a model.
+const LEGACY_GEAR_XP = new Map([['none',0],['focus_lens',20],['spark_charm',30],['calm_halo',40]]);
 
 export class GrowthError extends Error {
   constructor(message, status = 400) {super(message);this.status = status;}
@@ -32,7 +27,7 @@ export class GrowthError extends Error {
 
 function empty() {
   return {schema:1, revision:0, slots:Object.fromEntries(SLOTS.map(k=>[k,{
-    achievements:[],gear:'none',
+    achievements:[],
   }]))};
 }
 
@@ -53,12 +48,12 @@ function validateRecord(value) {
   for (const k of SLOTS) {
     const slot = value.slots[k];
     if (!slot || typeof slot !== 'object' || Array.isArray(slot) ||
-        Object.keys(slot).sort().join('|') !== 'achievements|gear' ||
+        !['achievements','achievements|gear'].includes(Object.keys(slot).sort().join('|')) ||
         !Array.isArray(slot.achievements) ||
         slot.achievements.some(a => typeof a !== 'string' || !Object.hasOwn(CHALLENGES, a)) ||
         new Set(slot.achievements).size !== slot.achievements.length ||
-        typeof slot.gear !== 'string' || !GEARS.has(slot.gear) ||
-        xpOf(slot) < GEARS.get(slot.gear).unlock_xp) {
+        (Object.hasOwn(slot, 'gear') && (typeof slot.gear !== 'string' ||
+          !LEGACY_GEAR_XP.has(slot.gear) || xpOf(slot) < LEGACY_GEAR_XP.get(slot.gear)))) {
       throw new GrowthError('育成記録の内容が不正です', 503);
     }
   }
@@ -72,11 +67,9 @@ export function publicGrowth(record) {
     slots:SLOTS.map(slot => {
       const state=record.slots[slot], xp=xpOf(state);
       return {slot, xp, level:1+Number(xp>=20)+Number(xp>=40),
-        achievements:[...state.achievements], gear:state.gear,
-        gear_options:GEAR.map(g => ({...g,unlocked:xp>=g.unlock_xp}))};
+        achievements:[...state.achievements]};
     }),
     challenges:Object.entries(CHALLENGES).map(([id,value])=>({id,...value})),
-    notice:'XPは各練習課題につき一度だけ。利益・予測精度では増えません。',
   };
 }
 
@@ -159,25 +152,6 @@ export function createGrowthStore({file=GROWTH_FILE,legacyFile=LEGACY_FILE}={}) 
         }
         if(changed) {next.revision++;await durableWrite(file,next);}
         return {earned_xp,growth:publicGrowth(next)};
-      });
-    },
-    equip(slot,gearId,expectedRevision) {
-      return serialized(async()=>{
-        if(!SLOTS.includes(slot) || typeof slot!=='string' ||
-            typeof gearId!=='string' || !GEARS.has(gearId)) {
-          throw new GrowthError('キャラまたは装備が不正です');
-        }
-        const old=await read();expectRevision(old,expectedRevision);
-        const next=structuredClone(old);
-        if(xpOf(next.slots[slot])<GEARS.get(gearId).unlock_xp) {
-          throw new GrowthError('装備はまだ解放されていません');
-        }
-        if(next.slots[slot].gear!==gearId) {
-          next.slots[slot].gear=gearId;
-          next.revision++;
-          await durableWrite(file,next);
-        }
-        return publicGrowth(next);
       });
     },
   };

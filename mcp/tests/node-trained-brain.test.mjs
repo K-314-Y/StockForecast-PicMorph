@@ -118,8 +118,7 @@ test('UI selects a saved brain separately from appearance and pins execution att
     const body=opt?.body?JSON.parse(opt.body):undefined;
     calls.push({path,body});
     if(path==='/api/growth')return {ok:true,json:async()=>({revision:2,slots:[{
-      slot:'mine',gear:'none',level:1,xp:0,
-      gear_options:[{id:'none',icon:'·',name:'なし',unlocked:true}]}]})};
+      slot:'mine',level:1,xp:0,achievements:[]}]})};
     if(path==='/api/trained/versions')return {ok:true,json:async()=>({versions:[{id,source_draft_id:draftId}]})};
     if(path==='/api/practice'){
       const values={mode:'PRACTICE_SYNTHETIC_ONLY',decisions:Array.from({length:12},(_,i)=>({

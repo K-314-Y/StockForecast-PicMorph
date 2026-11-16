@@ -1,7 +1,6 @@
 const $ = id => document.getElementById(id);
 const fmt = n => Number(n).toLocaleString('ja-JP', {maximumFractionDigits: 2});
 let growthRevision = null;
-let currentGearId = null;
 let currentGrowth = null;
 let ticket = null;
 let busy = false;
@@ -65,56 +64,22 @@ function refreshButtons() {
   $('skinSelect').disabled = busy;
   $('loadBrains').disabled = busy || companionSaving || ticket !== null;
   $('brainSelect').disabled = busy || companionSaving || ticket !== null;
-  $('gear').disabled = busy || growthRevision === null;
-  $('equip').disabled = busy || growthRevision === null ||
-    !$('gear').value || $('gear').value === currentGearId;
   $('next').disabled = busy || !result || dayIndex >= result.decisions.length - 1;
 }
 
 async function loadGrowth() {
   const growth = await call('/api/growth');
   const mine = Array.isArray(growth.slots) && growth.slots.find(item => item.slot === 'mine');
-  if (!mine || !Array.isArray(mine.gear_options) || !Number.isSafeInteger(growth.revision)) {
+  if (!mine || !Array.isArray(mine.achievements) || !Number.isSafeInteger(growth.revision)) {
     throw Error('育成記録の形式が不正です');
   }
   currentGrowth = mine;
   growthRevision = growth.revision;
-  currentGearId = mine.gear;
   $('growthInfo').textContent = 'Lv.' + mine.level + ' / ' + mine.xp + ' XP';
-  const milestones = mine.gear_options.filter(item => item.unlock_xp > 0)
-    .sort((a, b) => a.unlock_xp - b.unlock_xp);
-  const maximum = Math.max(1, ...milestones.map(item => item.unlock_xp));
-  $('growthProgress').max = maximum;
-  $('growthProgress').value = Math.min(mine.xp, maximum);
-  const next = milestones.find(item => !item.unlocked);
-  $('growthNext').textContent = next ?
-    '次の装備「' + next.name + '」まであと ' + Math.max(0, next.unlock_xp - mine.xp) + ' XP' :
-    'すべて解放済み';
-  $('growthProgress').setAttribute('aria-valuetext', mine.xp + ' XP / ' + maximum + ' XP。' + $('growthNext').textContent);
-  $('growthMilestones').replaceChildren();
-  for (const item of milestones) {
-    const milestone = document.createElement('li');
-    milestone.dataset.unlocked = String(item.unlocked);
-    milestone.textContent = item.unlock_xp + ' XP · ' + item.icon + ' ' + item.name +
-      (item.unlocked ? '：解放済み' : '：未解放');
-    $('growthMilestones').append(milestone);
-  }
-  const options = $('gear');
-  options.replaceChildren();
-  for (const item of mine.gear_options) {
-    const option = document.createElement('option');
-    option.value = item.id;
-    option.disabled = !item.unlocked;
-    option.textContent = item.icon + ' ' + item.name +
-      (item.unlocked ? '' : '（解放まであと ' + (item.unlock_xp - mine.xp) + ' XP）');
-    options.append(option);
-  }
-  options.value = mine.gear;
-  const equipped = mine.gear_options.find(item => item.id === mine.gear);
-  $('currentGear').textContent = '現在の装備: ' + (equipped ? equipped.icon + ' ' + equipped.name : mine.gear);
-  $('sceneGear').hidden = !equipped || equipped.id === 'none';
-  $('sceneGear').textContent = equipped && equipped.id !== 'none' ? equipped.icon : '';
-  $('sceneGear').setAttribute('aria-label', equipped ? '現在の装備: ' + equipped.name : '装備なし');
+  $('growthAchievements').textContent = mine.achievements.length ?
+    '達成課題：' + mine.achievements.map(id =>
+      growth.challenges?.find(item => item.id === id)?.name || id).join(' / ') :
+    '達成課題：まだありません';
   refreshButtons();
   return growth;
 }
@@ -189,7 +154,7 @@ function showResult(value) {
   $('brainProof').hidden = !trained;
   $('brainProofText').textContent = trained ?
     '保存版のモデル設定: ' + value.brain.parameters_sha256 +
-    ' / 装備込みの実行モデル: ' + value.brain.effective_sha256 : '';
+    ' / 実行モデル: ' + value.brain.effective_sha256 : '';
   $('final').textContent = fmt(value.final_coins) + ' C';
   $('profit').textContent = (value.profit_coins >= 0 ? '+' : '') + fmt(value.profit_coins) + ' C';
   $('drawdown').textContent = fmt(value.max_drawdown_pct) + '%';
@@ -237,7 +202,7 @@ async function play() {
     }
     showResult(value);
     ticket = typeof value.training_ticket === 'string' ? value.training_ticket : null;
-    $('status').textContent = '練習完了！ 12日間を振り返り、XPを受け取って装備を変えよう。';
+    $('status').textContent = '練習完了！ 12日間を振り返り、XPを受け取って冒険を記録しよう。';
     if (ticket) $('reward').textContent = '受取前のXPがあります。次の練習の前に受け取ってください。';
     else $('reward').textContent = '受取可能なXPはありません。';
     try { await loadGrowth(); }
@@ -285,15 +250,9 @@ async function claim() {
     if (response.earned_xp?.mine > 0 && before && after && after.xp > before.xp) {
       const messages = [];
       if (after.level > before.level) messages.push('Lv.' + before.level + ' → Lv.' + after.level);
-      for (const item of after.gear_options) {
-        if (item.unlock_xp > 0 && item.unlocked &&
-            before.gear_options.some(old => old.id === item.id && !old.unlocked)) {
-          messages.push('新装備「' + item.name + '」が解放！');
-        }
-      }
       $('growthCelebration').textContent = messages.join(' / ');
       $('scene').dataset.growing = 'true';
-      scene('growth', '冒険の記録が増えたね！装備を選んで再挑戦しよう。');
+      scene('growth', '自分の相棒の冒険記録が増えたね！');
     }
   } catch (error) {
     $('reward').textContent = '受取結果を確定できません: ' + error.message +
@@ -302,36 +261,6 @@ async function claim() {
     catch (refreshError) {
       growthRevision = null;
       $('growthInfo').textContent = '育成確認に失敗: ' + refreshError.message;
-    }
-  } finally {
-    busy = false;
-    refreshButtons();
-  }
-}
-
-async function equip() {
-  if (busy || growthRevision === null || !$('gear').value ||
-      $('gear').value === currentGearId) return;
-  busy = true; refreshButtons();
-  $('gearStatus').textContent = '装備を保存しています…';
-  try {
-    await call('/api/growth/equip', {
-      slot: 'mine', gear_id: $('gear').value,
-      expected_growth_revision: growthRevision,
-    });
-    $('gearStatus').textContent = '装備を変更しました。次の練習で効果を試そう。';
-    try { await loadGrowth(); }
-    catch (error) {
-      growthRevision = null;
-      $('growthInfo').textContent = '装備変更は成功しました。育成表示は再読込してください: ' + error.message;
-    }
-    scene('happy', '新しい装備、似合ってる？次の冒険に行こう！');
-  } catch (error) {
-    $('gearStatus').textContent = '装備を確認できません: ' + error.message;
-    try { await loadGrowth(); }
-    catch {
-      growthRevision = null;
-      $('growthInfo').textContent = '育成を読み込めません。画面を再読込してください。';
     }
   } finally {
     busy = false;
@@ -524,15 +453,12 @@ $('loadSkins').addEventListener('click', () => loadSkins());
 $('skinSelect').addEventListener('change', chooseSkin);
 $('play').addEventListener('click', play);
 $('claim').addEventListener('click', claim);
-$('equip').addEventListener('click', equip);
 $('discard').addEventListener('click', discard);
-$('gear').addEventListener('change', refreshButtons);
 $('refreshGrowth').addEventListener('click', async () => {
   if (busy) return;
   busy = true; refreshButtons();
   try {
     await loadGrowth();
-    $('gearStatus').textContent = '育成情報を更新しました。';
   } catch (error) {
     growthRevision = null;
     $('growthInfo').textContent = '育成を再取得できません: ' + error.message;

@@ -234,14 +234,14 @@ export function makeMcpServer() {
   });
 
   server.registerTool("get_creature_growth",{
-    title:"キャラ育成のレベル・経験値・装備を見る",
+    title:"キャラ育成のレベル・経験値・実績を見る",
     description:"ローカルのチュートリアル実績を読み取る。経験値は仮想コインの利益で増えない。",
     inputSchema:{},
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
   },async()=>{
     try {
       const growth=await requestCore("/api/growth");
-      return {content:[{type:"text",text:"3体の育成課題・XP・装備を取得しました。"}],structuredContent:{growth}};
+      return {content:[{type:"text",text:"3体の育成課題・XP・レベル・実績を取得しました。"}],structuredContent:{growth}};
     }catch(e){return toolError(e)}
   });
 
@@ -262,22 +262,6 @@ export function makeMcpServer() {
         expected_growth_revision
       });
       return {content:[{type:"text",text:"チュートリアル課題の達成を記録しました。繰り返しても重複XPは得られません。"}],structuredContent:result};
-    }catch(e){return toolError(e)}
-  });
-
-  server.registerTool("equip_creature_gear",{
-    title:"育成で解放した装備をキャラへ付ける",
-    description:"キャラごとの育成XPで解放した装備を選ぶ。次回の架空シミュレーションで予測パラメータの感度が変化する。",
-    inputSchema:{
-      slot:z.enum(["mine","owl","turtle"]),
-      gear_id:z.enum(["none","focus_lens","spark_charm","calm_halo"]),
-      expected_growth_revision:expected,
-    },
-    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
-  },async({slot,gear_id,expected_growth_revision})=>{
-    try {
-      const growth=await requestCore("/api/growth/equip",{slot,gear_id,expected_growth_revision});
-      return {content:[{type:"text",text:"ゲーム内の装備を更新しました。"}],structuredContent:{growth}};
     }catch(e){return toolError(e)}
   });
 

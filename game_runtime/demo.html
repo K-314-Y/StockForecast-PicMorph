@@ -59,18 +59,9 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .scene[data-mood="cautious"] .chibi{transform:translateY(3px) rotate(-4deg)}
 .scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:companion-growth .7s ease-out 1}
 @keyframes companion-growth{50%{transform:translateY(-6px);filter:drop-shadow(0 0 8px #a1f1d1)}100%{transform:none}}
-#sceneGear{position:absolute;right:14px;bottom:48px;z-index:4;border:1px solid var(--mint);border-radius:50%;padding:8px;background:#162039;font-size:24px;line-height:1;pointer-events:none}
-#growthProgress{display:block;appearance:none;width:100%;min-width:0;height:24px;margin:10px 0;border:1px solid #526b87;border-radius:999px;overflow:hidden;background:#101a2f;accent-color:var(--mint);box-shadow:inset 0 2px 5px #0004}
-#growthProgress::-webkit-progress-bar{background:#101a2f;border-radius:999px;box-shadow:inset 0 2px 5px #0004}
-#growthProgress::-webkit-progress-value{background:linear-gradient(90deg,#51bda3,var(--mint));border-radius:999px;box-shadow:inset 0 2px 0 #ffffff40}
-#growthProgress::-moz-progress-bar{background:linear-gradient(90deg,#51bda3,var(--mint));border-radius:999px;box-shadow:inset 0 2px 0 #ffffff40}
-#growthMilestones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0;margin:12px 0 16px;line-height:1.65;font-size:13px}
-#growthMilestones li{display:block;min-width:0;padding:10px;border:1px solid #425575;border-radius:12px;background:#162039;color:var(--soft);overflow-wrap:anywhere}
-#growthMilestones li[data-unlocked="true"]{border-color:var(--mint);background:linear-gradient(145deg,#24463f,#19333b);color:#d6ffed;box-shadow:inset 0 2px 0 #a1f1d133}
 #growthCelebration{color:var(--mint);font-size:14px;font-weight:700;line-height:1.65;overflow-wrap:anywhere;margin:0}
 #growthCelebration:not(:empty){margin-top:12px;padding:10px 13px;border:1px solid #6cae98;border-left:3px solid var(--mint);border-radius:10px;background:#193b36}
 #growthCelebration:empty{display:none}
-@media(max-width:420px){#growthMilestones{grid-template-columns:1fr;gap:6px}#growthMilestones li{padding:8px 11px}}
 #companionName{max-width:100%;overflow-wrap:anywhere;text-align:center}
 .scene-note{z-index:1;font-size:11px;color:#cfddf5;text-align:center}
 #portrait{z-index:1;max-width:94%;width:220px;height:194px;object-fit:contain;margin-bottom:6px;filter:drop-shadow(0 8px 10px #0004)}
@@ -95,9 +86,8 @@ button,select{font:inherit}button{border:0;border-radius:12px;padding:12px 16px;
 .statgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}.stat{background:#121d33;border-radius:13px;padding:13px;min-width:0;font-size:12px;color:#bfcee7}.stat strong{display:block;color:#fff;font-size:clamp(18px,3vw,25px);margin-top:6px;overflow-wrap:anywhere}
 .review{background:#101c31;border:1px solid #3d567a;border-radius:14px;padding:15px;margin-top:15px}
 .progress{font-size:13px;color:#c8d9ed}.reward{border-top:1px solid #3e5976;margin-top:20px;padding-top:16px}
-.growth{display:grid;grid-template-columns:minmax(180px,1fr) minmax(190px,1fr);gap:15px;align-items:start}
 select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;border-radius:10px;padding:11px;min-height:44px}
-.gearline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.details{margin-top:16px}.details summary{cursor:pointer}
+.details{margin-top:16px}.details summary{cursor:pointer}
 .appearance-controls label,.brain-controls label{display:block;margin:12px 0 6px;font-weight:650}.appearance-controls a{color:#b1d9ff}
 .arena-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.arena-grid label{display:grid;gap:7px;font-weight:700;font-size:13px}.arena-grid select{width:100%}.arena-chart{width:100%;height:auto;display:block;border:1px solid #455877;border-radius:12px;background:#101d34;margin:12px 0}.arena-standings{display:grid;gap:11px;margin:16px 0}.arena-fighter{border:1px solid #455877;border-radius:15px;padding:15px;background:#101d34}.arena-fighter strong{font-size:18px}
 .arena-fighter{display:grid;grid-template-columns:110px minmax(0,1fr);column-gap:15px;align-items:center}
@@ -131,7 +121,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 @media(max-width:390px){.arena-fighter{grid-template-columns:86px minmax(0,1fr);gap:9px}.arena-avatar{width:84px;height:122px;transform-origin:center;}.arena-avatar .av-image{object-fit:contain}.arena-metrics{gap:6px}}
 .arena-metrics{display:flex;gap:12px;flex-wrap:wrap;margin:9px 0}.arena-metrics span{font-size:13px}.arena-days{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.arena-days button{min-width:42px;padding:9px}.arena-days button[aria-pressed=true]{background:var(--mint);color:#12303b}.arena-day-detail{border:1px solid var(--line);border-radius:13px;padding:13px;background:#101d34}.arena-day-detail p{margin:6px 0}.arena-note{font-size:13px;color:#cbdced}.creator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.creator-grid label{display:grid;gap:5px;font-size:13px}.creator-grid input{min-width:0;max-width:100%;font:inherit;border:1px solid #6c809c;border-radius:8px;padding:8px;background:#111c31;color:#fff;min-height:44px}.creator-grid input[type=color]{width:100%}.creator-note{font-size:13px;color:var(--soft)}
 [hidden]{display:none!important}
-@media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero,.growth{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
+@media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
 @media(prefers-reduced-motion:reduce){.scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:none}.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
 .lab-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;margin:12px 0}
 .lab-grid label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:650}
@@ -159,8 +149,8 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 </head>
 <body><main>
 <span class="eyebrow">CREATURE LAB · NODE PRACTICE</span>
-<h1>相棒と、12日間の予測冒険。</h1>
-<p class="sub">自分のAIか、解放済みのデモAIを選んで、試算額を入力。まずは12日間の練習から。</p>
+<h1>自分で作った相棒で冒険</h1>
+<p class="sub">自分で作ったキャラクターと、保存したイラスト・判断ルールで架空の12日間を冒険しよう。</p>
 <section class="panel simple-home" id="simpleHome" aria-labelledby="simpleHomeTitle">
  <span class="eyebrow">EASY MODE · はじめての練習</span>
  <h2 id="simpleHomeTitle">AIにコインを任せてみよう</h2>
@@ -202,14 +192,14 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </nav>
  </section>
  <div id="quickNext" hidden>
-  <p id="quickGrowthHelp" class="simple-hint">今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPがたまると装備が解放されます。どちらも架空相場の練習で、実相場の予測力を示すものではありません。</p>
+  <p id="quickGrowthHelp" class="simple-hint">今回のかんたん練習ではXPは増えません。別の「詳しい機能」の練習で課題を達成し、「XPを受け取る」を押すと、課題ごとに一度だけXPを獲得できます。XPとレベル、達成した課題を冒険記録で確認できます。どちらも架空相場の練習で、実相場の予測力を示すものではありません。</p>
   <div class="actions"><button id="quickGrow" class="primary" type="button" aria-controls="advancedEntry" aria-describedby="quickGrowthHelp">相棒を育てる冒険へ</button></div>
   <p>次はAI・試算額・倍率を変えて、同じ架空12日間で試せます。再挑戦は練習専用です。</p>
   <div class="actions"><button id="quickAgain" class="primary" type="button">AI・金額・倍率を変えてもう一度</button><button id="quickNextShop" type="button" aria-controls="advancedEntry">ほかのデモAIを探す</button></div>
  </div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
-<details class="advanced-entry" id="advancedEntry">
+<details class="advanced-entry" id="advancedEntry" open>
 <summary>もっと詳しい機能を開く（AI作成・モデルショップ・研究・育成）</summary>
 <section class="panel hero" aria-label="冒険を始める">
  <div id="scene" class="scene" data-mood="ready">
@@ -225,7 +215,6 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <img id="artworkBase" alt="完成イラスト" hidden>
    <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
   </div>
-  <span id="sceneGear" role="img" aria-label="装備なし" hidden></span>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
  </div>
  <div>
@@ -238,7 +227,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <option value="team">フクロウと挑戦（自分の相棒50%・フクロウ50%）</option>
   </select>
   <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
-  <small id="adventureNote">チームは同じ架空資産に対する2キャラの配分です。銘柄分散や実際の投資ではありません。チームでの一度きりの実績XPがあり、受取は練習後の「XPを受け取る」ボタンだけ。相棒が未作成でも標準AIで使えます。</small>
+  <small id="adventureNote">チームは同じ架空資産に対する2キャラの配分です。銘柄分散や実際の投資ではありません。ひとりでも冒険記録を残せます。チームは任意です。各課題のXPは一度だけで、受取は練習後の「XPを受け取る」ボタンだけ。相棒が未作成でも標準AIで使えます。</small>
   <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
   <p id="brainStatus" class="brain-note">予測：標準モデル mine（未作成）。保存すると自分で設計した判断ルールで練習します。DRAFTの予測ルールは未適用。</p>
   <details class="appearance-controls" id="companionControls" open>
@@ -437,7 +426,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 </section>
 <section class="panel" id="arenaSection" aria-labelledby="arenaTitle">
  <span class="eyebrow">MODEL ARENA · 同条件比較</span><h2 id="arenaTitle">3モデルで予測対決</h2>
- <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。装備補正は全員オフ、手数料は同一。こちらの比較ではXPは発生しません。</p>
+ <p>各モデルが同じ12日間の架空価格に、<strong>それぞれ10,000コイン</strong>を持って挑戦します。資金の分配ではありません。手数料は同一。こちらの比較ではXPは発生しません。</p>
  <div class="arena-grid">
   <label for="arenaMine">自分のモデル<select id="arenaMine"><option value="self">保存した相棒（なければ標準）</option></select></label>
   <label for="arenaOwl">相手①<select id="arenaOwl"><option value="preset">フクロウ（既存）</option></select></label>
@@ -473,14 +462,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <small>ここに表示される損益は架空コインの結果で、市場予測の本番実績やランキングには加えません。</small>
 </section>
 <section class="panel" aria-labelledby="growthTitle">
- <span class="eyebrow">STEP 04 / 装備と再挑戦</span><h2 id="growthTitle">相棒を育てよう</h2>
- <div class="growth"><div><p id="growthInfo" role="status">育成記録を読み込んでいます…</p>
- <label for="growthProgress">装備解放のXP進捗</label>
- <progress id="growthProgress" aria-describedby="growthNext">育成記録を読み込んでいます…</progress>
- <p id="growthNext" role="status"></p><ul id="growthMilestones" aria-label="装備解放マイルストーン"></ul>
- <p id="currentGear">現在の装備: --</p><button id="refreshGrowth" type="button">育成情報を再取得</button></div>
- <div><label for="gear">解放済み装備を選択</label><div class="gearline"><select id="gear" aria-label="装備を選ぶ"></select><button id="equip" type="button" disabled>装備する</button></div><p id="gearStatus" role="status" aria-live="polite"></p></div></div>
- <small>装備は次の練習の予測判断に影響します。外見と学習済みモデルは別管理です。XPはNode専用保存先を使用します。</small>
+ <span class="eyebrow">STEP 04</span><h2 id="growthTitle">自分の相棒の冒険記録</h2>
+ <p id="growthInfo" role="status">冒険記録を読み込んでいます…</p>
+ <p id="growthAchievements"></p>
+ <button id="refreshGrowth" type="button">冒険記録を再取得</button>
+ <small>XPはキャラクターごとの記録です。各課題につき一度だけ、練習後に「XPを受け取る」を押すと記録されます。利益や予測精度では増えません。</small>
 </section>
 <details class="panel details"><summary>詳しい仕組みと注意事項</summary>
 <p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。練習中の仮想投資コインは保存されません。モデルショップの使用権とコイン残高は別管理で保存されます。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>

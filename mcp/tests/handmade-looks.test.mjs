@@ -130,7 +130,7 @@ test('browser stage preview changes before save but only explicit save sends /ap
         revision:record.revision+1,created:true,look:body.look};}
       value=record;
     }else if(path==='/api/growth')value={revision:0,slots:[{slot:'mine',
-      level:1,xp:0,gear:'none',gear_options:[]}]};
+      level:1,xp:0,achievements:[]}]};
     else if(path==='/api/companion')value={revision:0,created:false,companion:{
       name:'私の相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35}};
     else throw Error('unexpected path '+path);

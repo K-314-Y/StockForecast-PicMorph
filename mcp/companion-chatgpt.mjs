@@ -235,14 +235,14 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
     }catch(e){return errorResult(e);}
   });
   registerTool('get_my_creature_growth',{
-    title:'Creature Lab: 育成レベル・装備を確認',
-    description:'Nodeゲームの育成XP、レベル、現在の装備を読み取る。XPや装備の変更はしない。',
+    title:'Creature Lab: 育成レベル・冒険記録を確認',
+    description:'Nodeゲームの育成XP、レベル、達成した課題を読み取る。記録の変更はしない。',
     inputSchema:{},
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
   },async()=>{
     try {
       const growth=await jsonFromGame(apiBase,'/api/growth');
-      return {content:[{type:'text',text:'保存済みの育成XP・装備を読み取りました。'}],structuredContent:{growth}};
+      return {content:[{type:'text',text:'保存済みの育成XP・レベル・実績を読み取りました。'}],structuredContent:{growth}};
     }catch(e){return errorResult(e);}
   });
   registerTool('get_my_character_sheet',{
