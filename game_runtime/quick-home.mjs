@@ -32,6 +32,12 @@ function renderSceneVoice(text) {
   sceneVoice={previous,text,mood};
 }
 let replayModel = null;
+function syncReplayOwner() {
+  element('quickReplayOwner').textContent = !replay ? '' : replayModel !== 'self' ?
+    '別のAIの練習結果です。自作キャラの成績ではありません。' :
+    element('quickMini').hidden ? '相棒の外見は上の画面で確認できます' :
+    '自作キャラと振り返る';
+}
 // Deliberately page-only: never part of the practice request or model input.
 const reflections = new Map();
 const reasonLabels = {trend:'値動きの流れ',drop:'下落リスク',limit:'損失を抑えたい',other:'その他'};
@@ -107,6 +113,7 @@ element('quickReflectionForm').addEventListener('submit',event=>{
 const miniLayers = ['Base','Outfit','Face','Hair'];
 function clearMini() {
   element('quickMini').hidden=true;
+  syncReplayOwner();
   for(const slot of [...miniLayers,'Portrait']) {
     const image=element('quickMini'+slot);
     image.hidden=true;
@@ -151,7 +158,7 @@ function syncMini() {
     target.hidden=false;
   }
   element('quickMini').hidden=!pairs.every(([source,target])=>
-    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));
+    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));  syncReplayOwner();
 }
 for(const id of ['portrait',...miniLayers.map(slot=>'artwork'+slot),
   ...[...miniLayers,'Portrait'].map(slot=>'quickMini'+slot)]) {

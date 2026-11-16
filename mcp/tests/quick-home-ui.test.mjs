@@ -1604,3 +1604,32 @@ test('drafts clear on day changes and cancelled retry cannot restore or submit r
   assert.equal(get('quickHumanNote').value,'');
   assert.equal(get('quickReflectionResult').hidden,true);
 });
+
+test('replay owner caption is beside existing mini and voice, no duplicates',()=>{
+  const owners=htmlNodes().filter(node=>node.id==='quickReplayOwner');
+  assert.equal(owners.length,1);
+  assert.ok(owners[0].parents.includes('quickReplay'));
+  assert.doesNotMatch(html,/id="quickReplayMini"|id="quickReplayIdentity"/);
+});
+
+test('owner caption follows self art, other AI and reset without extra network',async()=>{
+  const {get,fire,calls,storageWrites,sourceChanged}=await mount([{id:'demo',name:'デモAI',owned:true}]);
+  assert.equal(get('quickReplayOwner').textContent,'');
+  await fire('quickForm','submit');await fire('quickRun');
+  assert.equal(get('quickReplayOwner').textContent,'相棒の外見は上の画面で確認できます');
+  showComposite(get);sourceChanged();await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  assert.equal(get('quickReplayOwner').textContent,'自作キャラと振り返る');
+  const before=calls.length;
+  await fire('quickFollowing');
+  assert.equal(calls.length,before);
+  get('quickModel').value='demo';await fire('quickModel','change');
+  assert.equal(get('quickReplayOwner').textContent,'');
+  assert.equal(get('quickMini').hidden,true);
+  await fire('quickForm','submit');await fire('quickRun');
+  assert.equal(get('quickReplayOwner').textContent,'別のAIの練習結果です。自作キャラの成績ではありません。');
+  assert.equal(get('quickMini').hidden,true);
+  await fire('quickAgain');
+  assert.equal(get('quickReplayOwner').textContent,'');
+  assert.deepEqual(storageWrites,[]);
+});
