@@ -5,6 +5,65 @@ const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigi
 let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
+let replayModel = null;
+const miniLayers = ['Base','Outfit','Face','Hair'];
+function clearMini() {
+  element('quickMini').hidden=true;
+  for(const slot of [...miniLayers,'Portrait']) {
+    const image=element('quickMini'+slot);
+    image.hidden=true;
+    image.removeAttribute('src');
+  }
+}
+function imageVisible(node) {
+  if(!node)return false;
+  for(let current=node;current;current=current.parentElement) {
+    if(current.hidden)return false;
+    const style=getComputedStyle(current);
+    if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||
+       style.opacity==='0')return false;
+  }
+  return true;
+}
+const imageReady = image => image.getAttribute('src')?.trim() &&
+  image.complete && image.naturalWidth>0;
+function syncMini() {
+  // Hide before changing any copy; reveal only the complete current composite.
+  element('quickMini').hidden=true;
+  // Never borrow the player's artwork for another model's result voice.
+  if(!replay || replayModel!=='self' || element('quickModel').value!=='self' || element('quickReplay').hidden ||
+     imageVisible(element('chibi'))) {clearMini();return;}
+  let pairs=[];
+  if(imageVisible(element('portrait'))) {
+    pairs=[[element('portrait'),element('quickMiniPortrait')]];
+  } else if(imageVisible(element('artworkStage')) && imageVisible(element('artworkBase'))) {
+    pairs=miniLayers.map(slot=>[element('artwork'+slot),element('quickMini'+slot)])
+      .filter(([source])=>imageVisible(source));
+  }
+  // A pending optional layer must not turn a composite into a base-only portrait.
+  if(!pairs.length || pairs.some(([source])=>!imageReady(source))) {clearMini();return;}
+  const selected=new Set(pairs.map(([,target])=>target));
+  for(const slot of [...miniLayers,'Portrait']) {
+    const target=element('quickMini'+slot);
+    if(!selected.has(target)){target.hidden=true;target.removeAttribute('src');}
+  }
+  for(const [source,target] of pairs) {
+    const src=source.getAttribute('src');
+    if(target.getAttribute('src')!==src)target.setAttribute('src',src);
+    target.hidden=false;
+  }
+  element('quickMini').hidden=!pairs.every(([source,target])=>
+    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));
+}
+for(const id of ['portrait',...miniLayers.map(slot=>'artwork'+slot),
+  ...[...miniLayers,'Portrait'].map(slot=>'quickMini'+slot)]) {
+  element(id).addEventListener('load',syncMini);
+  element(id).addEventListener('error',syncMini);
+}
+// The existing editor owns all source mutations, including resets without load events.
+if(typeof MutationObserver!=='undefined')new MutationObserver(syncMini).observe(element('scene'),{
+  subtree:true,attributes:true,attributeFilter:['src','hidden','style','class'],
+});
 function replayVoice(value,day) {
   if(day===0)return 'さあ、12日間の作戦を一緒に振り返ろう！';
   const stopped=value.liquidated_at_step;
@@ -35,6 +94,8 @@ function findReplayHighlights(balances,liquidatedAt) {
 const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
   replay=null;
+  replayModel=null;
+  clearMini();
   replayHighlights=null;
   element('quickTacticsDay').textContent='';
   for(const [id,label] of highlightButtons) {
@@ -75,6 +136,7 @@ function renderReplay() {
   element('quickPrevious').disabled=replayDay===0;
   element('quickFollowing').disabled=replayDay===12;
   element('quickReplay').hidden=false;
+  syncMini();
 }
 for(const [id,delta] of [['quickPrevious',-1],['quickFollowing',1]]) {
   element(id).addEventListener('click',()=>{
@@ -337,6 +399,7 @@ element('quickRun').addEventListener('click',async()=>{
         (index===0?'増えた日なし':'減った日なし');
     }
     replay=value;
+    replayModel=ordered.model_id;
     replayDay=0;
     renderReplay();
     panel.hidden=false;
