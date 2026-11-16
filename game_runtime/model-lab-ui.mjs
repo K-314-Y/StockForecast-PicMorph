@@ -82,7 +82,7 @@ async function loadBaseline(){
     baseline=data;
     fromModel(data.model);
     $('labBasis').textContent=(data.source==='authored_companion'?
-      '保存済みの自作相棒':'標準モデル')+'を基準にしています（装備補正なし）';
+      '保存済みの自作相棒':'標準モデル')+'を基準にしています';
     msg('変数を調整して比較できます。ここでの変更は保存されません。');
     validate();
   }catch(error){

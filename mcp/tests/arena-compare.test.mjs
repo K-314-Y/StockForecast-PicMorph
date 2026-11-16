@@ -65,8 +65,9 @@ test('fair arena compares 3 real Python forecasts independently on one identical
     assert.equal(predicted.models.mine.risk_fraction,.65);
     assert.deepEqual(predicted.models.mine.plugin_weights,{trend:0,momentum:100,volatility:0,reversion:0});
     assert.deepEqual(predicted.models.owl.plugin_weights,trained().model.plugin_weights);
-    assert.deepEqual(predicted.models.owl.plugin_strengths,strengths,'disabled equipment must not change trained model');
-    assert.deepEqual(predicted.models.turtle.plugin_strengths,strengths,'disabled equipment must not change preset');
+    assert.deepEqual(predicted.models.mine.plugin_strengths,strengths,'legacy gear must not change authored model');
+    assert.deepEqual(predicted.models.owl.plugin_strengths,strengths,'legacy gear must not change trained model');
+    assert.deepEqual(predicted.models.turtle.plugin_strengths,strengths,'legacy gear must not change preset');
     assert.equal(data.fighters.mine.initial_coins,10000);
     assert.equal(data.fighters.owl.initial_coins,10000);
     assert.equal(data.fighters.turtle.initial_coins,10000);

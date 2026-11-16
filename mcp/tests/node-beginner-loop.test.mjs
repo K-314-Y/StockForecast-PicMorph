@@ -41,22 +41,17 @@ function practice(allocations = {mine:100,owl:0,turtle:0}) {
       [slot,{allocation_pct}])),
   };
 }
-function growth(xp, revision, gear) {
-  const gears = [
-    {id:'none',icon:'·',name:'装備なし',unlock_xp:0},
-    {id:'focus_lens',icon:'🔎',name:'集中レンズ',unlock_xp:20},
-    {id:'spark_charm',icon:'⚡',name:'ひらめきの飾り',unlock_xp:30},
-    {id:'calm_halo',icon:'🛡️',name:'静寂の輪',unlock_xp:40},
-  ];
-  return {revision, slots:[{slot:'mine', xp, level:1 + Number(xp >= 20) + Number(xp >= 40), gear,
-    gear_options:gears.map(item => ({...item, unlocked:xp>=item.unlock_xp}))}]};
+function growth(xp, revision) {
+  return {revision, slots:[{slot:'mine', xp, level:1 + Number(xp >= 20) + Number(xp >= 40),
+    achievements:xp ? ['first_practice'] : []}],
+    challenges:[{id:'first_practice',name:'はじめての練習',xp:20}]};
 }
 
-async function mount({practiceError=false, deferredClaim=null, initialXp=0, initialGear='none',
+async function mount({practiceError=false, deferredClaim=null, initialXp=0,
   claimXp=30, claimError=false, refreshError=false, deferredPractice=null,
   practiceResponse=null, growthStore=null}={}) {
   const nodes = new Map(), calls = [];
-  let xp = initialXp, revision = 0, gear = initialGear, completed = false;
+  let xp = initialXp, revision = 0, completed = false;
   let ticketAllocations = null;
   const get = id => {
     if (!nodes.has(id)) nodes.set(id, new FakeNode());
@@ -68,7 +63,7 @@ async function mount({practiceError=false, deferredClaim=null, initialXp=0, init
     if (path === '/api/growth') {
       if (completed && refreshError) return {ok:false,json:async()=>({error:'再取得失敗'})};
       if (growthStore) return {ok:true,json:()=>growthStore.public()};
-      return {ok:true,json:async()=>growth(xp,revision,gear)};
+      return {ok:true,json:async()=>growth(xp,revision)};
     }
     if (path === '/api/practice') {
       if (deferredPractice) await deferredPractice.promise;
@@ -91,13 +86,7 @@ async function mount({practiceError=false, deferredClaim=null, initialXp=0, init
       const earned = Math.max(0, claimXp - xp);
       xp += earned;
       if (earned) revision++;
-      return {ok:true,json:async()=>({earned_xp:{mine:earned}, growth:growth(xp,revision,gear)})};
-    }
-    if (path === '/api/growth/equip') {
-      assert.equal(body.slot,'mine');
-      assert.equal(body.expected_growth_revision,revision);
-      gear=body.gear_id;revision++;
-      return {ok:true,json:async()=>growth(xp,revision,gear)};
+      return {ok:true,json:async()=>({earned_xp:{mine:earned}, growth:growth(xp,revision)})};
     }
     throw Error('unexpected fetch: ' + path);
   };
@@ -243,7 +232,7 @@ test('team claims use existing growth store: 40 XP only after explicit claim and
     await fire('claim');
     assert.match(get('growthInfo').textContent,/40 XP/);
     assert.match(get('reward').textContent,new RegExp('mine: \\+' + (40-before) + ' XP'));
-    assert.match(get('growthCelebration').textContent,/静寂の輪/);
+    assert.match(get('growthCelebration').textContent,/Lv\./);
     assert.equal(get('adventureMode').disabled,false);
     const claimCount = calls.filter(x=>x.path==='/api/training/complete').length;
     await fire('claim');
@@ -255,18 +244,13 @@ test('team claims use existing growth store: 40 XP only after explicit claim and
   }
 });
 
-test('XP is awarded once, unlocks gear, and replays without extra claim', async () => {
+test('XP is awarded once and replays without extra claim', async () => {
   const {get,fire,calls} = await mount();
   await fire('play');
   await fire('claim');
   assert.match(get('growthInfo').textContent,/30 XP/);
   assert.equal(get('claim').disabled,true);
   assert.equal(get('play').disabled,false);
-  get('gear').value='focus_lens';
-  await fire('gear','change');
-  assert.equal(get('equip').disabled,false);
-  await fire('equip');
-  assert.match(get('currentGear').textContent,/集中レンズ/);
   assert.equal(calls.filter(item=>item.path==='/api/training/complete').length,1);
   await fire('play');
   assert.equal(get('play').disabled,true,'new ticket must be handled separately');
@@ -305,7 +289,7 @@ test('practice failure never enables claim or pretends XP has been earned', asyn
 
 test('screen is self-contained, responsive, accessible, and clearly marked synthetic', () => {
   for (const id of ['scene','speech','play','result','days','dayDetail','next',
-    'claim','discard','growthInfo','gear','equip','currentGear']) {
+    'claim','discard','growthInfo','growthAchievements']) {
     assert.match(html,new RegExp('id="' + id + '"'));
   }
   assert.match(html,/prefers-reduced-motion/);
@@ -317,44 +301,33 @@ test('screen is self-contained, responsive, accessible, and clearly marked synth
 });
 
 
-test('growth progress and milestones restore from API at every threshold and beyond', async () => {
-  for (const [xp, remaining] of [[0,20],[20,10],[30,10],[40,0],[50,0]]) {
+test('XP, level and achievements restore without unlocking rewards or making writes', async () => {
+  for (const xp of [0,20,30,40,50]) {
     const {get,fire,calls} = await mount({initialXp:xp});
-    const check = () => {
-      assert.equal(get('growthProgress').max,40);
-      assert.equal(get('growthProgress').value,Math.min(xp,40));
-      assert.match(get('growthNext').textContent,remaining ? new RegExp('あと ' + remaining + ' XP') : /すべて解放済み/);
-      assert.equal(get('growthMilestones').children.length,3);
-      for (const [i, threshold] of [20,30,40].entries()) {
-        assert.match(get('growthMilestones').children[i].textContent,new RegExp(threshold + ' XP'));
-        assert.equal(get('growthMilestones').children[i].dataset.unlocked, String(xp >= threshold));
-        assert.ok(get('growthMilestones').children[i].textContent.endsWith(xp >= threshold ? '：解放済み' : '：未解放'));
-      }
+    for (let i=0;i<2;i++) {
+      assert.match(get('growthInfo').textContent,new RegExp(xp + ' XP'));
+      assert.match(get('growthAchievements').textContent,xp ? /はじめての練習/ : /まだありません/);
       assert.equal(get('growthCelebration').textContent,'');
-      assert.notEqual(get('scene').dataset.growing,'true');
-      assert.equal(get('sceneGear').hidden,true);
-    };
-    check(); await fire('refreshGrowth'); check();
-    assert.equal(calls.filter(item=>item.path==='/api/training/complete').length,0);
+      await fire('refreshGrowth');
+    }
+    assert.equal(calls.filter(item=>item.method==='POST').length,0);
   }
 });
 
-test('confirmed reward celebrates actual level and gear changes while preserving reward details', async () => {
-  for (const [initialXp,claimXp,levelText,names] of [
-    [0,20,'Lv.1 → Lv.2',['集中レンズ']],
-    [20,30,null,['ひらめきの飾り']],
-    [30,40,'Lv.2 → Lv.3',['静寂の輪']],
-    [0,40,'Lv.1 → Lv.3',['集中レンズ','ひらめきの飾り','静寂の輪']],
+test('confirmed reward celebrates actual level changes while preserving reward details', async () => {
+  for (const [initialXp,claimXp,levelText] of [
+    [0,20,'Lv.1 → Lv.2'], [20,30,null],
+    [30,40,'Lv.2 → Lv.3'], [0,40,'Lv.1 → Lv.3'],
   ]) {
     const {get,fire,calls} = await mount({initialXp,claimXp});
     await fire('play'); await fire('claim');
     const celebration = get('growthCelebration').textContent;
     if (levelText) assert.ok(celebration.includes(levelText));
     else assert.doesNotMatch(celebration,/Lv\./);
-    for (const name of names) assert.ok(celebration.includes('新装備「' + name + '」が解放！'));
+    assert.doesNotMatch(celebration,/装備|解放/);
     assert.ok(get('reward').textContent.includes('mine: +' + (claimXp-initialXp) + ' XP'));
     assert.match(get('reward').textContent,/一度だけ/);
-    assert.equal(get('growthProgress').value,claimXp);
+    assert.match(get('growthInfo').textContent,new RegExp(claimXp + ' XP'));
     assert.equal(get('scene').dataset.growing,'true');
     await fire('scene','animationend');
     assert.equal(get('scene').dataset.growing,'false');
@@ -370,21 +343,13 @@ test('confirmed reward celebrates actual level and gear changes while preserving
   }
 });
 
-test('equipped badge follows saved selection, refresh and fresh page restoration', async () => {
-  const {get,fire} = await mount({initialXp:40,initialGear:'focus_lens'});
-  assert.equal(get('sceneGear').hidden,false);
-  assert.equal(get('sceneGear').textContent,'🔎');
-  assert.match(get('sceneGear').attributes['aria-label'],/集中レンズ/);
-  for (const [id,icon] of [['spark_charm','⚡'],['calm_halo','🛡️'],['none','']]) {
-    get('gear').value=id;
-    await fire('gear','change'); await fire('equip'); await fire('refreshGrowth');
-    assert.equal(get('sceneGear').textContent,icon);
-    assert.equal(get('sceneGear').hidden,id==='none');
-    assert.equal(get('growthCelebration').textContent,'');
-    const restored = await mount({initialXp:40,initialGear:id});
-    assert.equal(restored.get('sceneGear').textContent,icon);
-    assert.equal(restored.get('growthCelebration').textContent,'');
-  }
+test('retired gear controls and API calls are absent, while artwork remains available', () => {
+  assert.doesNotMatch(html + script,/装備|focus_lens|spark_charm|calm_halo|gear_options|growthProgress|growthMilestones|sceneGear|growth\/equip/);
+  for (const id of ['artworkStage','artworkSaveBase','reloadArtwork','growthAchievements'])
+    assert.ok(html.includes('id="'+id+'"'));
+  assert.match(html,/<h1>自分で作った相棒で冒険<\/h1>/);
+  assert.match(html,/自分の相棒の冒険記録/);
+  assert.match(html,/<details class="advanced-entry" id="advancedEntry" open>/);
 });
 
 test('zero XP and failed claims never produce false celebrations', async () => {
@@ -409,25 +374,16 @@ test('successful claim remains confirmed even if growth refresh fails', async ()
   assert.equal(get('claim').disabled,true);
 });
 
-test('growth UI uses native labelled progress, text milestones, accessible badge and brief reduced-motion-safe animation', () => {
-  assert.match(html,/<label for="growthProgress">/);
-  assert.match(html,/<progress id="growthProgress" aria-describedby="growthNext">/);
-  assert.match(html,/<ul id="growthMilestones" aria-label="装備解放マイルストーン">/);
+test('level confirmation is accessible and reduced-motion safe', () => {
   assert.match(html,/<p id="growthCelebration" role="status" aria-live="polite" aria-atomic="true">/);
-  assert.match(html,/<span id="sceneGear" role="img" aria-label="装備なし" hidden>/);
-  assert.match(html,/#sceneGear\{[^}]*position:absolute[^}]*z-index:4/);
-  assert.match(html,/data-growing="true"\] :is\(#chibi,#artworkStage,#portrait\)\{animation:companion-growth \.7s ease-out 1/);
   assert.match(html,/@media\(prefers-reduced-motion:reduce\)\{\.scene\[data-growing="true"\] :is\(#chibi,#artworkStage,#portrait\)\{animation:none\}/);
   assert.doesNotMatch(script,/localStorage|sessionStorage|innerHTML/);
-  assert.doesNotMatch(script,/unlock_xp\s*[><=]+\s*(20|30|40)/);
 });
-
 
 test('positive XP without a new milestone animates growth without inventing a celebration', async () => {
   const {get,fire} = await mount({claimXp:10});
   await fire('play'); await fire('claim');
   assert.equal(get('growthCelebration').textContent,'');
   assert.equal(get('scene').dataset.growing,'true');
-  assert.equal(get('growthProgress').value,10);
-  assert.match(get('growthNext').textContent,/あと 10 XP/);
+  assert.match(get('growthInfo').textContent,/10 XP/);
 });

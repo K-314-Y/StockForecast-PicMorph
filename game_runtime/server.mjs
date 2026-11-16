@@ -1,6 +1,6 @@
 /**
  * Node game API: authoritative JS accounting plus separate Node-owned tutorial
- * XP/gear persistence. Python is a read-only model forecaster only.
+ * XP persistence. Python is a read-only model forecaster only.
  * No broker calls, V6 writes, public binding or client-supplied predictions.
  */
 import {createServer} from 'node:http';
@@ -50,12 +50,6 @@ const MAX_ARTWORK_REQUEST = 750 * 1024;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
-const GEAR = Object.freeze({
-  none: null,
-  focus_lens: {key: 'trend', bonus: 10},
-  spark_charm: {key: 'momentum', bonus: 15},
-  calm_halo: {key: 'volatility', bonus: 15},
-});
 const SLOTS = ['mine', 'owl', 'turtle'];
 
 function failure(message, status = 503) {
@@ -89,12 +83,10 @@ export async function loadLocalSnapshot(store) {
     growth_revision: growth.revision};
 }
 
-function withGear(source, trainedModel = null, includeGear = true) {
+function modelPlanFromSnapshot(source, trainedModel = null) {
   const lineup = new Map(source.lineup.slots.map(x => [x.slot, x.model]));
-  const gears = new Map(source.growth.slots.map(x => [x.slot, x.gear]));
-  if (lineup.size !== 2 || gears.size !== 3 || !gears.has('mine') ||
-      !lineup.has('owl') || !lineup.has('turtle')) {
-    throw failure('編成または装備が不正です');
+  if (lineup.size !== 2 || !lineup.has('owl') || !lineup.has('turtle')) {
+    throw failure('編成が不正です');
   }
   const models = {};
   for (const slot of SLOTS) {
@@ -102,16 +94,7 @@ function withGear(source, trainedModel = null, includeGear = true) {
     if (!original || typeof original !== 'object' || !original.plugin_strengths) {
       throw failure('キャラモデルが不足しています');
     }
-    const gearName = gears.get(slot);
-    if (typeof gearName !== 'string' || !Object.hasOwn(GEAR, gearName)) {
-      throw failure('未対応の装備です');
-    }
     const strengths = {...original.plugin_strengths};
-    const gear = GEAR[gearName];
-    if (gear && includeGear) {
-      if (!Number.isInteger(strengths[gear.key])) throw failure('装備感度が不正です');
-      strengths[gear.key] = Math.min(150, strengths[gear.key] + gear.bonus);
-    }
     models[slot] = {...original, plugin_strengths: strengths};
   }
   return {base_model: source.state.model, models};
@@ -352,11 +335,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       try {
         const snapshot=await loadSnapshot();
         const companion=await companionStore.read();
-        const base=applyCompanion(withGear(snapshot,null,false),companion).models.mine;
+        const base=applyCompanion(modelPlanFromSnapshot(snapshot,null),companion).models.mine;
         return json(res,200,{
           model:validateLabModel(base),revisions:labRevisions(snapshot,companion),
           source:companion.created?'authored_companion':'standard_mine',
-          notice:'自分の標準・保存相棒モデルを読み取りました。装備補正は適用しません。実験は保存されません。',
+          notice:'自分の標準・保存相棒モデルを読み取りました。実験は保存されません。',
         });
       }catch(error){
         return json(res,error?.status||503,{error:'基準モデルを読み込めません'});
@@ -426,7 +409,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/growth/equip','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -455,7 +438,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const leverage = payload.leverage ?? 1;
         const snapshot = await loadSnapshot();
         const companion = await companionStore.read();
-        const originals = withGear(snapshot,null,false);
+        const originals = modelPlanFromSnapshot(snapshot,null);
         const mine = payload.model_id === 'self' ?
           applyCompanion(originals,companion).models.mine :
           await modelShopStore.licensedModel(payload.model_id);
@@ -510,7 +493,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         // A mid-session update does not change already generated decisions.
         const licensed=await modelShopStore.licensedModel(payload.id);
         const snapshot=await loadSnapshot();
-        const originals=withGear(snapshot,null,false);
+        const originals=modelPlanFromSnapshot(snapshot,null);
         const plan=await predict({...originals,models:{...originals.models,mine:licensed}});
         const after=await loadSnapshot();
         if(REVISIONS.some(key=>snapshot[key]!==after[key]))
@@ -543,7 +526,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         if(!sameLabRevisions(expected,labRevisions(snapshot,companion)))
           throw failure('実験中に基準モデルが変更されました。再読込してください',409);
         const baseline=validateLabModel(
-          applyCompanion(withGear(snapshot,null,false),companion).models.mine);
+          applyCompanion(modelPlanFromSnapshot(snapshot,null),companion).models.mine);
         const raw=await historicalPredict({
           base_model:validateLabModel(snapshot.state.model),
           models:{mine:candidate,owl:baseline,turtle:baseline},
@@ -566,7 +549,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         if(!sameLabRevisions(expected,labRevisions(snapshot,companion)))
           throw failure('実験中に基準モデルが変更されました。再読込してください',409);
         const baseline=validateLabModel(
-          applyCompanion(withGear(snapshot,null,false),companion).models.mine);
+          applyCompanion(modelPlanFromSnapshot(snapshot,null),companion).models.mine);
         // The third slot is an unused protocol placeholder, not a third result.
         const plan=await predict({base_model:snapshot.state.model,
           models:{mine:candidate,owl:baseline,turtle:baseline}});
@@ -594,7 +577,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const companion = await companionStore.read();
         const ownLook = choices.mine === 'self' ? await lookStore.read() : null;
         const snapshot = await loadSnapshot();
-        let models = withGear(snapshot, null, false);
+        let models = modelPlanFromSnapshot(snapshot, null);
         if (choices.mine === 'self') models = applyCompanion(models, companion);
         const metadata = {};
         for (const slot of SLOTS) {
@@ -659,14 +642,6 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           return json(res, 200, earned);
         } finally {item.busy = false;}
       }
-      if (path === '/api/growth/equip') {
-        if (names !== 'expected_growth_revision|gear_id|slot') {
-          throw failure('装備・キャラ枠・育成revisionが必要です', 400);
-        }
-        return json(res, 200, await store.equip(
-          payload.slot, payload.gear_id, payload.expected_growth_revision
-        ));
-      }
       const preview = path === '/api/practice/preview';
       if (!preview && names !== 'allocations' && names !== 'allocations|trained_version_id') {
         throw failure('allocationsと保存済み練習版IDだけ指定できます', 400);
@@ -696,12 +671,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       const companion = await companionStore.read();
       const snapshot = await loadSnapshot();
-      const modelPlan = withGear(snapshot, brain?.model || null);
+      const modelPlan = modelPlanFromSnapshot(snapshot, brain?.model || null);
       const effectiveCompanion = candidate === null ?
         companion : {revision:companion.revision, created:true, companion:candidate};
       const plan = await predict(selectedId === null ?
         applyCompanion(modelPlan, effectiveCompanion) : modelPlan);
-      // Re-read current model and equipment so a concurrent edit never produces
+      // Re-read current model and progression so a concurrent edit never produces
       // a result incorrectly labelled with the latest model revision.
       const after = await loadSnapshot();
       for (const key of REVISIONS) {

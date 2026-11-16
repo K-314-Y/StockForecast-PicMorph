@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, writeFile, stat} from 'node:fs/promises';
+import {mkdtemp, readFile, writeFile, stat, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -61,27 +61,40 @@ test('One-time legacy read is compatible but original file is never overwritten'
   const snapshot=await store.public();
   assert.equal(snapshot.revision,6);
   assert.equal(snapshot.slots[0].xp,30);
-  assert.equal(snapshot.slots[0].gear,'focus_lens');
+  assert.deepEqual(Object.keys(snapshot).sort(),['challenges','revision','slots']);
+  assert.deepEqual(Object.keys(snapshot.slots[0]).sort(),['achievements','level','slot','xp']);
+  await assert.rejects(stat(node),{code:'ENOENT'});
+  assert.deepEqual(await readFile(old),original);
   const result=await store.complete(split,6);
   assert.deepEqual(result.earned_xp,{mine:10,owl:30,turtle:30});
   assert.equal(result.growth.revision,7);
-  assert.equal(JSON.parse((await readFile(node)).toString()).revision,7);
+  const imported=JSON.parse(await readFile(node,'utf8'));
+  assert.equal(imported.revision,7);
+  assert.equal(imported.slots.mine.gear,'focus_lens');
   assert.equal(createHash('sha256').update(await readFile(old)).digest('hex'),digest);
 });
 
-test('Equipping locked gear is rejected, equipped revision only bumps on change', async t => {
-  const {store}=await fixture(t);
-  await fail(store.equip('mine','spark_charm',0),400);
-  await fail(store.equip('mine','admin',0),400);
-  const first=await store.complete(solo,0);
-  assert.equal(first.growth.slots[0].xp,30);
-  const updated=await store.equip('mine','spark_charm',1);
-  assert.equal(updated.revision,2);
-  assert.equal(updated.slots[0].gear,'spark_charm');
-  const noop=await store.equip('mine','spark_charm',2);
-  assert.equal(noop.revision,2);
-  await fail(store.equip('owl','spark_charm',2),400);
-  await fail(store.equip('mine','focus_lens',1),409);
+test('Current schema-1 gear is immutable metadata and GET never rewrites it', async t => {
+  const {store,node}=await fixture(t);
+  const saved=base();saved.revision=9;
+  saved.slots.mine.achievements=['first_practice','full_allocation'];
+  saved.slots.mine.gear='spark_charm';
+  const original=JSON.stringify(saved,null,3)+'\n';
+  await mkdir(join(node,'..'),{recursive:true});
+  await writeFile(node,original);
+  const before=await stat(node);
+  assert.equal(store.equip,undefined);
+  for(let i=0;i<2;i++) {
+    const value=await store.public();
+    assert.equal(value.revision,9);
+    assert.equal(value.slots[0].xp,30);
+    assert.equal(value.slots[0].gear,undefined);
+    assert.equal(value.slots[0].gear_options,undefined);
+    assert.equal(await readFile(node,'utf8'),original);
+    assert.equal((await stat(node)).mtimeMs,before.mtimeMs);
+  }
+  await store.complete(split,9);
+  assert.equal(JSON.parse(await readFile(node,'utf8')).slots.mine.gear,'spark_charm');
 });
 
 test('Concurrent reward claims cannot both write same growth revision', async t => {
@@ -139,7 +152,7 @@ async function withServer(t,store,fn) {
   await fn({url,call});
 }
 
-test('Real Node HTTP: ticket required, one-time award, equipped model affects prediction',async t=>{
+test('Real Node HTTP: ticket required, one-time award, retired equip route cannot mutate',async t=>{
   const {store,node,old}=await fixture(t);
   await withServer(t,store,async({url,call})=>{
     assert.equal((await (await fetch(url+'/api/growth')).json()).revision,0);
@@ -163,24 +176,22 @@ test('Real Node HTTP: ticket required, one-time award, equipped model affects pr
     const equipped=await call('/api/growth/equip',{
       slot:'mine',gear_id:'focus_lens',expected_growth_revision:1
     });
-    assert.equal(equipped.status,200);
-    assert.equal(equipped.value.revision,2);
-    assert.equal(equipped.value.slots[0].gear,'focus_lens');
+    assert.equal(equipped.status,404);
     const run2=await call('/api/practice',{allocations:solo});
     assert.equal(run2.status,200);
-    assert.equal(run2.value.growth_revision,2);
-    assert.equal(run2.value.characters.mine.plugin_strengths.trend,110);
+    assert.equal(run2.value.growth_revision,1);
+    assert.equal(run2.value.characters.mine.plugin_strengths.trend,100);
     assert.equal(run2.value.characters.owl.plugin_strengths.trend,100);
     // No XP from a second run unless user explicitly requests, then zero.
     assert.equal((await (await fetch(url+'/api/growth')).json()).slots[0].xp,30);
     const double=await call('/api/training/complete',{
-      ticket:run2.value.training_ticket,expected_growth_revision:2
+      ticket:run2.value.training_ticket,expected_growth_revision:1
     });
     assert.equal(double.status,200);
     assert.deepEqual(double.value.earned_xp,{mine:0});
-    assert.equal(double.value.growth.revision,2);
+    assert.equal(double.value.growth.revision,1);
   });
-  assert.equal(JSON.parse(await readFile(node,'utf8')).revision,2);
+  assert.equal(JSON.parse(await readFile(node,'utf8')).revision,1);
   await assert.rejects(stat(old),{code:'ENOENT'});
 });
 

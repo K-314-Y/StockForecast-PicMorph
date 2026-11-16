@@ -168,7 +168,7 @@ async function mountArtwork({baseSize=[128,128],storedHairSize=null}={}) {
        sizes[body.slot]=body.image?get('artworkFile'+body.slot[0].toUpperCase()+body.slot.slice(1)).files[0].dimensions:null;
      }
      value=state.record;
-   } else if(path==='/api/growth')value={revision:0,slots:[{slot:'mine',gear:'none',gear_options:[]}]};
+   } else if(path==='/api/growth')value={revision:0,slots:[{slot:'mine',xp:0,level:1,achievements:[]}]};
    else if(path==='/api/companion')value={revision:0,created:false,companion:{name:'私の相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35}};
    else if(path==='/api/looks')value={revision:0,created:false,look:{hair_style:'bob',expression:'cheerful',accessory:'ribbon'}};
    else throw Error('unexpected request '+path);

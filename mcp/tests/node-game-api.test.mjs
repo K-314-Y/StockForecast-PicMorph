@@ -57,7 +57,7 @@ test('Node server + actual Python forecaster matches legacy game result', async 
   });
 });
 
-test('Node applies actual gear bonus BEFORE asking Python for predictions', async () => {
+test('Node ignores legacy stored gear before asking Python for predictions', async () => {
   let submitted;
   const spy = async input => {submitted = input; return pythonPredict(input);};
   await serve({loadSnapshot:async()=>snapshot(3,'focus_lens'),predict:spy}, async url => {
@@ -65,10 +65,10 @@ test('Node applies actual gear bonus BEFORE asking Python for predictions', asyn
     assert.equal(r.status,200);
     const got=await r.json();
     assert.equal(submitted.base_model.plugin_strengths.trend,100);
-    assert.equal(submitted.models.mine.plugin_strengths.trend,110);
-    assert.equal(got.characters.mine.plugin_strengths.trend,110);
+    assert.equal(submitted.models.mine.plugin_strengths.trend,100);
+    assert.equal(got.characters.mine.plugin_strengths.trend,100);
     assert.equal(got.characters.mine.plugin_weights.trend,100);
-    assert.notEqual(got.characters.mine.effective_sha256,got.model_sha256);
+    assert.equal(got.characters.mine.effective_sha256,got.model_sha256);
   });
 });
 
