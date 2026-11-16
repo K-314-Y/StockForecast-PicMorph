@@ -32,6 +32,78 @@ function renderSceneVoice(text) {
   sceneVoice={previous,text,mood};
 }
 let replayModel = null;
+// Deliberately page-only: never part of the practice request or model input.
+const reflections = new Map();
+const reasonLabels = {trend:'値動きの流れ',drop:'下落リスク',limit:'損失を抑えたい',other:'その他'};
+// Only structured selections and the recorded signal choose this copy. Notes are display-only.
+const reflectionPrompts = {
+  trend:{LONG:'注目した流れを振り返ってみましょう。',
+    CASH:'流れを見て、どんな時に待つか振り返ってみましょう。'},
+  drop:{LONG:'株を持つ場合に気になる下落リスクを振り返ってみましょう。',
+    CASH:'現金で待つ場合にも気になる下落リスクを振り返ってみましょう。'},
+  limit:{LONG:'株を持つ場合に許容できる損失を振り返ってみましょう。',
+    CASH:'現金で待つ方針と、自分が許容できる損失を見比べてみましょう。'},
+  other:{LONG:'株を持つ方針と、自分の判断基準を見比べてみましょう。',
+    CASH:'現金で待つ方針と、自分の判断基準を見比べてみましょう。'},
+};
+const reflectionNextActions = {
+  trend:'相棒エディターの「重視する判断」で、判断の進め方を自分で見直せます。',
+  drop:'相棒エディターの「上昇判断時に使う資金（%）」を自分で見直せます。これは損切りの設定ではありません。',
+  limit:'相棒エディターの「上昇判断時に使う資金（%）」を自分で見直せます。これは損切りの設定ではありません。',
+  other:'相棒エディターで、自分の判断ルールや資金の使い方を見直せます。',
+};
+function renderReflection() {
+  const available=!!replay && replayDay>=1 && replayDay<=12;
+  element('quickReflection').hidden=!available;
+  if(!available)element('quickReflection').open=false;
+  const saved=available ? reflections.get(replayDay) : null;
+  element('quickReflectionDay').textContent=available ? '第'+replayDay+'日の振り返り' : '';
+  element('quickHumanChoice').value=saved?.choice || '';
+  element('quickHumanReason').value=saved?.reason || '';
+  element('quickHumanNote').value=saved?.note || '';
+  element('quickReflectionError').textContent='';
+  element('quickReflectionResult').hidden=!saved;
+  element('quickReflectionEdit').hidden=!saved || replayModel!=='self';
+  for(const id of ['quickHumanSummary','quickHumanMemo','quickIndependentDecision',
+    'quickDecisionComparison','quickReflectionReply','quickReflectionNext'])element(id).textContent='';
+  if(!saved)return;
+  const signal=replay.daily_ai_signals[replayDay-1];
+  const agrees=(saved.choice==='buy')===(signal==='LONG');
+  const humanChoice=saved.choice==='buy'?'買う':'待つ';
+  element('quickHumanSummary').textContent='人間（自分）の選択：'+
+    humanChoice+' ／ 重視した理由：'+reasonLabels[saved.reason];
+  element('quickHumanMemo').textContent='自分のメモ（AIは解釈しません）：'+(saved.note || 'なし');
+  element('quickIndependentDecision').textContent='今回のAIの独立判断：'+signal+
+    (signal==='LONG'?'（株を持つ）':'（現金で待機）')+
+    (replay.liquidated_at_step!==null && replayDay>replay.liquidated_at_step ?
+      '。強制終了後のため運用には使われていません。' : '。売買の実行を示すものではありません。');
+  element('quickDecisionComparison').textContent='選択の比較：'+(agrees?'一致':'相違')+
+    '（理由の一致や予測の正しさを示しません）';
+  element('quickReflectionReply').textContent='相棒との振り返り（定型文・AIの判断理由ではありません）：'+
+    'あなたは「'+reasonLabels[saved.reason]+'」を理由に「'+humanChoice+'」を選びました。'+
+    '記録されたAIの方針は'+signal+'（'+(signal==='LONG'?'株を持つ':'現金で待機')+'）です。'+
+    reflectionPrompts[saved.reason][signal];
+  element('quickReflectionNext').textContent='次の行動（任意）：'+(replayModel==='self' ?
+    reflectionNextActions[saved.reason]+' 自分で保存した設定だけが次の練習に反映されます。今回の結果は変わりません。' :
+    'このデモAIの判断ルールはここでは編集できません。自分の判断基準を振り返りましょう。');
+}
+element('quickReflectionForm').addEventListener('submit',event=>{
+  event.preventDefault();
+  if(!replay || replayDay<1 || replayDay>12)return;
+  const choice=element('quickHumanChoice').value;
+  const reason=element('quickHumanReason').value;
+  const note=element('quickHumanNote').value;
+  const invalid= !['buy','wait'].includes(choice) ? 'quickHumanChoice' :
+    !Object.hasOwn(reasonLabels,reason) ? 'quickHumanReason' :
+    note.length>120 ? 'quickHumanNote' : null;
+  if(invalid) {
+    element('quickReflectionError').textContent='選択と理由を選び、メモは120文字以内にしてください。';
+    element(invalid).focus();
+    return;
+  }
+  reflections.set(replayDay,{choice,reason,note});
+  renderReflection();
+});
 const miniLayers = ['Base','Outfit','Face','Hair'];
 function clearMini() {
   element('quickMini').hidden=true;
@@ -133,6 +205,8 @@ function clearReplay() {
     button.textContent=label;
   }
   replayDay=0;
+  reflections.clear();
+  renderReflection();
   element('quickReplay').hidden=true;
   element('quickReplayDay').textContent='';
   element('quickReplayContext').textContent='';
@@ -166,6 +240,7 @@ function renderReplay() {
   element('quickPrevious').disabled=replayDay===0;
   element('quickFollowing').disabled=replayDay===12;
   element('quickReplay').hidden=false;
+  renderReflection();
   syncMini();
 }
 for(const [id,delta] of [['quickPrevious',-1],['quickFollowing',1]]) {
@@ -356,6 +431,10 @@ element('quickGrow').addEventListener('click',()=>{
   scrollAndFocus('play','play');
 });
 element('quickCustomize').addEventListener('click',openEditor);
+element('quickReflectionEdit').addEventListener('click',()=>{
+  if(!replay || replayModel!=='self' || !reflections.has(replayDay))return;
+  openEditor();
+});
 element('quickArtwork').addEventListener('click',openArtwork);
 element('artworkReturn').addEventListener('click',()=>scrollAndFocus('simpleHome','quickModel'));
 element('shopReturn').addEventListener('click',returnHome);
