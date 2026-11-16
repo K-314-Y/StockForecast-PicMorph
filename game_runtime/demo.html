@@ -163,6 +163,8 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .simple-home{max-width:750px;margin:18px auto}.simple-home .simple-balance{font-size:26px;color:var(--mint);font-weight:800;margin:7px 0}.simple-fields{display:grid;gap:12px;margin:17px 0}.simple-fields label{display:grid;gap:7px;font-weight:750}.simple-fields select,.simple-fields input{width:100%;min-height:50px;background:#101a2e;border:1px solid #7590af;border-radius:12px;padding:12px;color:#f6fbff;font:inherit;font-size:17px}.simple-fields input:focus-visible,.simple-fields select:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-fields .amount-entry{display:flex;align-items:center;gap:8px}.simple-fields .amount-entry input{flex:1;min-width:0}.simple-fields .amount-entry button{flex:none}.simple-home .simple-hint{font-size:13px;color:var(--soft);margin:4px 0}.simple-home .simple-error{color:#ffc8c8;min-height:1.4em}.simple-home .simple-confirm{border:1px solid #58758f;background:#101d31;border-radius:13px;padding:14px;margin:15px 0}.simple-home .simple-result{border:1px solid #638f81;background:#152b31;border-radius:13px;padding:14px;margin-top:18px}.quick-replay{margin-top:12px;padding:12px;border:1px solid #638f81;border-radius:12px}.quick-replay nav,.quick-replay [role="group"]{display:flex;flex-wrap:wrap;gap:10px}.quick-replay [role="group"]{margin-top:10px}.quick-replay button{min-height:44px}.quick-replay button:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.quick-replay button:disabled{opacity:.5;cursor:default}.advanced-entry{max-width:1024px;margin:16px auto}.advanced-entry>summary{display:list-item;cursor:pointer;font-weight:750;padding:16px 18px;background:#243653;border:1px solid var(--line);border-radius:13px}.advanced-entry[open]>summary{margin-bottom:18px}.advanced-entry>.panel{margin-left:0;margin-right:0}
 .simple-home .simple-risk{font-size:14px;line-height:1.8;border-left:3px solid #58758f;padding:8px 12px;margin:4px 0;background:#101d31}
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
+#quickChatGPT button,#quickChatGPTConnection button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#quickHumanNote{box-sizing:border-box;max-width:100%;min-width:0}
 #quickTacticsDay{box-sizing:border-box;max-width:100%;margin:8px 0;padding:6px 8px;border:1px solid #849ab8;border-radius:10px 10px 10px 2px;color:#f2f6ff;background:#152238;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .quick-reaction{display:flex;align-items:center;gap:10px;min-width:0}
 .quick-reaction #quickTacticsDay{flex:1;min-width:0}
@@ -227,6 +229,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </div>
   <button id="quickConfirm" class="primary" type="submit">④ 内容を確認する</button>
  </form>
+ <div id="quickChatGPTConnection" data-chatgpt-session="disabled" hidden>
+  <button id="quickChatGPTStatusCheck" type="button">ChatGPTプランの接続状態を確認</button>
+  <p id="quickChatGPTStatus" role="status" aria-live="polite"></p>
+ </div>
  <div id="quickReview" class="simple-confirm" hidden>
   <h3>練習内容の確認</h3><p id="quickReviewText"></p><p id="quickReviewRisk" class="simple-risk"></p>
   <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額・倍率を修正</button></div>
@@ -256,10 +262,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <summary>この日の自分の考えを相棒と振り返る（任意・結果を見た後）</summary>
    <p id="quickReflectionHelp">第1〜12日から、振り返りたい日だけ選べます。これは結果を見た後の振り返りです。全日分の入力は不要です。比較前の入力は日を変えると消えます。</p>
    <form id="quickReflectionForm" aria-label="この日の人間の振り返り" aria-describedby="quickReflectionHelp quickReflectionPrivacy" autocomplete="off">
-    <p id="quickReflectionPrivacy" class="simple-hint">メモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。</p>
+    <p id="quickReflectionPrivacy" class="simple-hint">通常の比較ではメモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。任意のChatGPTボタンを押す場合は、下記の送信説明を確認してください。</p>
     <details id="quickReflectionPrivacyDetails">
      <summary>比較と入力の扱いについて</summary>
-     <p>結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
+     <p>結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。通常の比較では自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ChatGPTへの明示的な送信は別です。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
     </details>
     <p id="quickReflectionDay"></p>
     <label for="quickHumanChoice">自分ならどうする？</label>
@@ -275,6 +281,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="quickHumanSummary"></p><p id="quickHumanMemo"></p>
     <p id="quickIndependentDecision"></p><p id="quickDecisionComparison"></p><p id="quickReflectionReply"></p>
     <p id="quickReflectionNext"></p>
+   </div>
+   <div id="quickChatGPT" data-chatgpt-dialogue="disabled" hidden>
+    <p id="quickChatGPTPrivacy" class="simple-hint">このボタンを押すと、選択・理由・メモと申告されたAI方針を、許可したChatGPTアカウント経由でOpenAIに送ります。端末内だけの処理ではありません。画像・認証情報・保存状態は送信しません。秘密や個人情報をメモに書かないでください。</p>
+    <button id="quickChatGPTAsk" type="button" aria-describedby="quickChatGPTPrivacy">ChatGPTに考えを聞く</button>
+    <p id="quickChatGPTReply" role="status" aria-live="polite" aria-atomic="true"></p>
    </div>
    <button id="quickReflectionEdit" type="button" aria-controls="advancedEntry companionControls" hidden>判断ルールを見直す</button>
   </details>

@@ -6,7 +6,7 @@ import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.meta.url),'utf8');
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
-async function mount(models=[]) {
+async function mount(models=[],chatgpt=false) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
   let observeSource=()=>{};
   let document;
@@ -49,10 +49,12 @@ async function mount(models=[]) {
     node.hidden=/\bhidden(?:\s|$)/.test(attributes);
     node.open=/\bopen(?:\s|$)/.test(attributes);
     node.value=attributes.match(/\bvalue="([^"]*)"/)?.[1]||'';
+    if(id==='quickChatGPTConnection')node.dataset.chatgptSession=chatgpt==='session'?'enabled':'disabled';
+    if(id==='quickChatGPT')node.dataset.chatgptDialogue=chatgpt?'enabled':'disabled';
     nodes.set(id,node);
   }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
-  const state={models,practice:async body=>({
+  const state={models,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
@@ -65,6 +67,15 @@ async function mount(models=[]) {
     const body=options?.body?JSON.parse(options.body):undefined;
     calls.push({path,body});
     if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models})};
+    if(path==='/api/chatgpt-session'){
+      assert.equal(options?.method??'GET','GET');
+      assert.equal(body,undefined);
+      return {ok:true,json:async()=>state.session(options)};
+    }
+    if(path==='/api/chatgpt-dialogue'){
+      const value=await state.dialogue(body,options);
+      return {ok:value.status==='ok',json:async()=>value};
+    }
     assert.equal(path,'/api/quick-practice');
     assert.equal(options.method,'POST');
     const value=await state.practice(body);
@@ -76,17 +87,20 @@ async function mount(models=[]) {
     removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
     clear:()=>storageWrites.push(['clear']),
   };
-  const context={document,fetch,localStorage:storage,sessionStorage:storage,
+  const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
     getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
     MutationObserver:class {
       constructor(callback){observeSource=callback;}
       observe(target,options){assert.equal(target,nodes.get('scene'));assert.equal(options.subtree,true);}
     }};
+  const windowHandlers={};
+  context.addEventListener=(event,handler)=>{windowHandlers[event]=handler;};
   context.window=context;
   runInNewContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
   return {get,calls,scrolls,storageWrites,document,state,sourceChanged:()=>observeSource(),
+    pagehide:()=>windowHandlers.pagehide?.(),
     fire:(id,event)=>get(id).fire(event)};
 }
 
@@ -98,7 +112,7 @@ function htmlNodes() {
     const [,closing,tag,attributes]=match;
     if(closing){assert.equal(stack.pop()?.tag,tag);continue;}
     const node={tag,id:attributes.match(/\bid="([^"]+)"/)?.[1],attributes,
-      parents:stack.map(parent=>parent.id),offset:match.index};
+      parents:stack.map(parent=>parent.id),ancestorAttributes:stack.map(parent=>parent.attributes),offset:match.index};
     nodes.push(node);
     if(!voidTags.has(tag))stack.push(node);
   }
@@ -1418,7 +1432,7 @@ test('reflection uses reason, human choice and actual independent action; notes 
       replies.add(reply);
       const human=choice==='buy'?'買う':'待つ';
       assert.ok(get('quickHumanSummary').textContent.includes(human));
-      assert.equal(get('quickHumanMemo').textContent,'自分のメモ（AIは解釈しません）：'+note);
+      assert.equal(get('quickHumanMemo').textContent,'自分のメモ（通常の比較ではAIは解釈しません）：'+note);
       assert.equal(get('quickHumanMemo').children.length,0);
       assert.ok(get('quickIndependentDecision').textContent.includes('今回のAIの独立判断：'+signal));
       const agrees=(choice==='buy')===(signal==='LONG');
@@ -1638,4 +1652,208 @@ test('owner caption follows self art, other AI and reset without extra network',
   await fire('quickAgain');
   assert.equal(get('quickReplayOwner').textContent,'');
   assert.deepEqual(storageWrites,[]);
+});
+
+test('ChatGPT is hidden by default and never requests on load, run or reflection submit',async()=>{
+  for(const configured of [false,true]) {
+    const {get,fire,calls,storageWrites}=await mount([],configured);
+    assert.equal(get('quickChatGPT').hidden,true);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire,'wait','drop','note');
+    assert.equal(get('quickChatGPT').hidden,!configured);
+    assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,0);
+    if(!configured)await fire('quickChatGPTAsk');
+    assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,0);
+    assert.equal(storageWrites.length,0);
+  }
+});
+test('only explicit ChatGPT click sends four fields; model response uses textContent with no game changes',async()=>{
+  const {get,fire,calls,state,storageWrites}=await mount([],true);
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire,'wait','drop','<script>alert(1)</script>');
+  const before=get('quickResult').children[1].textContent;
+  state.dialogue=async()=>({status:'ok',commentary:'<img src=x onerror=alert(1)>'});
+  await fire('quickChatGPTAsk');
+  const requests=calls.filter(x=>x.path==='/api/chatgpt-dialogue');
+  assert.equal(requests.length,1);
+  assert.equal(JSON.stringify(requests[0].body),JSON.stringify({choice:'wait',reason:'drop',note:'<script>alert(1)</script>',ai_action:'LONG'}));
+  assert.match(get('quickChatGPTReply').textContent,/ChatGPT生成コメント.*真の判断理由ではありません/);
+  assert.match(get('quickChatGPTReply').textContent,/<img src=x onerror=alert\(1\)>/);
+  assert.match(get('quickChatGPTReply').textContent,/クライアント申告/);
+  assert.equal(get('quickResult').children[1].textContent,before);
+  assert.equal(calls.filter(x=>x.path==='/api/quick-practice').length,1);
+  assert.equal(storageWrites.length,0);
+});
+test('ChatGPT pending responses cannot survive navigation, edits, retry, model switch or new practice',async()=>{
+  for(const change of ['day','choice','reason','note','retry','model','run','amount','submit']) {
+    const {get,fire,state}=await mount([{id:'other',name:'Other',owned:true}],true);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    let release,signal;
+    state.dialogue=async(body,options)=>{signal=options.signal;return new Promise(resolve=>{release=resolve;});};
+    const pending=fire('quickChatGPTAsk');
+    assert.equal(get('quickChatGPTAsk').disabled,true);
+    if(change==='day')await fire('quickFollowing');
+    if(['choice','reason','note'].includes(change)) {
+      const id={choice:'quickHumanChoice',reason:'quickHumanReason',note:'quickHumanNote'}[change];
+      get(id).value='changed';await fire(id,'input');
+    }
+    if(change==='retry')await fire('quickAgain');
+    if(change==='model'){get('quickModel').value='other';await fire('quickModel','change');}
+    if(change==='amount'){get('quickAmount').value='23';await fire('quickAmount','input');}
+    if(change==='submit')await shareReflection(get,fire,'wait','limit','new');
+    if(change==='run'){await fire('quickForm','submit');await fire('quickRun');}
+    assert.equal(signal.aborted,true,change);
+    release({status:'ok',commentary:'STALE'});await pending;
+    assert.doesNotMatch(get('quickChatGPTReply').textContent,/STALE/);
+  }
+});
+test('unavailable ChatGPT preserves human reflection and retry is explicit; reload has no reply',async()=>{
+  const {get,fire,state,calls}=await mount([],true);
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire);
+  for(const fail of [async()=>({status:'unavailable'}),async()=>{throw Error('SECRET');},
+    async()=>({status:'ok',commentary:'x'.repeat(1201)})]) {
+    state.dialogue=fail;await fire('quickChatGPTAsk');
+    assert.match(get('quickChatGPTReply').textContent,/取得できませんでした/);
+    assert.doesNotMatch(get('quickChatGPTReply').textContent,/SECRET/);
+    assert.equal(get('quickReflectionResult').hidden,false);
+    assert.equal(get('quickChatGPTAsk').disabled,false);
+  }
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,3);
+  const fresh=await mount([],true);
+  assert.equal(fresh.get('quickChatGPT').hidden,true);
+  assert.equal(fresh.get('quickChatGPTReply').textContent,'');
+});
+
+test('ChatGPT timeout clears old reply and supports only an explicit retry',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {get,fire,state,calls}=await mount([],true);
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire);
+  await fire('quickChatGPTAsk');
+  assert.match(get('quickChatGPTReply').textContent,/ChatGPT生成/);
+  state.dialogue=async(body,options)=>new Promise((resolve,reject)=>{
+    options.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true});
+  });
+  const pending=fire('quickChatGPTAsk');
+  assert.doesNotMatch(get('quickChatGPTReply').textContent,/ChatGPT生成/);
+  assert.match(get('quickChatGPTReply').textContent,/考えています.*55秒.*中断/);
+  t.mock.timers.tick(54999);
+  await Promise.resolve();
+  assert.match(get('quickChatGPTReply').textContent,/考えています/);
+  assert.equal(get('quickChatGPTAsk').disabled,true);
+  await fire('quickChatGPTAsk');
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,2);
+  t.mock.timers.tick(1);await pending;
+  assert.match(get('quickChatGPTReply').textContent,/取得できませんでした/);
+  assert.equal(get('quickChatGPTAsk').disabled,false);
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,2);
+});
+
+test('invalid submit and pagehide discard replies; pending clicks never start another request',async()=>{
+  for(const change of ['invalid','native-invalid','pagehide','edit-resubmit']) {
+    const {get,fire,state,calls,pagehide}=await mount([],true);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    let release,signal;
+    state.dialogue=async(body,options)=>{signal=options.signal;return new Promise(resolve=>{release=resolve;});};
+    const pending=fire('quickChatGPTAsk');
+    await fire('quickChatGPTAsk');
+    if(change==='pagehide')pagehide();
+    if(change==='native-invalid')await fire('quickHumanChoice','invalid');
+    if(change==='invalid') {
+      get('quickHumanReason').value='invalid';
+      await fire('quickReflectionForm','submit');
+      assert.equal(get('quickReflectionResult').hidden,true);
+    }
+    if(change==='edit-resubmit') {
+      get('quickHumanNote').value='edited';await fire('quickHumanNote','input');
+      await fire('quickReflectionForm','submit');
+    }
+    assert.equal(signal.aborted,true);
+    assert.equal(get('quickChatGPTAsk').disabled,true);
+    await fire('quickChatGPTAsk');
+    assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,1);
+    release({status:'ok',commentary:'STALE'});await pending;
+    assert.equal(get('quickChatGPTReply').textContent,'');
+    assert.equal(get('quickChatGPTAsk').disabled,false);
+  }
+});
+test('session status is directly after setup, visible before practice only when configured',async()=>{
+  const nodes=htmlNodes();
+  const find=id=>nodes.find(node=>node.id===id);
+  for(const id of ['quickChatGPTConnection','quickChatGPTStatusCheck','quickChatGPTStatus'])
+    assert.equal(nodes.filter(node=>node.id===id).length,1,id);
+  const panel=find('quickChatGPTConnection');
+  assert.deepEqual(panel.parents,[...find('simpleHome').parents,'simpleHome']);
+  assert.ok(panel.ancestorAttributes.every(attributes=>! /\bhidden(?:\s|$)/.test(attributes)));
+  const siblings=nodes.filter(node=>node.parents.length===panel.parents.length&&node.parents.every((id,i)=>id===panel.parents[i]));
+  const index=siblings.indexOf(panel);
+  assert.equal(siblings[index-1].id,'quickForm');
+  assert.equal(siblings[index+1].id,'quickReview');
+  assert.match(panel.attributes,/data-chatgpt-session="disabled"/);
+  assert.match(panel.attributes,/\bhidden(?:\s|$)/);
+  assert.ok(find('quickChatGPTAsk').parents.includes('quickReflection'));
+  assert.ok(find('quickChatGPTAsk').parents.includes('quickReplay'));
+  for(const configured of [false,'session']){
+    const {get,calls,fire}=await mount([],configured);
+    assert.equal(get('quickChatGPTConnection').hidden,!configured);
+    assert.equal(get('quickReplay').hidden,true);
+    assert.equal(get('quickResult').hidden,true);
+    assert.deepEqual(calls.map(call=>call.path),['/api/model-shop']);
+    await fire('quickChatGPTStatusCheck');
+    assert.deepEqual(calls.map(call=>call.path),configured?['/api/model-shop','/api/chatgpt-session']:['/api/model-shop']);
+  }
+});
+
+test('session UI is opt-in, click-only, read-only and reports disconnection without a generated reply',async()=>{
+  const disabled=await mount();
+  assert.equal(disabled.get('quickChatGPTConnection').hidden,true);
+  await disabled.fire('quickChatGPTStatusCheck');
+  assert.equal(disabled.calls.filter(x=>x.path==='/api/chatgpt-session').length,0);
+  const {get,fire,state,calls}=await mount([],'session');
+  assert.equal(get('quickChatGPTConnection').hidden,false);
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-session').length,0);
+  await fire('quickChatGPTStatusCheck');
+  assert.match(get('quickChatGPTStatus').textContent,/接続済み・共有許可あり/);
+  state.session=async()=>({connected:false,sharing:false});
+  await fire('quickChatGPTStatusCheck');
+  assert.match(get('quickChatGPTStatus').textContent,/未接続.*応答は生成していません/);
+  state.session=async()=>{throw Error('SECRET');};
+  await fire('quickChatGPTStatusCheck');
+  assert.match(get('quickChatGPTStatus').textContent,/確認できません/);
+  assert.doesNotMatch(get('quickChatGPTStatus').textContent,/SECRET/);
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,0);
+  assert.equal(get('quickChatGPTReply').textContent,'');
+});
+
+test('pagehide discards a late session read and prevents another request while it is pending',async()=>{
+  const {get,fire,state,calls,pagehide}=await mount([],'session');
+  let release;
+  state.session=()=>new Promise(resolve=>{release=resolve;});
+  const pending=fire('quickChatGPTStatusCheck');
+  for(let i=0;i<5;i++)await Promise.resolve();
+  pagehide();
+  await fire('quickChatGPTStatusCheck');
+  release({connected:true,sharing:true});await pending;
+  assert.equal(get('quickChatGPTStatus').textContent,'');
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-session').length,1);
+});
+
+test('browser deadline discards uncooperative late completion and blocks click spam',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {get,fire,state,calls}=await mount([],true);
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire);
+  let release;
+  state.dialogue=()=>new Promise(resolve=>{release=resolve;});
+  const pending=fire('quickChatGPTAsk');
+  t.mock.timers.tick(55000);
+  await fire('quickChatGPTAsk');
+  assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,1);
+  release({status:'ok',commentary:'STALE AFTER DEADLINE'});
+  await pending;
+  assert.doesNotMatch(get('quickChatGPTReply').textContent,/STALE/);
+  assert.match(get('quickChatGPTReply').textContent,/取得できませんでした/);
 });

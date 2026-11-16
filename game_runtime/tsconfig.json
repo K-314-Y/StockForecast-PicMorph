@@ -12,6 +12,6 @@
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["contracts.ts", "practice.mjs", "typecheck.test.ts"],
+  "include": ["contracts.ts", "practice.mjs", "chatgpt-dialogue.mjs", "typecheck.test.ts"],
   "exclude": ["node_modules"]
 }

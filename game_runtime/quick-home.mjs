@@ -58,7 +58,109 @@ const reflectionNextActions = {
   limit:'相棒エディターの「上昇判断時に使う資金（%）」を自分で見直せます。これは損切りの設定ではありません。',
   other:'相棒エディターで、自分の判断ルールや資金の使い方を見直せます。',
 };
+let dialogueEpoch = 0;
+let dialogueController = null;
+function clearChatGPT() {
+  dialogueEpoch++;
+  dialogueController?.abort();
+  element('quickChatGPT').hidden=true;
+  element('quickChatGPTReply').textContent='';
+  element('quickChatGPTAsk').disabled=!!dialogueController;
+}
+function chatGPTConfigured() {
+  return element('quickChatGPT').dataset.chatgptDialogue==='enabled';
+}
+for(const id of ['quickHumanChoice','quickHumanReason','quickHumanNote']) {
+  const invalidate=()=>{
+    clearChatGPT();
+    element('quickReflectionResult').hidden=true;
+    element('quickReflectionEdit').hidden=true;
+  };
+  element(id).addEventListener('input',invalidate);
+  element(id).addEventListener('change',invalidate);
+  element(id).addEventListener('invalid',invalidate);
+}
+element('quickChatGPTAsk').addEventListener('click',async()=>{
+  const saved=reflections.get(replayDay);
+  if(!chatGPTConfigured() || element('quickChatGPT').hidden || dialogueController)return;
+  if(!replay || !saved || replayDay<1 || replayDay>12 ||
+      saved.choice!==element('quickHumanChoice').value ||
+      saved.reason!==element('quickHumanReason').value ||
+      saved.note!==element('quickHumanNote').value) {clearChatGPT();return;}
+  clearChatGPT();
+  element('quickChatGPT').hidden=false;
+  const epoch=dialogueEpoch;
+  const controller=new AbortController();
+  dialogueController=controller;
+  element('quickChatGPTAsk').disabled=true;
+  element('quickChatGPTReply').textContent='ChatGPTが振り返りを考えています… 最大55秒ほどお待ちください。日付の変更や入力の編集で中断できます。';
+  const timer=setTimeout(()=>controller.abort(),55000);
+  try {
+    const response=await fetch('/api/chatgpt-dialogue',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      signal:controller.signal,cache:'no-store',
+      body:JSON.stringify({...saved,ai_action:replay.daily_ai_signals[replayDay-1]}),
+    });
+    const value=await response.json();
+    if(epoch!==dialogueEpoch)return;
+    if(saved!==reflections.get(replayDay) || saved.choice!==element('quickHumanChoice').value ||
+        saved.reason!==element('quickHumanReason').value || saved.note!==element('quickHumanNote').value) {
+      clearChatGPT();return;
+    }
+    if(controller.signal.aborted || !response.ok || value?.status!=='ok' ||
+        typeof value.commentary!=='string' || !value.commentary.trim() || value.commentary.length>1200)
+      throw Error('unavailable');
+    element('quickChatGPTReply').textContent=
+      'ChatGPT生成コメント（予測AIの真の判断理由ではありません）：'+value.commentary+
+      ' ／ 記録されたAI方針はクライアント申告で、モデル・サーバーは検証していません。設定変更や学習は行いません。';
+  } catch {
+    if(epoch===dialogueEpoch)element('quickChatGPTReply').textContent=
+      'ChatGPTの応答を取得できませんでした。共有許可・接続・利用上限を確認して、必要ならもう一度ボタンを押してください。';
+  } finally {
+    clearTimeout(timer);
+    if(dialogueController===controller){dialogueController=null;element('quickChatGPTAsk').disabled=false;}
+  }
+});
+const sessionPanel=element('quickChatGPTConnection');
+sessionPanel.hidden=sessionPanel.dataset.chatgptSession!=='enabled';
+let sessionController=null;
+let sessionEpoch=0;
+element('quickChatGPTStatusCheck').addEventListener('click',async()=>{
+  if(sessionPanel.hidden || sessionController)return;
+  clearChatGPT();
+  const epoch=++sessionEpoch;
+  const controller=new AbortController();
+  sessionController=controller;
+  element('quickChatGPTStatusCheck').disabled=true;
+  element('quickChatGPTStatus').textContent='ChatGPTプランの接続状態を確認中…';
+  const timer=setTimeout(()=>controller.abort(),4000);
+  try {
+    const response=await fetch('/api/chatgpt-session',{cache:'no-store',signal:controller.signal});
+    const value=await response.json();
+    if(epoch!==sessionEpoch)return;
+    if(controller.signal.aborted || !response.ok || typeof value.connected!=='boolean' ||
+        typeof value.sharing!=='boolean')throw Error('unavailable');
+    element('quickChatGPTStatus').textContent=value.connected && value.sharing ?
+      'ChatGPTプラン：接続済み・共有許可あり。対話は比較後の明示クリックで送信します。' :
+      'ChatGPTプラン：未接続、または共有が未許可です。応答は生成していません。接続と権限の承認は信頼されたホスト側で行ってください。';
+  } catch {
+    if(epoch!==sessionEpoch)return;
+    if(!controller.signal.aborted)element('quickChatGPTStatus').textContent='ChatGPTの接続状態を確認できませんでした。';
+    else if(sessionController===controller)element('quickChatGPTStatus').textContent='ChatGPTの接続状態の確認を中断しました。';
+  } finally {
+    clearTimeout(timer);
+    sessionController=null;
+    element('quickChatGPTStatusCheck').disabled=false;
+  }
+});
+window.addEventListener('pagehide',()=>{
+  clearChatGPT();
+  sessionEpoch++;
+  sessionController?.abort();
+  element('quickChatGPTStatus').textContent='';
+});
 function renderReflection() {
+  clearChatGPT();
   const available=!!replay && replayDay>=1 && replayDay<=12;
   element('quickReflection').hidden=!available;
   if(!available)element('quickReflection').open=false;
@@ -73,12 +175,13 @@ function renderReflection() {
   for(const id of ['quickHumanSummary','quickHumanMemo','quickIndependentDecision',
     'quickDecisionComparison','quickReflectionReply','quickReflectionNext'])element(id).textContent='';
   if(!saved)return;
+  element('quickChatGPT').hidden=!chatGPTConfigured();
   const signal=replay.daily_ai_signals[replayDay-1];
   const agrees=(saved.choice==='buy')===(signal==='LONG');
   const humanChoice=saved.choice==='buy'?'買う':'待つ';
   element('quickHumanSummary').textContent='人間（自分）の選択：'+
     humanChoice+' ／ 重視した理由：'+reasonLabels[saved.reason];
-  element('quickHumanMemo').textContent='自分のメモ（AIは解釈しません）：'+(saved.note || 'なし');
+  element('quickHumanMemo').textContent='自分のメモ（通常の比較ではAIは解釈しません）：'+(saved.note || 'なし');
   element('quickIndependentDecision').textContent='今回のAIの独立判断：'+signal+
     (signal==='LONG'?'（株を持つ）':'（現金で待機）')+
     (replay.liquidated_at_step!==null && replayDay>replay.liquidated_at_step ?
@@ -95,6 +198,7 @@ function renderReflection() {
 }
 element('quickReflectionForm').addEventListener('submit',event=>{
   event.preventDefault();
+  clearChatGPT();
   if(!replay || replayDay<1 || replayDay>12)return;
   const choice=element('quickHumanChoice').value;
   const reason=element('quickHumanReason').value;
@@ -103,6 +207,8 @@ element('quickReflectionForm').addEventListener('submit',event=>{
     !Object.hasOwn(reasonLabels,reason) ? 'quickHumanReason' :
     note.length>120 ? 'quickHumanNote' : null;
   if(invalid) {
+    element('quickReflectionResult').hidden=true;
+    element('quickReflectionEdit').hidden=true;
     element('quickReflectionError').textContent='選択と理由を選び、メモは120文字以内にしてください。';
     element(invalid).focus();
     return;
@@ -379,6 +485,7 @@ async function loadModels() {
       modelField.append(option);
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
+    if(prior && prior!==modelField.value)clearReplay();
     statusField.textContent=next.length>1 ?
       '自作AIと、解放済みのAIから選べます。' :
       '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。';

@@ -4,6 +4,7 @@
  * No broker calls, V6 writes, public binding or client-supplied predictions.
  */
 import {createServer} from 'node:http';
+import {createChatGPTPlanDialogue, validateDialogueInput, validateDialogueResult} from './chatgpt-dialogue.mjs';
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
@@ -258,7 +259,7 @@ async function getBody(req, limit = MAX_REQUEST) {
   if (size !== Number(req.headers['content-length'])) {
     throw failure('入力が途中で切れています', 400);
   }
-  try {return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
+  try {return JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks)));}
   catch {throw failure('JSONが不正です', 400);}
 }
 
@@ -271,7 +272,16 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
-                                  trainedVersion = resolveTrainedVersion} = {}) {
+                                  trainedVersion = resolveTrainedVersion,
+                                  chatgptDialogue = null, chatgptClient = null} = {}) {
+  if (chatgptClient !== null) {
+    if (chatgptDialogue !== null) throw Error('Use only one ChatGPT injection');
+    chatgptDialogue = createChatGPTPlanDialogue({client:chatgptClient});
+  }
+  if (chatgptDialogue !== null && typeof chatgptDialogue !== 'function') throw Error('Invalid chatgptDialogue injection');
+  let dialogueBusy = false;
+  let dialogueAttempts = [];
+  let sessionBusy = false;
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
   const tickets = new Map();
@@ -398,10 +408,71 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
+    if (path === '/api/chatgpt-session' || path === '/api/chatgpt-dialogue') {
+      if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host)
+        return json(res,403,{status:'unavailable'});
+    }
+    if (chatgptClient !== null && path === '/api/chatgpt-session' && req.method === 'GET') {
+      if (sessionBusy) return json(res,429,{status:'unavailable'});
+      sessionBusy = true;
+      let timer;
+      const work = Promise.resolve().then(()=>chatgptClient.getSession()).finally(()=>{sessionBusy=false;});
+      try {
+        const session = await Promise.race([work,new Promise((_,reject)=>{
+          timer=setTimeout(()=>reject(Error('timeout')),3000);
+        })]);
+        const connected = session?.status === 'connected';
+        return json(res,200,{connected,sharing:connected && session.sharing === true});
+      } catch {return json(res,503,{status:'unavailable'});}
+      finally {clearTimeout(timer);}
+    }
+    // Stateless dialogue: never enters snapshot, prediction, XP or save paths.
+    if (chatgptDialogue !== null && path === '/api/chatgpt-dialogue' && req.method === 'POST') {
+      if (dialogueBusy) return json(res,429,{status:'unavailable'});
+      dialogueBusy = true;
+      let timer, work;
+      const controller = new AbortController();
+      const cancel = ()=>controller.abort();
+      res.on?.('close',cancel);
+      req.on('aborted',cancel);
+      try {
+        const input = validateDialogueInput(await getBody(req,1024));
+        dialogueAttempts = dialogueAttempts.filter(time=>Date.now()-time<60000);
+        if (dialogueAttempts.length>=6) return json(res,429,{status:'unavailable'});
+        dialogueAttempts.push(Date.now());
+        work = Promise.resolve().then(()=>{
+          controller.signal.throwIfAborted();
+          return chatgptDialogue(input,{signal:controller.signal});
+        }).finally(()=>{dialogueBusy=false;});
+        const result = validateDialogueResult(await Promise.race([
+          work,
+          new Promise(resolve=>{timer=setTimeout(()=>{
+            controller.abort();resolve({status:'unavailable'});
+          },50000);}),
+        ]));
+        if (controller.signal.aborted) return json(res,503,{status:'unavailable'});
+        return json(res,result.status === 'ok' ? 200 : 503,result);
+      } catch (error) {
+        return json(res,[400,413,415].includes(error?.status) ? error.status : 503,
+          {status:'unavailable'});
+      } finally {
+        clearTimeout(timer);controller.abort();
+        res.off?.('close',cancel);req.off('aborted',cancel);
+        // A non-cooperative provider keeps the guard until it actually settles.
+        if (!work) dialogueBusy = false;
+      }
+    }
+
     if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
       const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
-      const body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
+      let body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
+      if (!script && chatgptDialogue !== null) {
+        body = Buffer.from(body.toString('utf8').replace('data-chatgpt-dialogue="disabled"', 'data-chatgpt-dialogue="enabled"'));
+      }
+      if (!script && chatgptClient !== null) {
+        body = Buffer.from(body.toString('utf8').replace('data-chatgpt-session="disabled"', 'data-chatgpt-session="enabled"'));
+      }
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
