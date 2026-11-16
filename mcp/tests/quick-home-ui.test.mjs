@@ -6,7 +6,7 @@ import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.meta.url),'utf8');
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
-async function mount(models=[]) {
+async function mount(models=[], dialogue=null) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
   let observeSource=()=>{};
   let document;
@@ -51,6 +51,7 @@ async function mount(models=[]) {
     node.value=attributes.match(/\bvalue="([^"]*)"/)?.[1]||'';
     nodes.set(id,node);
   }
+  nodes.get('quickLocalDialogue').dataset.localDialogue=dialogue ? 'enabled' : 'disabled';
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
   const state={models,practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
@@ -65,6 +66,11 @@ async function mount(models=[]) {
     const body=options?.body?JSON.parse(options.body):undefined;
     calls.push({path,body});
     if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models})};
+    if(path==='/api/local-dialogue') {
+      assert.ok(dialogue);
+      const value=await dialogue(body);
+      return {ok:value.status==='ok',json:async()=>value};
+    }
     assert.equal(path,'/api/quick-practice');
     assert.equal(options.method,'POST');
     const value=await state.practice(body);
@@ -76,7 +82,9 @@ async function mount(models=[]) {
     removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
     clear:()=>storageWrites.push(['clear']),
   };
+  const windowHandlers={};
   const context={document,fetch,localStorage:storage,sessionStorage:storage,
+    addEventListener:(name,handler)=>{windowHandlers[name]=handler;},
     getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
     MutationObserver:class {
       constructor(callback){observeSource=callback;}
@@ -87,7 +95,7 @@ async function mount(models=[]) {
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
   return {get,calls,scrolls,storageWrites,document,state,sourceChanged:()=>observeSource(),
-    fire:(id,event)=>get(id).fire(event)};
+    fire:(id,event)=>get(id).fire(event),pagehide:()=>windowHandlers.pagehide?.()};
 }
 
 // Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
@@ -1632,4 +1640,119 @@ test('owner caption follows self art, other AI and reset without extra network',
   await fire('quickAgain');
   assert.equal(get('quickReplayOwner').textContent,'');
   assert.deepEqual(storageWrites,[]);
+});
+
+
+test('dialogue is hidden by default and forged click never posts',async()=>{
+  const {get,fire,calls,storageWrites}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire,'buy','trend','private');
+  const before=calls.slice();
+  assert.equal(get('quickLocalDialogue').hidden,true);
+  await fire('quickLocalDialogueAsk');
+  assert.deepEqual(calls,before);assert.deepEqual(storageWrites,[]);
+});
+
+test('enabled dialogue sends only on click, renders literal text and changes no gameplay or saves',async()=>{
+  let sent;
+  const note='<img src=x onerror=alert(1)>';
+  const {get,fire,calls,state,storageWrites}=await mount([],async body=>{
+    sent=body;return {status:'ok',commentary:note};
+  });
+  assert.equal(calls.some(c=>c.path==='/api/local-dialogue'),false);
+  const output=await state.practice({amount:1000,leverage:1});
+  state.practice=async()=>output;
+  const original=JSON.stringify(output);
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire,'wait','drop','private note');
+  assert.equal(calls.some(c=>c.path==='/api/local-dialogue'),false);
+  const deterministic=get('quickReflectionReply').textContent;
+  assert.equal(get('quickLocalDialogue').hidden,false);
+  const before=calls.length;
+  await fire('quickLocalDialogueAsk');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)),{choice:'wait',reason:'drop',note:'private note',ai_action:'LONG'});
+  assert.equal(calls.length,before+1);
+  assert.match(get('quickLocalDialogueStatus').textContent,/モデル生成コメント.*真の判断理由ではありません/);
+  assert.ok(get('quickLocalDialogueStatus').textContent.endsWith(note));
+  assert.equal(get('quickLocalDialogueStatus').children.length,0);
+  assert.equal(get('quickReflectionReply').textContent,deterministic);
+  assert.equal(JSON.stringify(output),original);
+  assert.deepEqual(storageWrites,[]);
+  for(const c of calls.filter(c=>c.path==='/api/quick-practice'))
+    assert.deepEqual(c.body,{model_id:'self',amount:1000,leverage:1});
+});
+
+test('offline dialogue preserves deterministic comparison and stale replies never appear',async()=>{
+  let finish;
+  const {get,fire,calls,storageWrites}=await mount([],()=>new Promise(resolve=>{finish=resolve;}));
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire);
+  const deterministic=get('quickReflectionReply').textContent;
+  const pending=fire('quickLocalDialogueAsk');
+  await fire('quickLocalDialogueAsk');
+  assert.equal(calls.filter(c=>c.path==='/api/local-dialogue').length,1);
+  finish({status:'unavailable'});await pending;
+  assert.match(get('quickLocalDialogueStatus').textContent,/応答は受信していません/);
+  assert.equal(get('quickReflectionReply').textContent,deterministic);
+  const stale=fire('quickLocalDialogueAsk');
+  await fire('quickFollowing');await shareReflection(get,fire);
+  finish({status:'ok',commentary:'STALE'});await stale;
+  assert.equal(get('quickLocalDialogueStatus').textContent,'');
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('privacy copy distinguishes disabled comparison and enabled explicit loopback transmission',async()=>{
+  const paragraph=html.match(/<p id="quickReflectionPrivacy"[^>]*>([^<]*)/)[1];
+  assert.match(paragraph,/API送信・ディスク保存はしません/);
+  assert.doesNotMatch(paragraph,/実験|ボタン|LLM/);
+  const {get}=await mount([],async()=>({status:'unavailable'}));
+  assert.match(get('quickReflectionPrivacy').textContent,/押した場合だけ.*ローカルAPI.*127\.0\.0\.1/);
+  assert.match(get('quickReflectionPrivacy').textContent,/ログ・保存方針は不明/);
+  assert.match(get('quickReflectionPrivacyText').textContent,/サーバーもLLMも検証しません/);
+});
+
+test('pending dialogue is discarded on edits, invalid submit, new practice, errors, model switch and page exit',async()=>{
+  for(const action of ['note','choice','reason','invalid','recompare','day','again','practice','error','model','pagehide']) {
+    let finish;
+    const {get,fire,calls,state,pagehide}=await mount([{id:'demo',name:'demo',owned:true}],
+      ()=>new Promise(resolve=>{finish=resolve;}));
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    const pending=fire('quickLocalDialogueAsk');
+    assert.equal(get('quickLocalDialogueAsk').disabled,true,action);
+    if(action==='note') {get('quickHumanNote').value='edited';await fire('quickHumanNote','input');}
+    if(action==='choice') {get('quickHumanChoice').value='wait';await fire('quickHumanChoice','change');}
+    if(action==='reason') {get('quickHumanReason').value='drop';await fire('quickHumanReason','change');}
+    if(action==='invalid') {get('quickHumanNote').value='x'.repeat(121);await fire('quickReflectionForm','submit');}
+    if(action==='recompare') await shareReflection(get,fire,'wait','drop','new');
+    if(action==='day') {await fire('quickFollowing');await shareReflection(get,fire);}
+    if(action==='again') await fire('quickAgain');
+    if(action==='practice'||action==='error') {
+      if(action==='error')state.practice=async()=>({error:'mock failure'});
+      await fire('quickForm','submit');await fire('quickRun');
+    }
+    if(action==='model') {get('quickModel').value='demo';await fire('quickModel','change');}
+    if(action==='pagehide')pagehide();
+    assert.equal(get('quickLocalDialogueStatus').textContent,'',action);
+    await fire('quickLocalDialogueAsk');
+    assert.equal(calls.filter(c=>c.path==='/api/local-dialogue').length,1,action);
+    finish({status:'ok',commentary:'STALE '+action});await pending;
+    assert.equal(get('quickLocalDialogueStatus').textContent,'',action);
+    if(['note','choice','reason','invalid'].includes(action)) {
+      assert.equal(get('quickLocalDialogue').hidden,true,action);
+      assert.equal(get('quickLocalDialogueAsk').disabled,true,action);
+      await fire('quickLocalDialogueAsk');
+      assert.equal(calls.filter(c=>c.path==='/api/local-dialogue').length,1,action);
+      if(action==='invalid')get('quickHumanNote').value='valid revision';
+      await fire('quickReflectionForm','submit');
+      assert.equal(get('quickLocalDialogueAsk').disabled,false,action);
+      const fresh=fire('quickLocalDialogueAsk');
+      finish({status:'ok',commentary:'FRESH'});await fresh;
+      assert.ok(get('quickLocalDialogueStatus').textContent.endsWith('FRESH'),action);
+    }
+    const reloaded=await mount([],async()=>({status:'unavailable'}));
+    assert.equal(reloaded.get('quickLocalDialogueStatus').textContent,'');
+    assert.equal(reloaded.get('quickLocalDialogue').hidden,true);
+    assert.equal(reloaded.calls.some(c=>c.path==='/api/local-dialogue'),false);
+  }
 });

@@ -259,7 +259,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="quickReflectionPrivacy" class="simple-hint">メモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。</p>
     <details id="quickReflectionPrivacyDetails">
      <summary>比較と入力の扱いについて</summary>
-     <p>結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
+     <p id="quickReflectionPrivacyText">結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
     </details>
     <p id="quickReflectionDay"></p>
     <label for="quickHumanChoice">自分ならどうする？</label>
@@ -275,6 +275,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="quickHumanSummary"></p><p id="quickHumanMemo"></p>
     <p id="quickIndependentDecision"></p><p id="quickDecisionComparison"></p><p id="quickReflectionReply"></p>
     <p id="quickReflectionNext"></p>
+   </div>
+   <div id="quickLocalDialogue" data-local-dialogue="disabled" hidden>
+    <p>任意のローカル対話：このボタンを押すと、選択・理由・120文字以内のメモ・画面に記録されたAI行動を、このアプリのローカルAPI経由で127.0.0.1のLLMに送信します。アプリから外部APIには送りません。入力情報はサーバーもLLMも検証しません。応答はモデル生成コメントで、予測モデルの実際の判断理由ではありません。このアプリは対話を保存せず、自動記憶・学習・実際の注文や設定・予測・XPの変更を行いません。接続先LLMのログ・保存・外部通信の有無は不明のため、別途確認が必要です。</p>
+    <button id="quickLocalDialogueAsk" type="button">ローカルAIに聞く（実験）</button>
+    <p id="quickLocalDialogueStatus" role="status" aria-live="polite"></p>
    </div>
    <button id="quickReflectionEdit" type="button" aria-controls="advancedEntry companionControls" hidden>判断ルールを見直す</button>
   </details>

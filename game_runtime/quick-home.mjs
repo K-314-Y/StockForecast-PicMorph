@@ -38,7 +38,7 @@ function syncReplayOwner() {
     element('quickMini').hidden ? '相棒の外見は上の画面で確認できます' :
     '自作キャラと振り返る';
 }
-// Deliberately page-only: never part of the practice request or model input.
+// Page-only reflection; optional explicit dialogue never enters prediction input.
 const reflections = new Map();
 const reasonLabels = {trend:'値動きの流れ',drop:'下落リスク',limit:'損失を抑えたい',other:'その他'};
 // Only structured selections and the recorded signal choose this copy. Notes are display-only.
@@ -58,7 +58,27 @@ const reflectionNextActions = {
   limit:'相棒エディターの「上昇判断時に使う資金（%）」を自分で見直せます。これは損切りの設定ではありません。',
   other:'相棒エディターで、自分の判断ルールや資金の使い方を見直せます。',
 };
+let dialogueEpoch = 0;
+let dialoguePending = false;
+const dialogueEnabled = element('quickLocalDialogue').dataset.localDialogue === 'enabled';
+if(dialogueEnabled) {
+  element('quickReflectionPrivacy').textContent='通常の比較では入力をAPIへ送らず、このページ内だけで扱います。「ローカルAIに聞く（実験）」を押した場合だけ、選択・理由・メモ・記録されたAI行動をローカルAPI経由で127.0.0.1のLLMに送信します。接続先のログ・保存方針は不明です。';
+  element('quickReflectionPrivacyText').textContent='通常の比較は結果を見た後の定型文による振り返りで、自由文を解釈せず、API送信・ディスク保存・学習を行いません。入力はページ内メモリに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。任意のローカル対話は下の実験ボタンでのみ送信します。入力情報はクライアント提供で、サーバーもLLMも検証しません。応答は生成コメントで、予測モデルの実際の判断理由ではありません。対話の送信内容と接続先の扱いはボタンの説明をご確認ください。';
+}
+function invalidateDialogue() {
+  dialogueEpoch++;
+  element('quickLocalDialogueStatus').textContent='';
+}
+function clearComparedReflection() {
+  invalidateDialogue();
+  reflections.delete(replayDay);
+  element('quickLocalDialogue').hidden=true;
+  element('quickLocalDialogueAsk').disabled=true;
+  element('quickReflectionResult').hidden=true;
+  element('quickReflectionEdit').hidden=true;
+}
 function renderReflection() {
+  invalidateDialogue();
   const available=!!replay && replayDay>=1 && replayDay<=12;
   element('quickReflection').hidden=!available;
   if(!available)element('quickReflection').open=false;
@@ -69,6 +89,8 @@ function renderReflection() {
   element('quickHumanNote').value=saved?.note || '';
   element('quickReflectionError').textContent='';
   element('quickReflectionResult').hidden=!saved;
+  element('quickLocalDialogue').hidden=!dialogueEnabled || !saved;
+  element('quickLocalDialogueAsk').disabled=dialoguePending || !saved;
   element('quickReflectionEdit').hidden=!saved || replayModel!=='self';
   for(const id of ['quickHumanSummary','quickHumanMemo','quickIndependentDecision',
     'quickDecisionComparison','quickReflectionReply','quickReflectionNext'])element(id).textContent='';
@@ -78,7 +100,7 @@ function renderReflection() {
   const humanChoice=saved.choice==='buy'?'買う':'待つ';
   element('quickHumanSummary').textContent='人間（自分）の選択：'+
     humanChoice+' ／ 重視した理由：'+reasonLabels[saved.reason];
-  element('quickHumanMemo').textContent='自分のメモ（AIは解釈しません）：'+(saved.note || 'なし');
+  element('quickHumanMemo').textContent=(dialogueEnabled ? '自分のメモ（通常の比較ではAIは解釈しません）：' : '自分のメモ（AIは解釈しません）：')+(saved.note || 'なし');
   element('quickIndependentDecision').textContent='今回のAIの独立判断：'+signal+
     (signal==='LONG'?'（株を持つ）':'（現金で待機）')+
     (replay.liquidated_at_step!==null && replayDay>replay.liquidated_at_step ?
@@ -95,6 +117,7 @@ function renderReflection() {
 }
 element('quickReflectionForm').addEventListener('submit',event=>{
   event.preventDefault();
+  invalidateDialogue();
   if(!replay || replayDay<1 || replayDay>12)return;
   const choice=element('quickHumanChoice').value;
   const reason=element('quickHumanReason').value;
@@ -103,12 +126,43 @@ element('quickReflectionForm').addEventListener('submit',event=>{
     !Object.hasOwn(reasonLabels,reason) ? 'quickHumanReason' :
     note.length>120 ? 'quickHumanNote' : null;
   if(invalid) {
+    clearComparedReflection();
     element('quickReflectionError').textContent='選択と理由を選び、メモは120文字以内にしてください。';
     element(invalid).focus();
     return;
   }
   reflections.set(replayDay,{choice,reason,note});
   renderReflection();
+});
+// Editing invalidates the compared input immediately, before another submission.
+for(const [id,event] of [['quickHumanChoice','change'],['quickHumanReason','change'],['quickHumanNote','input']]) {
+  element(id).addEventListener(event,clearComparedReflection);
+}
+window.addEventListener?.('pagehide',()=>clearReplay());
+// The sole dialogue request site: explicit click after a compared reflection.
+element('quickLocalDialogueAsk').addEventListener('click',async()=>{
+  const saved=reflections.get(replayDay);
+  if(!dialogueEnabled || dialoguePending || !saved || !replay || replayDay<1 || replayDay>12)return;
+  const epoch=dialogueEpoch;
+  dialoguePending=true;
+  element('quickLocalDialogueAsk').disabled=true;
+  element('quickLocalDialogueStatus').textContent='ローカルLLMに問い合わせ中（未受信）…';
+  try {
+    const result=await request('/api/local-dialogue',{
+      choice:saved.choice,reason:saved.reason,note:saved.note,ai_action:replay.daily_ai_signals[replayDay-1],
+    });
+    if(epoch!==dialogueEpoch)return;
+    element('quickLocalDialogueStatus').textContent=result.status==='ok' &&
+      typeof result.commentary==='string' && result.commentary.length<=1200 ?
+      'モデル生成コメント（AIの真の判断理由ではありません・入力情報はLLM未検証）：'+result.commentary :
+      'ローカルLLMは利用できません。LLMの応答は受信していません。通常の比較を続けられます。';
+  } catch {
+    if(epoch===dialogueEpoch)element('quickLocalDialogueStatus').textContent=
+      'ローカルLLMは利用できません。LLMの応答は受信していません。通常の比較を続けられます。';
+  } finally {
+    dialoguePending=false;
+    element('quickLocalDialogueAsk').disabled=!dialogueEnabled || !reflections.has(replayDay);
+  }
 });
 const miniLayers = ['Base','Outfit','Face','Hair'];
 function clearMini() {

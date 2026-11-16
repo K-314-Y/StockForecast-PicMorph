@@ -4,6 +4,7 @@
  * No broker calls, V6 writes, public binding or client-supplied predictions.
  */
 import {createServer} from 'node:http';
+import {validateDialogueInput, validateDialogueResult} from './local-dialogue.mjs';
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
@@ -271,7 +272,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
-                                  trainedVersion = resolveTrainedVersion} = {}) {
+                                  trainedVersion = resolveTrainedVersion,
+                                  localDialogue = null} = {}) {
+  if (localDialogue !== null && typeof localDialogue !== 'function') throw Error('Invalid localDialogue injection');
+  let dialogueBusy = false;
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
   const tickets = new Map();
@@ -398,10 +402,26 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           {error: 'イラストを読み込めません'});
       }
     }
+    // Independent one-at-a-time dialogue path; never enters gameplay or stores.
+    if (localDialogue !== null && path === '/api/local-dialogue' && req.method === 'POST') {
+      if (dialogueBusy) return json(res,429,{error:'対話が処理中です'});
+      dialogueBusy = true;
+      try {
+        const input = validateDialogueInput(await getBody(req,1024));
+        const result = validateDialogueResult(await localDialogue(input));
+        return json(res,result.status === 'ok' ? 200 : 503,result);
+      } catch (error) {
+        return json(res,[400,413,415].includes(error?.status) ? error.status : 503,
+          {status:'unavailable'});
+      } finally {dialogueBusy = false;}
+    }
     if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
       const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
-      const body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
+      let body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
+      if (!script && localDialogue !== null) {
+        body = Buffer.from(body.toString('utf8').replace('data-local-dialogue="disabled"', 'data-local-dialogue="enabled"'));
+      }
       res.writeHead(200, {'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
         'Content-Length': body.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
