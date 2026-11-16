@@ -1288,17 +1288,23 @@ test('self replay navigation preserves source art and demo switch clears mini wh
 
 test('result summary uses the submitted self, demo or literal user model name and change clears ownership',async()=>{
   const malicious='<img onerror=alert(1)>';
-  for(const id of ['self','demo','owned']) {
+  for(const [id,companionName] of [
+    ['self',undefined],['self',null],['self',''],['self','   '],['self',123],
+    ['self','検証用キャラ'],['self',`検証<&"'相棒`],['demo','無視する相棒'],['owned',malicious],
+  ]) {
     const {get,fire,calls,state}=await mount([
       {id:'demo',name:'デモAI',owned:true},{id:'owned',name:malicious,owned:true},
     ]);
     showComposite(get);
     get('speech').textContent='元の声';get('scene').dataset.mood='growth';
     get('quickModel').value=id;
-    const name=get('quickModel').selectedOptions[0].textContent;
+    const name=id==='self' && typeof companionName==='string' && companionName.trim() ?
+      '自分のAI（相棒：'+companionName+'）' : get('quickModel').selectedOptions[0].textContent;
+    get('companionName').value='未保存プレビュー';
     const practice=state.practice;
     let resolveResponse;
-    state.practice=body=>new Promise(resolve=>{resolveResponse=async()=>resolve(await practice(body));});
+    state.practice=body=>new Promise(resolve=>{resolveResponse=async()=>resolve({...await practice(body),
+      ...(companionName===undefined?{}:{companion_name:companionName})});});
     await fire('quickForm','submit');
     // Even programmatic selection changes while awaiting a response cannot rename this request.
     const running=fire('quickRun');
