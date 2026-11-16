@@ -613,3 +613,16 @@ Nodeゲーム `http://127.0.0.1:8890/game` の「私のイラストを重ねる�
 追加テストは `node --test mcp/tests/manual-crop.test.mjs`。
 従来のゲーム、学習済みモデル、MCPツールは変えず、静的な
 `/crop-editor.mjs` の提供のみをNodeサーバーに追加。
+
+## P17：独立したローカル架空プレビュー（任意起動）
+
+`npm --offline --prefix game_runtime run preview:public` で独立プロセスを
+`127.0.0.1:8894` にのみ起動します。通常ゲーム起動やimportでは起動しません。
+`/` は架空プレビューの説明、`GET /api/public/preview` はコード内の固定エネルギー値、
+`GET /api/public/status` は最小の固定状態のみを返します。
+利用者のオリジナル作品やゲーム画面ではなく、公開準備の完了を示すものでもありません。
+作品・保存・育成・装備・市場・モデル・環境ファイルを読み書きせず、外部通信しません。
+公開許可・ライセンス確認・実公開有効化は常にfalseです。
+クエリ付きURL、他ルート、GET以外、外部Host、Origin/Forwarded系ヘッダーを拒否します。
+認証や実公開機能はなく、公開トンネルや外部配信には使用できません。
+単独テストは `node --test mcp/tests/public-preview.test.mjs`、通常のgame runtimeテストにも含みます。
