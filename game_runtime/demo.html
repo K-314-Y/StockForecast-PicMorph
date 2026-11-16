@@ -229,10 +229,16 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
  </div>
  <div>
-  <span class="eyebrow">STEP 01 / 練習</span><h2>まず1体でスタート</h2>
+  <span class="eyebrow">STEP 01 / 練習</span><h2>冒険をスタート</h2>
   <p>予測モデルの判断で仮想コインを動かします。実際の取引や今日の株価予測ではありません。</p>
   <p class="notice">架空相場・12日間・仮想コイン・換金不可</p>
+  <label for="adventureMode">冒険の作戦</label>
+  <select id="adventureMode" aria-describedby="adventureNote">
+   <option value="solo" selected>ひとりで挑戦（自分の相棒100%）</option>
+   <option value="team">フクロウと挑戦（自分の相棒50%・フクロウ50%）</option>
+  </select>
   <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
+  <small id="adventureNote">チームは同じ架空資産に対する2キャラの配分です。銘柄分散や実際の投資ではありません。チームでの一度きりの実績XPがあり、受取は練習後の「XPを受け取る」ボタンだけ。相棒が未作成でも標準AIで使えます。</small>
   <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
   <p id="brainStatus" class="brain-note">予測：標準モデル mine（未作成）。保存すると自分で設計した判断ルールで練習します。DRAFTの予測ルールは未適用。</p>
   <details class="appearance-controls" id="companionControls" open>
@@ -451,6 +457,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 </section>
 <section id="result" class="panel" hidden aria-labelledby="resultTitle">
  <span class="eyebrow">STEP 02 / ふり返り</span><h2 id="resultTitle">12日間の練習結果</h2><p id="resultCompanion" class="brain-note"></p>
+ <p id="resultAllocation" class="brain-note"></p>
  <div class="statgrid"><div class="stat">最終コイン<strong id="final">--</strong></div><div class="stat">仮想損益<strong id="profit">--</strong></div><div class="stat">最大下落率<strong id="drawdown">--</strong></div></div>
  <div class="review">
   <h3 id="modelJudgmentHeading">日ごとに標準モデルの判断を見よう</h3><p id="brainResult" class="brain-note">実行に使ったモデル：標準モデル mine</p><details id="brainProof" hidden><summary>実行モデルの検証情報</summary><p id="brainProofText" class="progress"></p></details><p class="progress" id="dayCount"></p>
