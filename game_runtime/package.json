@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && node --test ../mcp/tests/game-runtime.test.mjs"
+    "test": "npm run typecheck && node --test ../mcp/tests/game-runtime.test.mjs ../mcp/tests/public-preview.test.mjs",
+    "preview:public": "node public_preview.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"
