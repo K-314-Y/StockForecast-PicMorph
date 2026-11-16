@@ -8,26 +8,41 @@ const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url
 
 async function mount(models=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
+  let observeSource=()=>{};
   let document;
   class Element {
     constructor(tagName) {
       this.tagName=tagName.toUpperCase();
       this.children=[];this.handlers={};this.attributes={};
       this.textContent='';this._value='';this.hidden=false;this.open=false;this.disabled=false;
+      this.complete=false;this.naturalWidth=0;this.style={};this.srcAssignments=0;
     }
     set innerHTML(value){throw Error('HTML insertion forbidden');}
     get value(){return this._value;}
     set value(value){this._value=String(value);}
     get selectedOptions(){return this.children.filter(option=>option.value===this.value);}
-    setAttribute(key,value){this.attributes[key]=String(value);}
-    removeAttribute(key){delete this.attributes[key];}
+    get src(){return this.getAttribute('src')||'';}
+    set src(value){this.setAttribute('src',value);}
+    getAttribute(key){return this.attributes[key]??null;}
+    setAttribute(key,value){
+      this.attributes[key]=String(value);
+      if(key==='src' && this.tagName==='IMG'){
+        this.complete=false;this.naturalWidth=0;this.srcAssignments++;
+      }
+    }
+    removeAttribute(key){delete this.attributes[key];if(key==='src'){this.complete=false;this.naturalWidth=0;}}
     addEventListener(name,handler){this.handlers[name]=handler;}
     replaceChildren(...children){this.children=children;if(this.tagName==='SELECT')this.value='';}
     append(...children){this.children.push(...children);}
     focus(options){document.activeElement=this;this.focusOptions=options;}
     blur(){if(document.activeElement===this)document.activeElement=null;}
     scrollIntoView(){scrolls.push(this);}
-    async fire(name='click'){await this.handlers[name]?.({preventDefault(){}});}
+    async fire(name='click'){
+      if(this.tagName==='IMG' && (name==='load'||name==='error')){
+        this.complete=true;this.naturalWidth=name==='load'?150:0;
+      }
+      await this.handlers[name]?.({preventDefault(){}});
+    }
   }
   for(const [,tag,attributes,id] of html.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) {
     const node=new Element(tag);
@@ -61,12 +76,18 @@ async function mount(models=[]) {
     removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
     clear:()=>storageWrites.push(['clear']),
   };
-  const context={document,fetch,localStorage:storage,sessionStorage:storage};
+  const context={document,fetch,localStorage:storage,sessionStorage:storage,
+    getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
+    MutationObserver:class {
+      constructor(callback){observeSource=callback;}
+      observe(target,options){assert.equal(target,nodes.get('scene'));assert.equal(options.subtree,true);}
+    }};
   context.window=context;
   runInNewContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
-  return {get,calls,scrolls,storageWrites,document,state,fire:(id,event)=>get(id).fire(event)};
+  return {get,calls,scrolls,storageWrites,document,state,sourceChanged:()=>observeSource(),
+    fire:(id,event)=>get(id).fire(event)};
 }
 
 // Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
@@ -897,4 +918,226 @@ test('25x stopout voice takes priority over worst day and changes after stopout'
     assert.equal(get('quickLeverage').value,'25');
     assert.equal(calls.length,before);
   }
+});
+
+const miniSlots=['Base','Outfit','Face','Hair','Portrait'];
+function assertMiniCleared(get) {
+  assert.equal(get('quickMini').hidden,true);
+  for(const slot of miniSlots) {
+    assert.equal(get('quickMini'+slot).hidden,true,slot);
+    assert.equal(get('quickMini'+slot).getAttribute('src'),null,slot);
+  }
+}
+async function loadMini(get,fire) {
+  for(const slot of miniSlots) {
+    const image=get('quickMini'+slot);
+    if(image.src && !image.complete)await fire('quickMini'+slot,'load');
+  }
+}
+function showComposite(get) {
+  get('chibi').hidden=true;
+  get('portrait').hidden=true;
+  get('artworkStage').hidden=false;
+  for(const slot of miniSlots.slice(0,4)) {
+    const image=get('artwork'+slot);
+    image.src='blob:current-'+slot;
+    image.hidden=false;image.complete=true;image.naturalWidth=150;
+    image.parentElement=get('artworkStage');
+  }
+  get('artworkStage').parentElement=get('scene');
+}
+
+test('mini composite preserves all source layers, ordering, text safety and original images',async()=>{
+  const {get,fire,calls,storageWrites,sourceChanged}=await mount();
+  assertMiniCleared(get);
+  showComposite(get);
+  const originals=miniSlots.slice(0,4).map(slot=>({src:get('artwork'+slot).src,
+    hidden:get('artwork'+slot).hidden}));
+  await fire('quickForm','submit');await fire('quickRun');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    assert.equal(get('quickMini'+slot).src,originals[index].src);
+    assert.equal(get('quickMini'+slot).hidden,false);
+    assert.match(html,new RegExp('#quickMini'+slot+'\\{z-index:'+index+'\\}'));
+  }
+  assert.equal(get('quickMiniPortrait').hidden,true);
+  const before=calls.length;
+  get('artworkFace').hidden=true;
+  sourceChanged();
+  assert.equal(get('quickMiniFace').hidden,true);
+  assert.equal(get('quickMiniFace').src,'');
+  get('artworkHair').src='blob:unsaved-hair';
+  await fire('artworkHair','load');
+  assert.equal(get('quickMiniHair').src,'blob:unsaved-hair');
+  assert.match(html,/aria-label="現在表示中の相棒のイラスト"/);
+  assert.doesNotMatch(get('quickTacticsDay').textContent,/<img|blob:|保存済み/);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    assert.equal(get('artwork'+slot).src,slot==='Hair'?'blob:unsaved-hair':originals[index].src);
+    assert.equal(get('artwork'+slot).hidden,slot==='Face');
+  }
+  await fire('quickBestDay');await fire('quickWorstDay');
+  assert.equal(calls.length,before);
+  assert.deepEqual(storageWrites,[]);
+  const nodes=htmlNodes();
+  for(const slot of miniSlots) {
+    const matches=nodes.filter(node=>node.id==='quickMini'+slot);
+    assert.equal(matches.length,1);
+    assert.ok(matches[0].parents.includes('quickReplay'));
+    assert.doesNotMatch(matches[0].attributes,/\bsrc=/);
+  }
+  assert.match(html,/#quickMini\{[^}]*width:80px;[^}]*aspect-ratio:150\/192/);
+  assert.match(html,/#quickMini img\{[^}]*object-fit:contain/);
+});
+
+test('mini waits for every visible layer and responds to loading, errors and artwork resets',async()=>{
+  const {get,fire,sourceChanged}=await mount();
+  showComposite(get);
+  get('artworkHair').complete=false;
+  get('artworkHair').naturalWidth=0;
+  await fire('quickForm','submit');await fire('quickRun');
+  assertMiniCleared(get);
+  get('artworkHair').complete=true;get('artworkHair').naturalWidth=150;
+  await fire('artworkHair','load');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const slot of miniSlots.slice(0,4)) {
+    const source=get('artwork'+slot);
+    source.naturalWidth=0;
+    await fire('artwork'+slot,'error');
+    assertMiniCleared(get);
+    source.naturalWidth=150;
+    await fire('artwork'+slot,'load');
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+    source.removeAttribute('src');sourceChanged();
+    assertMiniCleared(get);
+    source.src='blob:restored-'+slot;source.complete=true;source.naturalWidth=150;sourceChanged();
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  }
+  get('artworkStage').hidden=true;get('chibi').hidden=false;sourceChanged();
+  assertMiniCleared(get);
+  showComposite(get);sourceChanged();
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  for(const [id,property,value] of [['scene','display','none'],['artworkStage','visibility','hidden'],
+    ['artworkBase','opacity','0']]) {
+    get(id).style[property]=value;sourceChanged();assertMiniCleared(get);
+    delete get(id).style[property];sourceChanged();
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  }
+});
+
+test('mini uses loaded visible blueprint portrait and hides CSS fallback or missing art',async()=>{
+  const {get,fire,sourceChanged}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');
+  assertMiniCleared(get);
+  showComposite(get);
+  get('artworkStage').hidden=true;
+  const portrait=get('portrait');
+  portrait.hidden=false;portrait.src='data:image/png;base64,original';
+  sourceChanged();assertMiniCleared(get);
+  portrait.complete=true;portrait.naturalWidth=150;
+  await fire('portrait','load');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  assert.equal(get('quickMiniPortrait').src,portrait.src);
+  assert.equal(get('quickMiniPortrait').hidden,false);
+  for(const slot of miniSlots.slice(0,4))assert.equal(get('quickMini'+slot).src,'');
+  portrait.naturalWidth=0;await fire('portrait','error');assertMiniCleared(get);
+  portrait.hidden=true;get('chibi').hidden=false;sourceChanged();assertMiniCleared(get);
+});
+
+test('demo AI never borrows self art; every review reset clears all preview sources',async()=>{
+  for(const [id,event] of [['quickAmount','input'],['quickModel','change'],
+    ['quickLeverage','change'],['quickTen','click'],['quickHalf','click'],
+    ['quickAll','click'],['quickForm','submit'],['quickAgain','click']]) {
+    const {get,fire,sourceChanged,calls,storageWrites}=await mount([
+      {id:'demo',name:'<img src=x onerror=alert(1)>',owned:true},
+    ]);
+    showComposite(get);
+    await fire('quickForm','submit');await fire('quickRun');
+    await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+    await fire(id,event);assertMiniCleared(get);
+    sourceChanged();await fire('artworkBase','load');assertMiniCleared(get);
+    get('quickModel').value='demo';
+    await fire('quickModel','change');
+    await fire('quickForm','submit');await fire('quickRun');
+    assertMiniCleared(get);
+    await fire('quickFollowing');sourceChanged();assertMiniCleared(get);
+    assert.doesNotMatch(get('quickTacticsDay').textContent,/<img|onerror/);
+    assert.equal(calls.filter(call=>call.path==='/api/quick-practice').length,2);
+    assert.ok(calls.every(call=>['/api/model-shop','/api/quick-practice'].includes(call.path)));
+    assert.deepEqual(storageWrites,[]);
+  }
+});
+
+test('mini remains cleared during pending retry and failed result, even on source load',async()=>{
+  const {get,fire,state}=await mount();
+  showComposite(get);
+  await fire('quickForm','submit');await fire('quickRun');
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  await fire('quickForm','submit');
+  let finish;
+  state.practice=()=>new Promise(resolve=>{finish=resolve;});
+  const running=fire('quickRun');
+  assertMiniCleared(get);
+  await fire('artworkBase','load');assertMiniCleared(get);
+  finish({error:'<img src=x onerror=alert(1)>'});
+  await running;
+  assertMiniCleared(get);
+  assert.match(get('quickStatus').textContent,/<img src=x/); // Literal text, never inserted HTML.
+  assert.equal(get('artworkBase').src,'blob:current-Base');
+});
+
+test('mini reveals atomically after all copies load and never retries an unchanged failed src',async()=>{
+  const {get,fire,sourceChanged,calls,storageWrites}=await mount();
+  showComposite(get);
+  await fire('quickForm','submit');await fire('quickRun');
+  const before=calls.slice();
+  assert.equal(get('quickMini').hidden,true);
+  for(const [index,slot] of miniSlots.slice(0,4).entries()) {
+    const copy=get('quickMini'+slot);
+    assert.equal(copy.complete,false);
+    assert.equal(copy.naturalWidth,0);
+    await fire('quickMini'+slot,'load');
+    assert.equal(get('quickMini').hidden,index!==3);
+  }
+  const hair=get('quickMiniHair');
+  await fire('quickMiniHair','error');
+  assert.equal(get('quickMini').hidden,true);
+  const assignments=hair.srcAssignments;
+  sourceChanged();await fire('quickFollowing');await fire('quickMiniHair','error');
+  assert.equal(hair.srcAssignments,assignments);
+  assert.equal(get('quickMini').hidden,true);
+  get('artworkHair').src='blob:replacement';sourceChanged();
+  assertMiniCleared(get);
+  await fire('artworkHair','load');
+  assert.equal(hair.src,'blob:replacement');
+  assert.equal(get('quickMini').hidden,true);
+  await loadMini(get,fire);
+  assert.equal(get('quickMini').hidden,false);
+  get('artworkFace').hidden=true;sourceChanged();
+  assert.equal(get('quickMiniFace').src,'');
+  assert.equal(get('quickMini').hidden,false);
+  get('artworkFace').hidden=false;sourceChanged();
+  assert.equal(get('quickMini').hidden,true);
+  await fire('quickMiniFace','load');
+  assert.equal(get('quickMini').hidden,false);
+  // A loaded replacement source must also wait for its newly assigned copy.
+  get('artworkHair').src='blob:loaded-replacement';
+  get('artworkHair').complete=true;get('artworkHair').naturalWidth=150;
+  sourceChanged();
+  assert.equal(get('quickMini').hidden,true);
+  assert.equal(hair.complete,false);
+  await fire('quickMiniHair','load');
+  assert.equal(get('quickMini').hidden,false);
+  assert.deepEqual(calls,before);
+  assert.deepEqual(storageWrites,[]);
+  await fire('quickAgain');assertMiniCleared(get);
+  await fire('quickMiniHair','load');assertMiniCleared(get);
 });
