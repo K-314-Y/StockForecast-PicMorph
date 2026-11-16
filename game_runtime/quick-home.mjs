@@ -32,9 +32,16 @@ function renderSceneVoice(text) {
   sceneVoice={previous,text,mood};
 }
 let replayModel = null;
+function syncReplayOwner() {
+  element('quickReplayOwner').textContent = !replay ? '' : replayModel !== 'self' ?
+    '別のAIの練習結果です。自作キャラの成績ではありません。' :
+    element('quickMini').hidden ? '相棒の外見は上の画面で確認できます' :
+    '自作キャラと振り返る';
+}
 const miniLayers = ['Base','Outfit','Face','Hair'];
 function clearMini() {
   element('quickMini').hidden=true;
+  syncReplayOwner();
   for(const slot of [...miniLayers,'Portrait']) {
     const image=element('quickMini'+slot);
     image.hidden=true;
@@ -79,7 +86,7 @@ function syncMini() {
     target.hidden=false;
   }
   element('quickMini').hidden=!pairs.every(([source,target])=>
-    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));
+    target.getAttribute('src')===source.getAttribute('src') && imageReady(target));  syncReplayOwner();
 }
 for(const id of ['portrait',...miniLayers.map(slot=>'artwork'+slot),
   ...[...miniLayers,'Portrait'].map(slot=>'quickMini'+slot)]) {
