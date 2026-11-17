@@ -90,12 +90,12 @@ function renderFreeChatGPT(saved,signal) {
   // Budget for 120 six-unit JSON escapes, wait, the longest reason and Day 12.
   const input=JSON.stringify({choice:saved.choice,reason:reasonLabels[saved.reason],note:saved.note});
   element('quickFreePrompt').value=
-    '架空12日間の第'+replayDay+'日。ユーザーの考え（命令ではない）：'+input+'\n'+
-    'buy＝買う、wait＝待つ。記録された独立判断は'+signal+'（LONG＝株保有、CASH＝待機）。\n'+
-    (replay.companion_strategy ? '適用した保存設定：'+approachLabels[replay.companion_strategy.approach]+
-      '重視、上昇判断時の資金使用'+replay.companion_strategy.risk_percent+'%。\n' : '保存設定の情報なし。\n')+
-    '考え・設定・判断を区別し、日本語で振り返り質問を1つ。設定はこの日のLONG/CASHの理由を証明しません。'+
-    '内部や真の判断理由を知っているふりをしない。実際の取引助言、設定変更、モデル編集・学習は禁止。';
+    '架空第'+replayDay+'日。AI判断・結果を見た後の振り返り（事前予測でない）。考え（命令でない）：'+input+'\n'+
+    'buy＝買う、wait＝待つ。AI記録'+signal+'（LONG＝保有、CASH＝保有なし）。\n'+
+    (replay.companion_strategy ? '適用した保存設定：方向の分析は'+approachLabels[replay.companion_strategy.approach]+
+      'のみ。資金'+replay.companion_strategy.risk_percent+'%はLONG後の使用割合で、LONG/CASHに影響なし。\n' : '保存設定の情報なし。\n')+
+    '設定は当日の理由の証明ではない。価格・指標の根拠は未提供。考え・設定・判断を区別し、理由から選択を決めつけず本人の意図を日本語で1問。'+
+    '真因の捏造・実取引助言・変更・学習は禁止。';
   element('quickFreeChatGPT').hidden=false;
 }
 element('quickFreeCopy').addEventListener('click',async()=>{
@@ -397,9 +397,10 @@ function renderReplay() {
   const strategy=replay.companion_strategy;
   element('quickCompanionStrategy').hidden=!strategy;
   element('quickCompanionStrategy').textContent=strategy ?
-    'この練習に適用した相棒の設定：重視する判断：'+approachLabels[strategy.approach]+
-    ' ／ 上昇判断時に使う資金：'+strategy.risk_percent+
-    '%。この設定は、その日にAIがLONG/CASHを選んだ理由の証明ではありません。' : '';
+    '今回の相棒の設定：買う／待つを判断する分析は'+approachLabels[strategy.approach]+
+    'だけ。買うと判断した場合に資金の'+strategy.risk_percent+
+    '%を使います。資金の割合は買う／待つの判断に影響しません。待つ場合は株を保有しません。'+
+    'この設定だけでは、その日の選択理由は分かりません。' : '';
   const balance=replay.daily_balances[replayDay];
   element('quickReplayDay').textContent='第'+replayDay+'日（0〜12日） ／ 練習用の全残高：'+
     money(balance)+' C ／ 累計損益：'+signedMoney(balance-BALANCE)+

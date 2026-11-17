@@ -1902,9 +1902,11 @@ test('free bridge works without client, generates exact quoted reflection, and c
     assert.ok(prompt.length<=1000);
     assert.ok(prompt.includes(JSON.stringify({choice:'wait',reason:'下落リスク',note})));
     assert.match(prompt,/第1日/);
-    assert.match(prompt,/独立判断はLONG/);
-    assert.match(prompt,/内部や真の判断理由を知っているふりをしない/);
-    assert.match(prompt,/実際の取引助言、設定変更/);
+    assert.match(prompt,/AI記録LONG/);
+    assert.match(prompt,/AI判断・結果を見た後の振り返り（事前予測でない）/);
+    assert.match(prompt,/真因の捏造・実取引助言・変更・学習は禁止/);
+    assert.match(prompt,/価格・指標の根拠は未提供/);
+    assert.match(prompt,/理由から選択を決めつけず本人の意図を日本語で1問/);
     assert.equal(copies.length,0);
     const before=calls.slice();
     await fire('quickFreeCopy');
@@ -2058,22 +2060,35 @@ test('saved strategy stays bound to self replay and fits escaped notes without t
     state.practice=async body=>({...await practice(body),model_id:'self',companion_strategy:strategy});
     await fire('quickForm','submit');await fire('quickRun');
     assert.equal(get('quickCompanionStrategy').hidden,false);
-    assert.match(get('quickCompanionStrategy').textContent,/この練習に適用した相棒の設定/);
-    assert.match(get('quickCompanionStrategy').textContent,/上昇判断時に使う資金：100%/);
-    assert.match(get('quickCompanionStrategy').textContent,/理由の証明ではありません/);
+    assert.match(get('quickCompanionStrategy').textContent,/今回の相棒の設定/);
+    assert.ok(get('quickCompanionStrategy').textContent.includes('買う／待つを判断する分析は'+label+'だけ'));
+    assert.match(get('quickCompanionStrategy').textContent,/買うと判断した場合に資金の100%を使います/);
+    assert.match(get('quickCompanionStrategy').textContent,/資金の割合は買う／待つの判断に影響しません/);
+    assert.match(get('quickCompanionStrategy').textContent,/待つ場合は株を保有しません/);
+    assert.match(get('quickCompanionStrategy').textContent,/この設定だけでは、その日の選択理由は分かりません/);
+    assert.doesNotMatch(get('quickCompanionStrategy').textContent,/LONG|CASH|重み/);
     strategy.approach='trend';strategy.risk_percent=5;
     get('creatorApproach').value='trend';get('creatorRisk').value='5';
     const before=calls.length;
     for(let day=1;day<=12;day++) {
       await fire('quickFollowing');
       const note='\u0000'.repeat(120);
-      await shareReflection(get,fire,'wait','limit',note);
-      const prompt=get('quickFreePrompt').value;
-      assert.ok(prompt.length<=1000,`${approach} day ${day}: ${prompt.length}`);
-      assert.ok(prompt.includes(JSON.stringify({choice:'wait',reason:'損失を抑えたい',note})));
-      assert.ok(prompt.includes('適用した保存設定：'+label+'重視、上昇判断時の資金使用100%'));
-      assert.doesNotMatch(prompt,/trend|momentum|reversion|volatility/);
-      assert.match(prompt,/LONG\/CASHの理由を証明しません/);
+      for(const choice of ['buy','wait'])for(const [reason,reasonLabel] of [
+        ['trend','値動きの流れ'],['drop','下落リスク'],['limit','損失を抑えたい'],['other','その他'],
+      ]) {
+        await shareReflection(get,fire,choice,reason,note);
+        const prompt=get('quickFreePrompt').value;
+        assert.ok(prompt.length<=1000,`${approach} day ${day} ${choice}/${reason}: ${prompt.length}`);
+        assert.ok(prompt.includes(JSON.stringify({choice,reason:reasonLabel,note})));
+        assert.ok(prompt.includes('適用した保存設定：方向の分析は'+label+'のみ。資金100%はLONG後の使用割合で、LONG/CASHに影響なし'));
+        assert.match(prompt,/CASH＝保有なし/);
+        assert.doesNotMatch(prompt,/trend|momentum|reversion|volatility/);
+        assert.match(prompt,/設定は当日の理由の証明ではない/);
+        assert.match(prompt,/AI判断・結果を見た後の振り返り（事前予測でない）/);
+        assert.match(prompt,/価格・指標の根拠は未提供/);
+        assert.match(prompt,/考え・設定・判断を区別し、理由から選択を決めつけず本人の意図を日本語で1問/);
+        assert.match(prompt,/真因の捏造・実取引助言・変更・学習は禁止/);
+      }
     }
     assert.equal(calls.length,before);assert.deepEqual(copies,[]);assert.deepEqual(storageWrites,[]);
     await fire('quickAgain');
@@ -2126,7 +2141,7 @@ test('saved context and manual prompt clear on practice invalidation and failed 
     await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
     await shareReflection(get,fire);
     assert.equal(get('quickCompanionStrategy').hidden,false);
-    assert.match(get('quickFreePrompt').value,/適用した保存設定：平均回帰重視、上昇判断時の資金使用5%/);
+    assert.match(get('quickFreePrompt').value,/適用した保存設定：方向の分析は平均回帰のみ。資金5%はLONG後の使用割合/);
     if(change==='model'){get('quickModel').value='demo_stub';await fire('quickModel','change');}
     if(change==='amount'){get('quickAmount').value='5';await fire('quickAmount','input');}
     if(change==='leverage'){get('quickLeverage').value='2';await fire('quickLeverage','change');}

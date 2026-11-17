@@ -205,3 +205,44 @@ test('strategy describes exactly the saved profile passed to prediction for self
       modelShopStore:{licensedModel:async()=>structuredClone(MODEL)}});
   }
 });
+
+test('risk changes capital use after LONG but never predictor signals or synthetic prices',async()=>{
+  let differentProfits=0;
+  for(const approach of ['trend','momentum','reversion','volatility']) {
+    const results=[],plans=[];
+    const source=snapshot(),sourceBefore=structuredClone(source);
+    for(const risk_percent of [5,100]) {
+      const saved={revision:1,created:true,companion:validateCompanion({
+        name:'相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach,risk_percent,
+      })};
+      const before=structuredClone(saved);
+      await withServer(async({base,read})=>{
+        const {status,data}=await post(base,{amount:1000,model_id:'self',leverage:1});
+        assert.equal(status,200,JSON.stringify(data));
+        assert.deepEqual(data.companion_strategy,{source:'saved_companion',approach,risk_percent});
+        assert.equal(data.persisted,false);assert.equal(data.xp_awarded,false);
+        assert.equal(data.order_placed,false);
+        assert.deepEqual(read(),{writes:0,predictions:1});
+        assert.deepEqual(saved,before);
+        assert.deepEqual(source,sourceBefore);
+        results.push(data);
+      },{companion:saved,loadSnapshot:async()=>source,inspectPlan:plan=>plans.push(structuredClone(plan))});
+    }
+    assert.equal(plans[0].models.mine.risk_fraction,.05);
+    assert.equal(plans[1].models.mine.risk_fraction,1);
+    const normalized=plans.map(plan=>({...plan,models:{...plan.models,
+      mine:{...plan.models.mine,risk_fraction:.35}}}));
+    assert.deepEqual(normalized[0],normalized[1],'only the saved capital fraction differs');
+    assert.deepEqual(results[0].daily_synthetic_prices,results[1].daily_synthetic_prices);
+    assert.deepEqual(results[0].daily_ai_signals,results[1].daily_ai_signals,
+      `${approach}: risk must not change the predicted direction`);
+    if(results[0].daily_ai_signals.includes('LONG')) {
+      assert.notEqual(results[0].profit_coins,results[1].profit_coins,
+        `${approach}: capital use changes the synthetic profit for this scenario`);
+      differentProfits++;
+    } else {
+      assert.equal(results[0].profit_coins,0);assert.equal(results[1].profit_coins,0);
+    }
+  }
+  assert.ok(differentProfits>0,'exercise LONG capital use as well as signal invariance');
+});
