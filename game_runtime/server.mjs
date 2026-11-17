@@ -302,7 +302,17 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   const server = createServer(async (req, res) => {
     const port = server.address()?.port;
     if (!safeLocal(req, port)) return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});
-    const path = new URL(req.url, 'http://localhost').pathname;
+    let path;
+    try {
+      // Accept origin-form targets only; WHATWG URL otherwise accepts authorities.
+      if (typeof req.url !== 'string' || !/^\/(?![\/\\])/.test(req.url) ||
+          /[\x00-\x20\x7f#\\]/.test(req.url) || /%(?![0-9a-f]{2})/i.test(req.url)) {
+        throw new Error('Invalid request target');
+      }
+      path = new URL(req.url, 'http://localhost').pathname;
+    } catch {
+      return json(res, 400, {error: 'リクエストURLが不正です'});
+    }
     const rawPath = req.url.split('?')[0];
     if (rawPath.startsWith('/artwork-lab/') || path.startsWith('/artwork-lab/')) {
       const asset = ARTWORK_LAB.get(rawPath);
@@ -465,8 +475,14 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
 
     if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
       const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
-      let body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
+      let body;
+      try {
+        body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
+      } catch (error) {
+        console.error('Creature Lab static asset read failed', error);
+        return json(res, 503, {error: 'ゲーム画面を読み込めません'});
+      }
       if (!script && chatgptDialogue !== null) {
         body = Buffer.from(body.toString('utf8').replace('data-chatgpt-dialogue="disabled"', 'data-chatgpt-dialogue="enabled"'));
       }
@@ -525,11 +541,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const result = runSyntheticGame({...plan,initial_coins:payload.amount,
           allocations:{mine:100,owl:0,turtle:0}});
         const settled = settleLeveragedPractice({
-          equityPath:result.equity_path,amount:payload.amount,leverage,
+          equityPath:result.raw_equity_path,amount:payload.amount,leverage,
         });
         // Compare the same capital and already simulated trades; never predict again.
         const normal = settleLeveragedPractice({
-          equityPath:result.equity_path,amount:payload.amount,leverage:1,
+          equityPath:result.raw_equity_path,amount:payload.amount,leverage:1,
         });
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',

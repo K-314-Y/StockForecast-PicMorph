@@ -143,3 +143,22 @@ test('experimental settlement is pure, preserves idle cash and never makes balan
     }
   }
 });
+
+import {runSyntheticGame} from '../../game_runtime/practice.mjs';
+import {roundingPlan} from './audit74-fixture.mjs';
+test('audit74: settlement retains precision through the synthetic replay',()=>{
+  const result=runSyntheticGame(roundingPlan());
+  assert.equal(result.raw_equity_path[9],.9640162818985352);
+  assert.equal(result.equity_path[9],.96);
+  const settle=equityPath=>settleLeveragedPractice({equityPath,amount:1,leverage:25});
+  assert.equal(settle(result.equity_path).liquidated_at_step,9);
+  const actual=settle(result.raw_equity_path);
+  assert.equal(actual.liquidated_at_step,null);
+  assert.equal(actual.final_balance,10000.25);
+  assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(result)),'raw_equity_path'),false);
+  assert.equal(Object.hasOwn({...result},'raw_equity_path'),false);
+  assert.ok(Object.isFrozen(result.raw_equity_path));
+  assert.throws(()=>settle([1,Number.MAX_VALUE]),RangeError);
+  const extreme=roundingPlan();extreme.initial_price=.000001;extreme.future_prices.fill(1e12);
+  assert.throws(()=>runSyntheticGame(extreme),/不正/);
+});

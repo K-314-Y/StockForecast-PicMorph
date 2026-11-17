@@ -16,7 +16,7 @@ import {createCompanionChatGptHttpServer} from '../companion-chatgpt.mjs';
 
 const sampleImage={
   mime:'image/png',
-  base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9F7pSAAAAABJRU5ErkJggg=='
+  base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='
 };
 async function serve(server) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

@@ -3,6 +3,7 @@ import {readFile,mkdir,open,rename,unlink,lstat} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
+import {validateImageStructure} from './image-validation.mjs';
 
 export const ARTWORK_FILE=fileURLToPath(new URL('../local_state/node_game/artwork.json',import.meta.url));
 export const ARTWORK_SLOTS=Object.freeze(['base','hair','face','outfit']);
@@ -31,16 +32,8 @@ export function validateArtworkImage(slot,image) {
   const bytes=Buffer.from(encoded,'base64');
   if(bytes.length>MAX_ARTWORK_FILE) throw fail('画像は1枚450KBまでです',413);
   if(bytes.toString('base64')!==encoded) throw fail('画像のbase64が不正です');
-  const png=bytes.length>=33 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])) &&
-    bytes.readUInt32BE(8)===13 && bytes.toString('ascii',12,16)==='IHDR' &&
-    bytes.readUInt32BE(16)>0 && bytes.readUInt32BE(20)>0;
-  const jpeg=bytes.length>=4 && bytes[0]===255 && bytes[1]===216 && bytes[2]===255 &&
-    bytes[bytes.length-2]===255 && bytes[bytes.length-1]===217;
-  const webp=bytes.length>=20 && bytes.toString('ascii',0,4)==='RIFF' &&
-    bytes.readUInt32LE(4)===bytes.length-8 && bytes.toString('ascii',8,12)==='WEBP' &&
-    ['VP8 ','VP8L','VP8X'].includes(bytes.toString('ascii',12,16));
-  if(!(image.mime==='image/png'?png:image.mime==='image/jpeg'?jpeg:webp)) {
-    throw fail('画像のMIMEとファイルシグネチャが一致しません',415);
+  if(!validateImageStructure(bytes,image.mime)) {
+    throw fail('画像の形式が不正、破損、または未対応です',415);
   }
   return {mime:image.mime,base64:encoded,size:bytes.length};
 }

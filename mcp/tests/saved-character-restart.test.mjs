@@ -11,7 +11,7 @@ import {createGrowthStore} from '../../game_runtime/growth.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 
 // Known valid synthetic 1x1 PNG; deliberately shared by all four slots.
-const image = {mime:'image/png', base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9F7pSAAAAABJRU5ErkJggg=='};
+const image = {mime:'image/png', base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
 const slots = ['base', 'outfit', 'face', 'hair'];
 const companion = {name:'再起動の相棒', hair_color:'#abcdef', clothing_color:'#fedcba',
   approach:'reversion', risk_percent:45};

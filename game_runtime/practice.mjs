@@ -69,7 +69,7 @@ function rounded(value, places) {
 
 /**
  * @param {import('./contracts.js').PracticePlan} plan
- * @returns {import('./contracts.js').PracticeResult}
+ * @returns {import('./contracts.js').PracticeResult & {readonly raw_equity_path: readonly number[]}}
  */
 export function runSyntheticGame(plan) {
   if (!plan || plan.mode !== MODE) throw new Error('架空データの練習プランのみ対応しています');
@@ -144,7 +144,10 @@ export function runSyntheticGame(plan) {
       if (w.cash < -1e-7 || w.units < -1e-7) throw new Error('仮想資金がマイナスです');
     }
     priorPrice = next;
-    equity.push(idle + SLOTS.reduce((s, key) => s + wallets[key].cash + wallets[key].units * next, 0));
+    const value = idle + SLOTS.reduce((s, key) => s + wallets[key].cash + wallets[key].units * next, 0);
+    // Leave headroom for leverage and decimal rounding before the next trade.
+    numeric(value, '安全に表現できる数値範囲の架空資産額', 0, Number.MAX_SAFE_INTEGER / 10000);
+    equity.push(value);
     decisions.push({step: index + 1, price: next, signals: {...signals}});
   }
   const final = equity[equity.length - 1] ?? initialCoins;
@@ -170,7 +173,7 @@ export function runSyntheticGame(plan) {
       effective_sha256: model.effective_sha256,
     };
   }
-  return {
+  const result = {
     mode: MODE, initial_coins: initialCoins,
     final_coins: rounded(final, 2),
     profit_coins: rounded(final - initialCoins, 2),
@@ -183,4 +186,7 @@ export function runSyntheticGame(plan) {
     benchmark_path: [initialPrice, ...prices].map(p => rounded(initialCoins * p / initialPrice, 2)),
     decisions, characters, model_sha256: plan.model_sha256, warnings: [...WARNINGS],
   };
+  // Settlement uses full precision. Spreads and JSON retain the public contract.
+  return /** @type {import('./contracts.js').PracticeResult & {readonly raw_equity_path: readonly number[]}} */ (
+    Object.defineProperty(result, 'raw_equity_path', {value: Object.freeze(equity)}));
 }

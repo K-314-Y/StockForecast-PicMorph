@@ -6,6 +6,8 @@ import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
 import {validateCompanion} from '../../game_runtime/companion.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
+import {runSyntheticGame} from '../../game_runtime/practice.mjs';
+import {settleLeveragedPractice} from '../../game_runtime/leverage-practice.mjs';
 const MODEL={fast_window:3,slow_window:9,risk_fraction:.35,
   plugin_weights:{trend:100,momentum:0,volatility:0,reversion:0},
   plugin_strengths:{trend:100,momentum:100,volatility:100,reversion:100}};
@@ -26,7 +28,12 @@ async function withServer(fn,options={}){
     companionStore:{read:async()=>options.companion??companion,save:()=>{writes++;throw Error('companion write')}},
     modelShopStore:options.modelShopStore??shop,
     loadSnapshot:options.loadSnapshot|| (async()=>snapshot()),
-    predict:async plan=>{predictions++;options.inspectPlan?.(plan);return pythonPredict(plan);},
+    predict:async plan=>{
+      predictions++;
+      const predicted=await pythonPredict(plan);
+      options.inspectPlan?.(plan,predicted);
+      return predicted;
+    },
   });
   await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
   try {await fn({base:'http://127.0.0.1:'+server.address().port,shop,
@@ -78,6 +85,7 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
   });
 });
 test('25x server integration is read-only and never creates a negative balance',async()=>{
+  const plans=[];
   await withServer(async({base,read})=>{
     const out=await post(base,{amount:1000,model_id:'self',leverage:25});
     assert.equal(out.status,200,JSON.stringify(out.data));
@@ -96,10 +104,20 @@ test('25x server integration is read-only and never creates a negative balance',
     assert.ok(Number.isFinite(out.data.normal_max_drawdown_pct));
     assert.ok(Math.abs(out.data.normal_final_balance-
       (10000+out.data.normal_profit_coins))<.02);
-    if(out.data.liquidated_at_step===null){
-      assert.ok(Math.abs(out.data.profit_coins-
-        25*out.data.normal_profit_coins)<.03);
-    } else {
+    assert.equal(plans.length,1);
+    const {raw_equity_path:equityPath}=runSyntheticGame({...plans[0],initial_coins:1000,
+      allocations:{mine:100,owl:0,turtle:0}});
+    // Each public profit is rounded separately, after applying its multiplier.
+    const expected=settleLeveragedPractice({equityPath,amount:1000,leverage:25});
+    const expectedNormal=settleLeveragedPractice({equityPath,amount:1000,leverage:1});
+    assert.equal(out.data.profit_coins,expected.profit_coins);
+    assert.equal(out.data.final_balance,expected.final_balance);
+    assert.equal(out.data.max_drawdown_pct,expected.max_drawdown_pct);
+    assert.equal(out.data.liquidated_at_step,expected.liquidated_at_step);
+    assert.equal(out.data.normal_profit_coins,expectedNormal.profit_coins);
+    assert.equal(out.data.normal_final_balance,expectedNormal.final_balance);
+    assert.equal(out.data.normal_max_drawdown_pct,expectedNormal.max_drawdown_pct);
+    if(out.data.liquidated_at_step!==null){
       assert.equal(out.data.profit_coins,-1000,
         'a liquidated allocation cannot recover');
     }
@@ -112,12 +130,18 @@ test('25x server integration is read-only and never creates a negative balance',
     assert.equal(out.data.steps,12);
     const normal=await post(base,{amount:1000,model_id:'self',leverage:1});
     assert.equal(normal.status,200);
+    assert.equal(plans.length,2);
+    assert.deepEqual(plans[1],plans[0]);
+    assert.equal(normal.data.profit_coins,expectedNormal.profit_coins);
+    assert.equal(normal.data.final_balance,expectedNormal.final_balance);
+    assert.equal(normal.data.max_drawdown_pct,expectedNormal.max_drawdown_pct);
+    assert.equal(normal.data.liquidated_at_step,expectedNormal.liquidated_at_step);
     assert.equal(out.data.daily_ai_signals.length,12);
     assert.equal(out.data.daily_synthetic_prices.length,13);
     assert.deepEqual(out.data.daily_ai_signals,normal.data.daily_ai_signals);
     assert.deepEqual(out.data.daily_synthetic_prices,normal.data.daily_synthetic_prices);
     assert.deepEqual(read(),{writes:0,predictions:2});
-  });
+  },{inspectPlan:(_input,plan)=>plans.push(structuredClone(plan))});
 });
 
 test('reject malformed amount or model before forecast and cross-origin',async()=>{
@@ -245,4 +269,36 @@ test('risk changes capital use after LONG but never predictor signals or synthet
     }
   }
   assert.ok(differentProfits>0,'exercise LONG capital use as well as signal invariance');
+});
+
+import {Readable} from 'node:stream';
+import {roundingPlan} from './audit74-fixture.mjs';
+function directRequest(server,url,{method='GET',body,remote='127.0.0.1'}={}) {
+  return new Promise(resolve=>{
+    const encoded=body?JSON.stringify(body):'';
+    const req=Readable.from(encoded?[Buffer.from(encoded)]:[]);
+    Object.assign(req,{url,method,socket:{remoteAddress:remote},headers:{host:'localhost:undefined',
+      'content-type':'application/json','content-length':String(Buffer.byteLength(encoded))}});
+    const res={writeHead(status,headers){this.status=status;this.headers=headers;},
+      end(data){resolve({status:this.status,data:data?JSON.parse(String(data)):null});}};
+    server.emit('request',req,res);
+  });
+}
+test('audit74: malformed request target returns 400 and health survives without sockets',async()=>{
+  const server=createGameServer();
+  for(const url of ['//[',undefined,'','http://localhost/health','//localhost/health','/\\evil','/health#x','/bad%xx']) {
+    assert.equal((await directRequest(server,url)).status,400);
+    assert.equal((await directRequest(server,'/health')).status,200);
+  }
+  assert.equal((await directRequest(server,'//[',{remote:'192.0.2.1'})).status,403);
+  assert.equal((await directRequest(server,'/health?ok=1')).status,200);
+});
+test('audit74: quick-practice uses unrounded equity without exposing it',async()=>{
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),
+    companionStore:{read:async()=>companion},predict:async()=>roundingPlan()});
+  const out=await directRequest(server,'/api/quick-practice',{method:'POST',body:{amount:1,model_id:'self',leverage:25}});
+  assert.equal(out.status,200);
+  assert.equal(out.data.liquidated_at_step,null);
+  assert.equal(out.data.final_balance,10000.25);
+  assert.equal(JSON.stringify(out.data).includes('raw_equity_path'),false);
 });

@@ -21,10 +21,11 @@ export function settleLeveragedPractice({equityPath,amount,leverage,available=10
   }
   if (!Array.isArray(equityPath) || equityPath.length<2 ||
       equityPath.length>501 ||
-      !equityPath.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0) ||
+      !equityPath.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=Number.MAX_SAFE_INTEGER/10000) ||
       Math.abs(equityPath[0]-amount)>0.01) {
     throw new RangeError('架空の損益推移が不正です');
   }
+  if (available>Number.MAX_SAFE_INTEGER/10000) throw new RangeError('架空資産額が不正です');
   const cashHeld=available-amount;
   const leveragedPath=[amount];
   let stoppedAtStep=null;

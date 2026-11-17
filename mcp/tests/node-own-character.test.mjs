@@ -26,7 +26,7 @@ function request(server,path,body) {
     });
   });
 }
-const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9F7pSAAAAABJRU5ErkJggg=='};
+const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
 const slots=['mine','owl','turtle'];
 const solo={mine:100,owl:0,turtle:0};
 const model={fast_window:3,slow_window:9,risk_fraction:.35,

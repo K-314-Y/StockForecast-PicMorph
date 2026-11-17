@@ -10,7 +10,7 @@ import {createCompanionChatGptHttpServer} from '../companion-chatgpt.mjs';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9F7pSAAAAABJRU5ErkJggg=='};
+const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
 const slots=['base','hair','face','outfit'];
 const send=async(url,path,body,headers={})=>fetch(url+path,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
 async function serve(t,run) {
@@ -530,4 +530,54 @@ test('front scene keeps all four saved layers and restores on reload without aut
    assert.deepEqual(ui.confirms,[]);
   }
  }
+});
+
+test('audit74: real PNG/JPEG/WebP, truncations, CRC, trailing bytes and atomic rejection',async t=>{
+  // Generated once with Pillow; Pillow is not needed to run these tests or the game.
+  const fixtures=JSON.parse(await readFile(new URL('./artwork-fixtures.json',import.meta.url),'utf8'));
+  const dir=await mkdtemp(join(tmpdir(),'creature-audit74-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const file=join(dir,'artwork.json'),store=createArtworkStore({file});
+  await store.save({slot:'base',image:fixtures.png,expected_revision:0});
+  const before=await readFile(file);
+  const invalid=[{mime:'image/jpeg',base64:Buffer.from([255,216,255,217]).toString('base64')},
+    {...fixtures.png,base64:Buffer.from(fixtures.png.base64,'base64').subarray(0,33).toString('base64')}];
+  for(const image of Object.values(fixtures)) {
+    assert.ok(validateArtworkImage('base',image).size>0);
+    const b=Buffer.from(image.base64,'base64');
+    for(let n=0;n<b.length;n++) invalid.push({...image,base64:b.subarray(0,n).toString('base64')});
+    invalid.push({...image,base64:Buffer.concat([b,Buffer.from('trailing file')]).toString('base64')});
+  }
+  const corrupt=Buffer.from(fixtures.png.base64,'base64');corrupt[29]^=1;
+  invalid.push({...fixtures.png,base64:corrupt.toString('base64')});
+  for(const image of invalid) {
+    assert.throws(()=>validateArtworkImage('base',image));
+    await assert.rejects(store.save({slot:'base',image,expected_revision:1}));
+  }
+  assert.deepEqual(await readFile(file),before);
+  assert.equal((await store.read()).revision,1);
+});
+
+import {deflateSync} from 'node:zlib';
+test('audit74: PNG inflation size, filters, CRC and dimension budgets are enforced',()=>{
+  function chunk(type,data) {
+    const out=Buffer.alloc(data.length+12);out.writeUInt32BE(data.length);out.write(type,4);data.copy(out,8);
+    let crc=0xffffffff;
+    for(const byte of out.subarray(4,-4)) {
+      crc^=byte;for(let i=0;i<8;i++) crc=(crc>>>1)^((crc&1)?0xedb88320:0);
+    }
+    out.writeUInt32BE((crc^0xffffffff)>>>0,out.length-4);return out;
+  }
+  function make({w=1,h=1,raw=Buffer.from([0,1,2,3]),extra=Buffer.alloc(0)}={}) {
+    const header=Buffer.alloc(13);header.writeUInt32BE(w);header.writeUInt32BE(h,4);header[8]=8;header[9]=2;
+    const b=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),
+      chunk('IDAT',Buffer.concat([deflateSync(raw),extra])),chunk('IEND',Buffer.alloc(0))]);
+    return {mime:'image/png',base64:b.toString('base64')};
+  }
+  assert.ok(validateArtworkImage('base',make()));
+  for(const image of [make({w:0}),make({w:16385}),make({w:8192,h:8192}),
+    make({raw:Buffer.alloc(1024*1024)}),make({raw:Buffer.from([5,1,2,3])}),
+    make({raw:Buffer.alloc(3)}),make({extra:Buffer.from('trailing zlib data')})]) {
+    assert.throws(()=>validateArtworkImage('base',image));
+  }
 });
