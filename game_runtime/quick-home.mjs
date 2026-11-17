@@ -2,6 +2,73 @@
 const element = id => document.getElementById(id);
 const BALANCE = 10000;
 const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigits:2});
+let practiceEpoch = 0;
+let preReveal = null;
+const checkpoints = [3,7,11];
+function clearPreReveal() {
+  practiceEpoch++;
+  preReveal=null;
+  element('quickPreReveal').hidden=true;
+  element('quickPreSummary').hidden=true;
+  for(const id of ['quickPreSnapshot','quickPreOutcome','quickPreSummary'])element(id).textContent='';
+  for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip'])element(id).disabled=true;
+  element('quickPreNext').textContent='次へ';
+}
+function renderPreReveal() {
+  const {value,index}=preReveal;
+  const day=checkpoints[index];
+  element('quickPreSnapshot').textContent='判断 '+(index+1)+'/3：第'+day+'日 ／ 過去の架空価格：'+
+    value.daily_synthetic_prices.slice(day-3,day).map((price,i)=>'第'+(day-3+i)+'日 '+money(price)).join(' ／ ');
+  element('quickPreOutcome').textContent='この日のAI判断・価格変化は、選択してから表示します。';
+  for(const id of ['quickPreBuy','quickPreWait','quickPreSkip'])element(id).disabled=false;
+  element('quickPreNext').disabled=true;
+  element('quickPreNext').textContent=index===2 ? '12日間の結果を見る' : '次へ';
+  element('quickPreReveal').hidden=false;
+  element('quickPreBuy').focus();
+}
+function finishPreReveal() {
+  if(!preReveal)return;
+  const {value,ordered,answers}=preReveal;
+  preReveal=null;
+  element('quickPreReveal').hidden=true;
+  revealResult(value,ordered);
+  const record=answers.length===0 ? '記録なし（未回答は集計しません）' :
+    '回答 '+answers.length+'/3回 ／ AI方針との一致 '+
+    answers.filter(answer=>answer.agrees).length+'/'+answers.length+'回答。'+
+    answers.map(answer=>'第'+answer.day+'日：'+(answer.choice==='buy'?'買う':'待つ')+'（'+(answer.agrees?'一致':'相違')+'）').join(' ／ ')+
+    '。未回答は集計しません';
+  element('quickPreSummary').textContent='結果を見る前の記録：'+record+'。'+
+    '利益や実際の投資技能の評価ではありません。';
+  element('quickPreSummary').hidden=false;
+  element('quickPreSummary').focus();
+}
+for(const [id,choice] of [['quickPreBuy','buy'],['quickPreWait','wait']]) {
+  element(id).addEventListener('click',()=>{
+    if(!preReveal || preReveal.answers.length!==preReveal.index)return;
+    const {value,index,answers}=preReveal;
+    const day=checkpoints[index],signal=value.daily_ai_signals[day-1];
+    const agrees=(choice==='buy')===(signal==='LONG');
+    answers.push({day,choice,agrees});
+    const change=(value.daily_synthetic_prices[day]/value.daily_synthetic_prices[day-1]-1)*100;
+    element('quickPreOutcome').textContent='第'+day+'日：自分は'+(choice==='buy'?'買う':'待つ')+
+      ' ／ AI方針：'+(signal==='LONG'?'株を持つ':'現金で待機')+
+      '（売買の実行を示しません） ／ 架空の終値：'+money(value.daily_synthetic_prices[day])+
+      ' ／ 架空価格の前日比：'+(change>=0?'+':'')+change.toFixed(2)+'% ／ '+(agrees?'一致':'相違')+
+      '。正しさや投資技能の評価ではありません。';
+    for(const button of ['quickPreBuy','quickPreWait','quickPreSkip'])element(button).disabled=true;
+    element('quickPreNext').disabled=false;
+    element('quickPreNext').focus();
+  });
+}
+element('quickPreNext').addEventListener('click',()=>{
+  if(!preReveal || preReveal.answers.length!==preReveal.index+1)return;
+  if(preReveal.index===2){finishPreReveal();return;}
+  preReveal.index++;
+  renderPreReveal();
+});
+element('quickPreSkip').addEventListener('click',()=>{
+  if(preReveal && preReveal.answers.length===preReveal.index)finishPreReveal();
+});
 let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
@@ -214,8 +281,9 @@ element('quickChatGPTStatusCheck').addEventListener('click',async()=>{
   }
 });
 window.addEventListener('pagehide',()=>{
-  clearFreeChatGPT();
-  clearChatGPT();
+  // Discard page-only practice data without rerunning form validation on departure.
+  clearPracticeView();
+  element('quickResult').replaceChildren();
   sessionEpoch++;
   sessionController?.abort();
   element('quickChatGPTStatus').textContent='';
@@ -368,6 +436,7 @@ function findReplayHighlights(balances,liquidatedAt) {
 }
 const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
+  clearPreReveal();
   clearSceneVoice();
   replayIsSelf=false;
   replay=null;
@@ -499,12 +568,16 @@ function renderValidation(showError=false) {
     amountField.removeAttribute('aria-invalid');
   }
 }
-function resetReview() {
+function clearPracticeView() {
+  element('quickPreOptIn').checked=false;
   clearReplay();
   pending=null;
   element('quickReview').hidden=true;
   element('quickResult').hidden=true;
   element('quickNext').hidden=true;
+}
+function resetReview() {
+  clearPracticeView();
   renderValidation(touched);
 }
 function scrollAndFocus(sectionId,focusId) {
@@ -569,7 +642,7 @@ async function loadModels() {
 }
 function setBusy(next) {
   busy=next;
-  for(const id of ['quickConfirm','quickRun','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage'])
+  for(const id of ['quickConfirm','quickRun','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage','quickPreOptIn'])
     element(id).disabled=next;
 }
 element('quickForm').addEventListener('submit',event=>{
@@ -604,8 +677,7 @@ for(const [id,ratio] of [['quickTen',0.1],['quickHalf',0.5],['quickAll',1]]) {
   });
 }
 element('quickEdit').addEventListener('click',()=>{
-  element('quickReview').hidden=true;
-  pending=null;
+  resetReview();
   amountField.focus();
 });
 amountField.addEventListener('input',()=>{resetReview();});
@@ -632,9 +704,53 @@ element('quickAgain').addEventListener('click',()=>{
   resetReview();
   scrollAndFocus('simpleHome','quickAmount');
 });
+function revealResult(value,ordered) {
+  const panel=element('quickResult');
+  panel.replaceChildren();
+  const heading=document.createElement('h3');
+  heading.textContent='12日間の試算結果';
+  const summary=document.createElement('p');
+  const resultModelName=ordered.model_id==='self' &&
+    typeof value.companion_name==='string' && value.companion_name.trim() ?
+    '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
+  summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
+    (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
+      '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
+      (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
+      ' C ／ ×'+ordered.leverage+'の損益：')+
+    (value.profit_coins>=0?'+':'')+money(value.profit_coins)+
+    ' C。練習の終了時残高：'+money(value.final_balance)+
+    ' C（試算に使わないコインを含む）。';
+  const footnote=document.createElement('p');
+  footnote.textContent='試算した資金の最大下落率 '+money(value.max_drawdown_pct)+
+    '%。'+(value.liquidated_at_step===null ? '' :
+      '第'+value.liquidated_at_step+'日で資金が尽き、以降は強制終了。')+
+    '強制終了は日足終値だけの近似です。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
+  footnote.className='simple-hint';
+  panel.append(heading,summary,footnote);
+  replayHighlights=findReplayHighlights(value.daily_balances,value.liquidated_at_step);
+  for(const [index,[id,label]] of highlightButtons.entries()) {
+    const highlight=replayHighlights[index];
+    element(id).disabled=!highlight;
+    element(id).textContent=highlight ?
+      label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
+      (index===0?'増えた日なし':'減った日なし');
+  }
+  replayIsSelf=ordered.model_id==='self';
+  replay={...value,companion_strategy:validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
+  replayModel=ordered.model_id;
+  replayDay=0;
+  renderReplay();
+  panel.hidden=false;
+  element('quickNext').hidden=false;
+  statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
+}
 element('quickRun').addEventListener('click',async()=>{
   if(busy||!pending)return;
+  const beforeReveal=element('quickPreOptIn').checked;
   clearReplay();
+  element('quickResult').replaceChildren();
+  const epoch=practiceEpoch;
   const ordered=pending;
   pending=null;
   element('quickReview').hidden=true;
@@ -667,52 +783,22 @@ element('quickRun').addEventListener('click',async()=>{
          (Number.isInteger(value.liquidated_at_step) && value.liquidated_at_step>=1 &&
           value.liquidated_at_step<=12)))
       throw Error('練習結果の形式が不正です');
-    const panel=element('quickResult');
-    panel.replaceChildren();
-    const heading=document.createElement('h3');
-    heading.textContent='12日間の試算結果';
-    const summary=document.createElement('p');
-    const resultModelName=ordered.model_id==='self' &&
-      typeof value.companion_name==='string' && value.companion_name.trim() ?
-      '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
-    summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
-      (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
-        '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
-        (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
-        ' C ／ ×'+ordered.leverage+'の損益：')+
-      (value.profit_coins>=0?'+':'')+money(value.profit_coins)+
-      ' C。練習の終了時残高：'+money(value.final_balance)+
-      ' C（試算に使わないコインを含む）。';
-    const footnote=document.createElement('p');
-    footnote.textContent='試算した資金の最大下落率 '+money(value.max_drawdown_pct)+
-      '%。'+(value.liquidated_at_step===null ? '' :
-        '第'+value.liquidated_at_step+'日で資金が尽き、以降は強制終了。')+
-      '強制終了は日足終値だけの近似です。実際の注文は行いません。結果は保存されず、実際の株価・所持コイン・XPには影響しません。';
-    footnote.className='simple-hint';
-    panel.append(heading,summary,footnote);
-    replayHighlights=findReplayHighlights(value.daily_balances,value.liquidated_at_step);
-    for(const [index,[id,label]] of highlightButtons.entries()) {
-      const highlight=replayHighlights[index];
-      element(id).disabled=!highlight;
-      element(id).textContent=highlight ?
-        label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
-        (index===0?'増えた日なし':'減った日なし');
-    }
-    replayIsSelf=ordered.model_id==='self';
-    replay={...value,companion_strategy:validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
-    replayModel=ordered.model_id;
-    replayDay=0;
-    renderReplay();
-    panel.hidden=false;
-    element('quickNext').hidden=false;
-    statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
+    if(epoch!==practiceEpoch)return;
+    if(beforeReveal) {
+      preReveal={value,ordered,index:0,answers:[]};
+      renderPreReveal();
+      statusField.textContent='結果を見る前の判断です。残りはまとめて見ることもできます。';
+    } else revealResult(value,ordered);
   }catch(error){
+    if(epoch!==practiceEpoch)return;
+    element('quickPreOptIn').checked=false;
     clearReplay();
     element('quickResult').hidden=true;
     element('quickNext').hidden=true;
     statusField.textContent='試算できませんでした：'+error.message;
   }finally{setBusy(false);}
 });
+element('quickPreOptIn').checked=false;
 clearReplay();
 renderValidation();
 loadModels();
