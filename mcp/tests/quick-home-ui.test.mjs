@@ -2171,6 +2171,86 @@ function assertFinalHidden(get) {
     assert.doesNotMatch(get(id).textContent,/第[0-9]+日| C/);
   }
 }
+// Explicit expectations keep AI agreement separate from the price comparison.
+for(const [direction,price,buyVerdict,waitVerdict] of [
+  ['UP',7213,'値動きに合う','値動きに合わない'],
+  ['DOWN',7013,'値動きに合わない','値動きに合う'],
+  ['FLAT',7113,'判定なし（価格変化なし）','判定なし（価格変化なし）'],
+])for(const choice of ['buy','wait'])for(const signal of ['LONG','CASH']) {
+  test('pre-reveal direction '+direction+' / '+choice+' / '+signal,async()=>{
+    const ui=await mount(),{get,fire,state,calls,storageWrites}=ui;
+    const practice=state.practice;
+    let response;
+    state.practice=async body=>{
+      response=await practice(body);
+      response.daily_synthetic_prices=Array.from({length:13},(_,i)=>7000+i*113);
+      response.daily_synthetic_prices[2]=7113;
+      response.daily_synthetic_prices[3]=price;
+      response.daily_ai_signals[2]=signal;
+      return response;
+    };
+    const untouched=['growthInfo','growthAchievements','reward','claim','play','companionName'];
+    const saved=untouched.map(id=>[get(id).value,get(id).textContent,get(id).disabled]);
+    await startPreReveal(ui);
+    const before=structuredClone(response),requests=structuredClone(calls);
+    assertFinalHidden(get);
+    const initial=get('quickPreOutcome').textContent;
+    assert.doesNotMatch(initial,/値動きとの比較|値動きに合|判定なし|終値：|%/);
+    for(let i=3;i<=12;i++) {
+      const formatted=response.daily_synthetic_prices[i].toLocaleString('ja-JP');
+      assert.ok(!initial.includes(formatted));
+      if(direction!=='FLAT' || i!==3)assert.ok(!get('quickPreSnapshot').textContent.includes(formatted));
+    }
+    await fire(choice==='buy'?'quickPreBuy':'quickPreWait');
+    const outcome=get('quickPreOutcome').textContent;
+    assert.ok(outcome.includes('値動きとの比較：自分は'+(choice==='buy'?buyVerdict:waitVerdict)+
+      '、AIは'+(signal==='LONG'?buyVerdict:waitVerdict)+'。'));
+    const agrees=(choice==='buy' && signal==='LONG') || (choice==='wait' && signal==='CASH');
+    assert.ok(outcome.includes('% ／ '+(agrees?'一致':'相違')+'。'));
+    assert.equal(outcome.match(/架空価格の方向だけ。実際の損益や予測の上手さを示しません。/g)?.length,1);
+    assert.doesNotMatch(outcome,/LONG|CASH|正解|正答率|スコア/);
+    assert.ok(outcome.includes('架空の終値：'+price.toLocaleString('ja-JP')));
+    for(let i=4;i<=12;i++)assert.ok(!outcome.includes(response.daily_synthetic_prices[i].toLocaleString('ja-JP')));
+    assertFinalHidden(get);
+    await fire('quickPreNext');
+    assert.doesNotMatch(get('quickPreOutcome').textContent,/値動きとの比較|判定なし/);
+    await fire('quickPreSkip');
+    assert.doesNotMatch(get('quickPreOutcome').textContent+get('quickPreSummary').textContent,/値動きとの比較|判定なし/);
+    assert.match(get('quickPreSummary').textContent,new RegExp('AI方針との一致 '+(agrees?1:0)+'/1回答'));
+    assert.deepEqual(response,before,'no price, signal or model changes');
+    assert.deepEqual(calls,requests,'no requests for choices, next or skip');
+    assert.deepEqual(calls,[{path:'/api/model-shop',body:undefined},
+      {path:'/api/quick-practice',body:{model_id:'self',amount:1000,leverage:1}}]);
+    assert.deepEqual(storageWrites,[]);
+    assert.deepEqual(untouched.map(id=>[get(id).value,get(id).textContent,get(id).disabled]),saved);
+  });
+}
+test('pre-reveal small nonzero moves are not treated as unchanged after rounding',async()=>{
+  for(const delta of [-0.001,0.001]) {
+    const ui=await mount(),{get,fire,state}=ui,practice=state.practice;
+    state.practice=async body=>{
+      const result=await practice(body);
+      result.daily_synthetic_prices[3]=result.daily_synthetic_prices[2]+delta;
+      return result;
+    };
+    await startPreReveal(ui);await fire('quickPreBuy');
+    assert.ok(get('quickPreOutcome').textContent.includes('値動きとの比較：自分は'+
+      (delta>0?'値動きに合う':'値動きに合わない')));
+    assert.doesNotMatch(get('quickPreOutcome').textContent,/判定なし/);
+  }
+});
+test('default mode and skipping before any answer show no direction verdict',async()=>{
+  for(const optIn of [false,true]) {
+    const ui=await mount(),{get,fire,calls,storageWrites}=ui;
+    await fire('quickForm','submit');get('quickPreOptIn').checked=optIn;await fire('quickRun');
+    if(optIn)await fire('quickPreSkip');
+    for(const id of ['quickPreOutcome','quickPreSummary'])
+      assert.doesNotMatch(get(id).textContent,/値動きとの比較|値動きに合|判定なし|架空価格の方向だけ/);
+    assert.equal(get('quickPreReveal').hidden,true);
+    assert.equal(get('quickPreOutcome').textContent,optIn?'この日のAI判断・価格変化は、選択してから表示します。':'');
+    assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
+  }
+});
 test('optional pre-reveal uses only fixed past windows, records once and shares the exact normal reveal',async()=>{
   const ui=await mount(),{get,fire,calls,storageWrites,state}=ui;
   const normal=await mount();
@@ -2206,7 +2286,7 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
     const outcome=get('quickPreOutcome').textContent;
     assert.match(outcome,new RegExp('第'+day+'日：'));
     assert.match(outcome,index===1?/相違/:/一致/);
-    assert.doesNotMatch(outcome,/損益|残高|スコア/);
+    assert.doesNotMatch(outcome.replace('実際の損益や予測の上手さを示しません。',''),/損益|残高|スコア/);
     for(let i=day+1;i<=12;i++)assert.ok(!outcome.includes(received.daily_synthetic_prices[i].toLocaleString('ja-JP')));
     await fire('quickPreBuy');await fire('quickPreWait');await fire('quickPreSkip');
     assert.equal(get('quickPreOutcome').textContent,outcome);
@@ -2224,6 +2304,10 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
   assert.equal(get('quickPreReveal').hidden,true);
   assert.equal(get('quickPreSummary').hidden,false);
   assert.match(get('quickPreSummary').textContent,/回答 3\/3回.*一致 2\/3回答/);
+  assert.equal(get('quickPreSummary').textContent,
+    '結果を見る前の記録：回答 3/3回 ／ AI方針との一致 2/3回答。'+
+    '第3日：買う（一致） ／ 第7日：待つ（相違） ／ 第11日：買う（一致）。未回答は集計しません。'+
+    'AIとの一致数は正解数ではありません。利益や実際の投資技能の評価ではありません。');
   assert.equal(get('quickPreSummary').textContent.match(/第[0-9]+日/g).length,3);
   assert.match(get('quickPreSummary').textContent,/第11日：買う（一致）/);
   assert.doesNotMatch(get('quickPreSummary').textContent,/架空の終値|架空価格の前日比|自分は買う/);
@@ -2244,6 +2328,13 @@ test('skip records only answered checkpoints, including zero answers',async()=>{
       assert.match(get('quickPreSummary').textContent,/記録なし（未回答は集計しません）/);
       assert.doesNotMatch(get('quickPreSummary').textContent,/0\/0|AI方針との一致/);
     } else assert.match(get('quickPreSummary').textContent,new RegExp('回答 '+count+'/3回.*一致 '+count+'/'+count+'回答'));
+    const summary=get('quickPreSummary').textContent;
+    assert.equal(summary.match(/AIとの一致数は正解数ではありません。/g)?.length||0,count===0?0:1);
+    assert.ok(summary.endsWith('利益や実際の投資技能の評価ではありません。'));
+    assert.doesNotMatch(summary.replace('AIとの一致数は正解数ではありません。',''),/正解|正答|的中|値動き|合う|合わない/);
+    if(count===0)assert.equal(summary,'結果を見る前の記録：記録なし（未回答は集計しません）。利益や実際の投資技能の評価ではありません。');
+    if(count===1)assert.equal(summary,'結果を見る前の記録：回答 1/3回 ／ AI方針との一致 1/1回答。第3日：買う（一致）。未回答は集計しません。'+
+      'AIとの一致数は正解数ではありません。利益や実際の投資技能の評価ではありません。');
     assert.equal(get('quickPreSummary').textContent.match(/第[0-9]+日/g)?.length||0,count);
     assert.equal(calls.length,2);
   }

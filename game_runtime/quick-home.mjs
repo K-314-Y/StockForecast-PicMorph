@@ -38,6 +38,7 @@ function finishPreReveal() {
     answers.map(answer=>'第'+answer.day+'日：'+(answer.choice==='buy'?'買う':'待つ')+'（'+(answer.agrees?'一致':'相違')+'）').join(' ／ ')+
     '。未回答は集計しません';
   element('quickPreSummary').textContent='結果を見る前の記録：'+record+'。'+
+    (answers.length>0 ? 'AIとの一致数は正解数ではありません。' : '')+
     '利益や実際の投資技能の評価ではありません。';
   element('quickPreSummary').hidden=false;
   element('quickPreSummary').focus();
@@ -50,11 +51,15 @@ for(const [id,choice] of [['quickPreBuy','buy'],['quickPreWait','wait']]) {
     const agrees=(choice==='buy')===(signal==='LONG');
     answers.push({day,choice,agrees});
     const change=(value.daily_synthetic_prices[day]/value.daily_synthetic_prices[day-1]-1)*100;
+    const price=value.daily_synthetic_prices[day],previous=value.daily_synthetic_prices[day-1];
+    const directionVerdict=buy=>price===previous ? '判定なし（価格変化なし）' :
+      buy===(price>previous) ? '値動きに合う' : '値動きに合わない';
     element('quickPreOutcome').textContent='第'+day+'日：自分は'+(choice==='buy'?'買う':'待つ')+
       ' ／ AI方針：'+(signal==='LONG'?'株を持つ':'現金で待機')+
       '（売買の実行を示しません） ／ 架空の終値：'+money(value.daily_synthetic_prices[day])+
       ' ／ 架空価格の前日比：'+(change>=0?'+':'')+change.toFixed(2)+'% ／ '+(agrees?'一致':'相違')+
-      '。正しさや投資技能の評価ではありません。';
+      '。値動きとの比較：自分は'+directionVerdict(choice==='buy')+'、AIは'+directionVerdict(signal==='LONG')+
+      '。架空価格の方向だけ。実際の損益や予測の上手さを示しません。';
     for(const button of ['quickPreBuy','quickPreWait','quickPreSkip'])element(button).disabled=true;
     element('quickPreNext').disabled=false;
     element('quickPreNext').focus();
