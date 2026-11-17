@@ -534,6 +534,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
           companion_name:payload.model_id==='self' && companion.created ? companion.companion.name : null,
+          companion_strategy:payload.model_id==='self' && companion.created ? {
+            source:'saved_companion',approach:companion.companion.approach,
+            risk_percent:companion.companion.risk_percent,
+          } : null,
           model_id:payload.model_id, initial_balance:10000,
           invested_coins:settled.invested_coins, cash_held:settled.cash_held,
           leverage:settled.leverage,

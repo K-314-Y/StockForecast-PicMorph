@@ -26,7 +26,7 @@ async function withServer(fn,options={}){
     companionStore:{read:async()=>options.companion??companion,save:()=>{writes++;throw Error('companion write')}},
     modelShopStore:options.modelShopStore??shop,
     loadSnapshot:options.loadSnapshot|| (async()=>snapshot()),
-    predict:async plan=>{predictions++;return pythonPredict(plan);},
+    predict:async plan=>{predictions++;options.inspectPlan?.(plan);return pythonPredict(plan);},
   });
   await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
   try {await fn({base:'http://127.0.0.1:'+server.address().port,shop,
@@ -48,6 +48,7 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       assert.equal(status,200,JSON.stringify(data));
       assert.equal(data.mode,'SIMPLE_SYNTHETIC_PRACTICE_ONLY');
       assert.equal(data.companion_name,null);
+      assert.equal(data.companion_strategy,null);
       assert.equal(data.invested_coins,amount);
       assert.equal(data.leverage,1,'legacy requests remain x1');
       assert.equal(data.normal_profit_coins,data.profit_coins);
@@ -149,6 +150,7 @@ test('cannot use others model without purchase; single owned id usable',async()=
     const output=await post(base,{amount:2500,model_id:item.id});
     assert.equal(output.status,200,JSON.stringify(output.data));
     assert.equal(output.data.model_id,item.id);
+    assert.equal(output.data.companion_strategy,null);
     assert.equal(output.data.cash_held,7500);
     assert.equal((await shop.public()).coins,120);
     assert.deepEqual(read(),{writes:0,predictions:1});
@@ -169,8 +171,10 @@ test('saved companion attribution is server-backed, self-only and read-only',asy
     assert.equal(demo.status,200,JSON.stringify(demo.data));
     assert.equal(self.data.companion_name,saved.companion.name);
     assert.equal(demo.data.companion_name,null);
-    const {companion_name:selfName,model_id:selfId,...selfResult}=self.data;
-    const {companion_name:demoName,model_id:demoId,...demoResult}=demo.data;
+    assert.deepEqual(self.data.companion_strategy,{source:'saved_companion',approach:'trend',risk_percent:35});
+    assert.equal(demo.data.companion_strategy,null);
+    const {companion_name:selfName,companion_strategy:selfStrategy,model_id:selfId,...selfResult}=self.data;
+    const {companion_name:demoName,companion_strategy:demoStrategy,model_id:demoId,...demoResult}=demo.data;
     assert.deepEqual(selfResult,demoResult,'attribution leaves calculation and prices identical');
     assert.deepEqual(saved,before);
     assert.equal(licenses,1);
@@ -178,4 +182,26 @@ test('saved companion attribution is server-backed, self-only and read-only',asy
   },{companion:saved,modelShopStore:{licensedModel:async id=>{
     assert.equal(id,'demo_stub');licenses++;return structuredClone(MODEL);
   }}});
+});
+
+test('strategy describes exactly the saved profile passed to prediction for self only',async()=>{
+  for(const [approach,risk_percent] of [['trend',5],['momentum',100],['reversion',55],['volatility',70]]) {
+    const saved={revision:3,created:true,companion:validateCompanion({
+      name:'相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach,risk_percent,
+    })};
+    const plans=[];
+    await withServer(async({base,read})=>{
+      const self=await post(base,{amount:1000,model_id:'self'});
+      const demo=await post(base,{amount:1000,model_id:'demo_stub'});
+      assert.equal(self.status,200);assert.equal(demo.status,200);
+      assert.deepEqual(self.data.companion_strategy,{source:'saved_companion',approach,risk_percent});
+      assert.equal(demo.data.companion_strategy,null);
+      assert.deepEqual(plans[0].models.mine.plugin_weights,Object.fromEntries(
+        ['trend','momentum','reversion','volatility'].map(key=>[key,key===approach?100:0])));
+      assert.equal(plans[0].models.mine.risk_fraction,risk_percent/100);
+      assert.deepEqual(plans[1].models.mine,MODEL);
+      assert.deepEqual(read(),{writes:0,predictions:2});
+    },{companion:saved,inspectPlan:plan=>plans.push(structuredClone(plan)),
+      modelShopStore:{licensedModel:async()=>structuredClone(MODEL)}});
+  }
 });

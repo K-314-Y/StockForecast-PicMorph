@@ -2048,3 +2048,95 @@ test('missing clipboard API safely offers manual copying',async()=>{
   assert.match(get('quickFreeCopyStatus').textContent,/質問文の欄を選択.*手動でコピー/);
   assert.equal(get('quickFreeChatGPT').hidden,false);
 });
+
+
+test('saved strategy stays bound to self replay and fits escaped notes without truncation',async()=>{
+  for(const [approach,label] of [['trend','トレンド'],['momentum','勢い'],['reversion','平均回帰'],['volatility','変動率']]) {
+    const {get,fire,state,calls,copies,storageWrites}=await mount();
+    const practice=state.practice;
+    const strategy={source:'saved_companion',approach,risk_percent:100};
+    state.practice=async body=>({...await practice(body),model_id:'self',companion_strategy:strategy});
+    await fire('quickForm','submit');await fire('quickRun');
+    assert.equal(get('quickCompanionStrategy').hidden,false);
+    assert.match(get('quickCompanionStrategy').textContent,/この練習に適用した相棒の設定/);
+    assert.match(get('quickCompanionStrategy').textContent,/上昇判断時に使う資金：100%/);
+    assert.match(get('quickCompanionStrategy').textContent,/理由の証明ではありません/);
+    strategy.approach='trend';strategy.risk_percent=5;
+    get('creatorApproach').value='trend';get('creatorRisk').value='5';
+    const before=calls.length;
+    for(let day=1;day<=12;day++) {
+      await fire('quickFollowing');
+      const note='\u0000'.repeat(120);
+      await shareReflection(get,fire,'wait','limit',note);
+      const prompt=get('quickFreePrompt').value;
+      assert.ok(prompt.length<=1000,`${approach} day ${day}: ${prompt.length}`);
+      assert.ok(prompt.includes(JSON.stringify({choice:'wait',reason:'損失を抑えたい',note})));
+      assert.ok(prompt.includes('適用した保存設定：'+label+'重視、上昇判断時の資金使用100%'));
+      assert.doesNotMatch(prompt,/trend|momentum|reversion|volatility/);
+      assert.match(prompt,/LONG\/CASHの理由を証明しません/);
+    }
+    assert.equal(calls.length,before);assert.deepEqual(copies,[]);assert.deepEqual(storageWrites,[]);
+    await fire('quickAgain');
+    assert.equal(get('quickCompanionStrategy').hidden,true);
+    assert.equal(get('quickCompanionStrategy').textContent,'');
+    assert.equal(get('quickFreePrompt').value,'');
+    state.practice=async body=>({...await practice(body),model_id:'self',companion_strategy:null});
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    assert.match(get('quickFreePrompt').value,/保存設定の情報なし/);
+    assert.doesNotMatch(get('quickFreePrompt').value,/適用した保存設定/);
+  }
+});
+
+test('missing, demo, mismatched and malformed strategies are ignored without HTML insertion',async()=>{
+  const valid={source:'saved_companion',approach:'momentum',risk_percent:35};
+  const bad=[undefined,null,[],true,'saved_companion',{},
+    {...valid,source:'editor'},{...valid,approach:'<img src=x onerror=alert(1)>'},
+    {...valid,approach:{toString:null}},{...valid,approach:null},
+    {...valid,approach:['trend']},{...valid,approach:7},
+    {...valid,approach:'__proto__'},{...valid,approach:'toString'},
+    {...valid,risk_percent:'35'},{...valid,risk_percent:4},{...valid,risk_percent:101},
+    {...valid,risk_percent:7},
+    {...valid,risk_percent:5.5},{...valid,risk_percent:NaN},{...valid,risk_percent:Infinity},
+    {...valid,extra:'<script>alert(1)</script>'}];
+  for(const [model,responseModel,strategy] of [
+    ...bad.map(value=>['self','self',value]),['demo_stub','demo_stub',valid],
+    ['self','demo_stub',valid],['self',undefined,valid],
+  ]) {
+    const {get,fire,state}=await mount([{id:'demo_stub',name:'Demo',owned:true}]);
+    const practice=state.practice;
+    state.practice=async body=>({...await practice(body),model_id:responseModel,companion_strategy:strategy});
+    get('quickModel').value=model;
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    assert.equal(get('quickReplay').hidden,false);
+    assert.equal(get('quickCompanionStrategy').hidden,true);
+    assert.equal(get('quickCompanionStrategy').textContent,'');
+    await shareReflection(get,fire);
+    assert.match(get('quickFreePrompt').value,/保存設定の情報なし/);
+    assert.doesNotMatch(get('quickFreePrompt').value,/適用した保存設定|<img|<script/);
+  }
+});
+
+test('saved context and manual prompt clear on practice invalidation and failed rerun',async()=>{
+  for(const change of ['model','amount','leverage','retry','failure']) {
+    const {get,fire,state}=await mount();
+    const practice=state.practice;
+    state.practice=async body=>({...await practice(body),model_id:'self',
+      companion_strategy:{source:'saved_companion',approach:'reversion',risk_percent:5}});
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    assert.equal(get('quickCompanionStrategy').hidden,false);
+    assert.match(get('quickFreePrompt').value,/適用した保存設定：平均回帰重視、上昇判断時の資金使用5%/);
+    if(change==='model'){get('quickModel').value='demo_stub';await fire('quickModel','change');}
+    if(change==='amount'){get('quickAmount').value='5';await fire('quickAmount','input');}
+    if(change==='leverage'){get('quickLeverage').value='2';await fire('quickLeverage','change');}
+    if(change==='retry')await fire('quickAgain');
+    if(change==='failure'){
+      state.practice=async()=>{throw Error('failure');};
+      await fire('quickForm','submit');await fire('quickRun');
+    }
+    assert.equal(get('quickCompanionStrategy').hidden,true,change);
+    assert.equal(get('quickCompanionStrategy').textContent,'',change);
+    assert.equal(get('quickFreePrompt').value,'',change);
+  }
+});
