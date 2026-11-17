@@ -165,6 +165,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
 #quickChatGPT button,#quickChatGPTConnection button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 #quickHumanNote{box-sizing:border-box;max-width:100%;min-width:0}
+#quickFreeChatGPT{min-width:0;margin-top:12px;padding:10px;border:1px solid #7590af;border-radius:10px}
+#quickFreeChatGPT textarea{display:block;box-sizing:border-box;width:100%;max-width:100%;min-width:0;margin:6px 0 10px;padding:8px;background:#101a2e;color:#f6fbff;border:1px solid #7590af;border-radius:6px;font:inherit;font-size:16px;resize:vertical}
+#quickFreeChatGPT button,#quickFreeChatGPT a{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#quickFreeChatGPT textarea:focus-visible,#quickFreeChatGPT a:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
+#quickFreeAnswer{white-space:pre-wrap;overflow-wrap:anywhere}
 #quickTacticsDay{box-sizing:border-box;max-width:100%;margin:8px 0;padding:6px 8px;border:1px solid #849ab8;border-radius:10px 10px 10px 2px;color:#f2f6ff;background:#152238;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .quick-reaction{display:flex;align-items:center;gap:10px;min-width:0}
 .quick-reaction #quickTacticsDay{flex:1;min-width:0}
@@ -262,7 +267,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <summary>この日の自分の考えを相棒と振り返る（任意・結果を見た後）</summary>
    <p id="quickReflectionHelp">第1〜12日から、振り返りたい日だけ選べます。これは結果を見た後の振り返りです。全日分の入力は不要です。比較前の入力は日を変えると消えます。</p>
    <form id="quickReflectionForm" aria-label="この日の人間の振り返り" aria-describedby="quickReflectionHelp quickReflectionPrivacy" autocomplete="off">
-    <p id="quickReflectionPrivacy" class="simple-hint">通常の比較ではメモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。任意のChatGPTボタンを押す場合は、下記の送信説明を確認してください。</p>
+    <p id="quickReflectionPrivacy" class="simple-hint">通常の比較ではメモをAIは解釈・学習しません。入力はこのページ内だけで、API送信・ディスク保存はしません。手動でChatGPTに貼り付けて送信するとOpenAIに渡ります。任意の自動API連携も、下記の送信説明を確認してください。</p>
     <details id="quickReflectionPrivacyDetails">
      <summary>比較と入力の扱いについて</summary>
      <p>結果を見た後の振り返りで、未知の値動きの予測ではありません。AI判断は独立したシミュレーションで、LLMとの会話ではありません。応答は選択項目と記録されたAIの方針による定型文です。通常の比較では自由文をAIは解釈しません。選択・メモはAPIへ送信せず、ディスクに保存せず、モデルにも渡しません。ChatGPTへの明示的な送信は別です。ページ内メモリだけに保持し、新しい練習・再挑戦・エラー・ページ再読込で消えます。この比較による作戦の変更や学習は行いません。</p>
@@ -282,6 +287,25 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="quickIndependentDecision"></p><p id="quickDecisionComparison"></p><p id="quickReflectionReply"></p>
     <p id="quickReflectionNext"></p>
    </div>
+   <section id="quickFreeChatGPT" aria-labelledby="quickFreeTitle" hidden>
+    <h4 id="quickFreeTitle">無料版ChatGPTと話す（手動 / MANUAL）</h4>
+    <p id="quickFreePrivacy" class="simple-hint">アプリ内API連携ではありません。質問文をコピーし、ChatGPTのサイトで自分で貼り付けて送信してください。サイトを開くだけでは文は転送・貼り付けされません。送信操作により質問がOpenAIに渡ります。Creature Labはこの手動ブリッジをサーバーへPOSTせず、ゲームからChatGPTプランの利用枠も使いません。秘密や個人情報は含めないでください。</p>
+    <label for="quickFreePrompt">質問文のプレビュー（読み取り専用）</label>
+    <textarea id="quickFreePrompt" rows="6" readonly autocomplete="off" aria-describedby="quickFreePrivacy"></textarea>
+    <div role="group" aria-label="手動でChatGPTへ質問する">
+     <button id="quickFreeCopy" type="button">質問文をコピー</button>
+     <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPTを開く（無料版も可）</a>
+    </div>
+    <p id="quickFreeCopyStatus" role="status" aria-live="polite"></p>
+    <details>
+     <summary>返答を手動で持ち帰る（任意）</summary>
+     <p id="quickFreePasteHelp" class="simple-hint">ChatGPTの返答を自分でコピーし、ここに貼り付けてください（1500文字まで）。認証されたChatGPTの返答ではなく、未検証のユーザー貼り付けとして表示します。解釈・設定変更・保存はしません。入力変更・日付変更・再挑戦・振り返りエラー・ページを離れると質問文と返答は消えます。</p>
+     <label for="quickFreePaste">返答の貼り付け（任意）</label>
+     <textarea id="quickFreePaste" rows="3" maxlength="1500" autocomplete="off" aria-describedby="quickFreePasteHelp"></textarea>
+     <button id="quickFreeShow" type="button">返答をこの画面に表示</button>
+     <p id="quickFreeAnswer" role="status" aria-live="polite"></p>
+    </details>
+   </section>
    <div id="quickChatGPT" data-chatgpt-dialogue="disabled" hidden>
     <p id="quickChatGPTPrivacy" class="simple-hint">このボタンを押すと、選択・理由・メモと申告されたAI方針を、許可したChatGPTアカウント経由でOpenAIに送ります。端末内だけの処理ではありません。画像・認証情報・保存状態は送信しません。秘密や個人情報をメモに書かないでください。</p>
     <button id="quickChatGPTAsk" type="button" aria-describedby="quickChatGPTPrivacy">ChatGPTに考えを聞く</button>

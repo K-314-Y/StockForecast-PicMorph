@@ -7,7 +7,7 @@ const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.m
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
 async function mount(models=[],chatgpt=false) {
-  const nodes=new Map(),calls=[],scrolls=[],storageWrites=[];
+  const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
   let observeSource=()=>{};
   let document;
   class Element {
@@ -87,7 +87,10 @@ async function mount(models=[],chatgpt=false) {
     removeItem:(...args)=>storageWrites.push(['removeItem',...args]),
     clear:()=>storageWrites.push(['clear']),
   };
+  state.copy=async text=>{copies.push(text);};
+  state.navigator={clipboard:{writeText:text=>state.copy(text)}};
   const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
+    navigator:state.navigator,
     getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
     MutationObserver:class {
       constructor(callback){observeSource=callback;}
@@ -99,7 +102,7 @@ async function mount(models=[],chatgpt=false) {
   runInNewContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
-  return {get,calls,scrolls,storageWrites,document,state,sourceChanged:()=>observeSource(),
+  return {get,calls,scrolls,storageWrites,copies,document,state,sourceChanged:()=>observeSource(),
     pagehide:()=>windowHandlers.pagehide?.(),
     fire:(id,event)=>get(id).fire(event)};
 }
@@ -1856,4 +1859,192 @@ test('browser deadline discards uncooperative late completion and blocks click s
   await pending;
   assert.doesNotMatch(get('quickChatGPTReply').textContent,/STALE/);
   assert.match(get('quickChatGPTReply').textContent,/取得できませんでした/);
+});
+
+test('free manual bridge markup is accessible, separate, and narrow-screen friendly',()=>{
+  const nodes=htmlNodes(),get=id=>nodes.find(node=>node.id===id);
+  assert.equal(get('quickFreeChatGPT').tag,'section');
+  assert.ok(get('quickFreeChatGPT').parents.includes('quickReflection'));
+  assert.ok(!get('quickFreeChatGPT').parents.includes('quickChatGPT'));
+  assert.match(get('quickFreeChatGPT').attributes,/hidden/);
+  assert.match(get('quickFreePrompt').attributes,/readonly/);
+  assert.match(get('quickFreePrompt').attributes,/rows="6"/);
+  assert.match(get('quickFreePaste').attributes,/maxlength="1500"/);
+  for(const id of ['quickFreeCopy','quickFreeShow'])assert.match(get(id).attributes,/type="button"/);
+  const link=nodes.find(node=>node.tag==='a'&&node.parents.includes('quickFreeChatGPT'));
+  assert.match(link.attributes,/href="https:\/\/chatgpt.com\/"/);
+  assert.match(link.attributes,/target="_blank"/);
+  assert.match(link.attributes,/rel="noopener noreferrer"/);
+  assert.match(html,/ChatGPTを開く（無料版も可）/);
+  assert.match(html,/手動 \/ MANUAL/);
+  assert.match(html,/アプリ内API連携ではありません/);
+  assert.match(html,/送信操作により質問がOpenAIに渡ります/);
+  assert.match(html,/サイトを開くだけでは文は転送・貼り付けされません/);
+  assert.match(html,/#quickFreeChatGPT textarea\{[^}]*box-sizing:border-box;[^}]*width:100%;[^}]*min-width:0/);
+  assert.match(html,/#quickFreeChatGPT button,#quickFreeChatGPT a\{[^}]*white-space:normal;overflow-wrap:anywhere/);
+  assert.match(html,/#quickFreeAnswer\{white-space:pre-wrap;overflow-wrap:anywhere/);
+});
+
+test('free bridge works without client, generates exact quoted reflection, and copies only on click',async()=>{
+  for(const configured of [false,true]) {
+    const {get,fire,calls,copies,storageWrites}=await mount([],configured);
+    assert.equal(get('quickFreeChatGPT').hidden,true);
+    await fire('quickFreeCopy');
+    assert.equal(copies.length,0);
+    await fire('quickForm','submit');await fire('quickRun');
+    assert.equal(get('quickFreeChatGPT').hidden,true); // day 0
+    await fire('quickFollowing');
+    assert.equal(get('quickFreeChatGPT').hidden,true); // not compared
+    const note='引用 " </textarea><img src=x onerror=alert(1)> & \\';
+    await shareReflection(get,fire,'wait','drop',note);
+    assert.equal(get('quickFreeChatGPT').hidden,false);
+    const prompt=get('quickFreePrompt').value;
+    assert.ok(prompt.length<=1000);
+    assert.ok(prompt.includes(JSON.stringify({choice:'wait',reason:'下落リスク',note})));
+    assert.match(prompt,/第1日/);
+    assert.match(prompt,/独立判断はLONG/);
+    assert.match(prompt,/内部や真の判断理由を知っているふりをしない/);
+    assert.match(prompt,/実際の取引助言、設定変更/);
+    assert.equal(copies.length,0);
+    const before=calls.slice();
+    await fire('quickFreeCopy');
+    assert.deepEqual(copies,[prompt]);
+    assert.match(get('quickFreeCopyStatus').textContent,/コピーしました/);
+    get('quickFreePaste').value='<script>alert(1)</script>\n<img src=x onerror=alert(1)> **text**';
+    await fire('quickFreePaste','input');
+    assert.equal(get('quickFreeAnswer').textContent,'');
+    await fire('quickFreeShow');
+    assert.equal(get('quickFreeAnswer').textContent,'未検証のユーザー貼り付け（UNVERIFIED USER-PASTED）：\n'+get('quickFreePaste').value);
+    assert.deepEqual(calls,before);
+    assert.deepEqual(storageWrites,[]);
+    assert.equal(get('quickChatGPTReply').textContent,'');
+    if(configured) {
+      await fire('quickChatGPTAsk');
+      assert.equal(get('quickFreeChatGPT').hidden,false);
+      assert.equal(get('quickFreePrompt').value,prompt);
+      assert.equal(calls.filter(x=>x.path==='/api/chatgpt-dialogue').length,1);
+    }
+  }
+});
+
+test('copy failure offers manual selection; clipboard completion cannot revive old content',async()=>{
+  for(const fail of [false,true]) {
+    const {get,fire,state}=await mount();
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    state.copy=async()=>{throw Error('SECRET');};
+    await fire('quickFreeCopy');
+    assert.match(get('quickFreeCopyStatus').textContent,/質問文の欄を選択.*手動でコピー/);
+    assert.doesNotMatch(get('quickFreeCopyStatus').textContent,/SECRET/);
+    let resolve,reject;
+    state.copy=()=>new Promise((ok,no)=>{resolve=ok;reject=no;});
+    const pending=fire('quickFreeCopy');
+    await fire('quickFollowing');
+    if(fail)reject(Error('SECRET'));else resolve();
+    await pending;
+    assert.equal(get('quickFreeCopyStatus').textContent,'');
+    assert.equal(get('quickFreePrompt').value,'');
+  }
+});
+
+test('manual prompt and pasted answer are bounded even for escaped input and bypassed maxlength',async()=>{
+  const {get,fire}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  for(const note of ['\u0000'.repeat(120),'😀'.repeat(60),'x'.repeat(120)]) {
+    await shareReflection(get,fire,'buy','limit',note);
+    const prompt=get('quickFreePrompt').value;
+    assert.ok(prompt.length<=1000,`length ${prompt.length}`);
+    assert.ok(prompt.includes(JSON.stringify(note)));
+  }
+  // Longest structured input, two-digit day and both recorded signals.
+  for(let day=2;day<=12;day++) {
+    await fire('quickFollowing');
+    const note='\u0000'.repeat(120);
+    await shareReflection(get,fire,'wait','limit',note);
+    const prompt=get('quickFreePrompt').value;
+    assert.ok(prompt.length<=1000,`day ${day}: length ${prompt.length}`);
+    assert.ok(prompt.includes(JSON.stringify({choice:'wait',reason:'損失を抑えたい',note})));
+  }
+  get('quickFreePaste').value='x'.repeat(1600);
+  await fire('quickFreePaste','input');
+  assert.equal(get('quickFreePaste').value.length,1500);
+  get('quickFreePaste').value='😀'.repeat(800);
+  await fire('quickFreeShow');
+  assert.equal(get('quickFreePaste').value.length,1500);
+  assert.ok(get('quickFreeAnswer').textContent.endsWith('😀'.repeat(750)));
+  get('quickFreePaste').value='';await fire('quickFreePaste','input');
+  assert.equal(get('quickFreeAnswer').textContent,'');
+  await fire('quickFreeShow');assert.equal(get('quickFreeAnswer').textContent,'');
+  await shareReflection(get,fire,'wait','other','x'.repeat(121));
+  assert.equal(get('quickFreeChatGPT').hidden,true);
+  assert.equal(get('quickFreePrompt').value,'');
+});
+
+test('free bridge clears on edits, navigation, new run, modes, invalid input, reflection errors and pagehide',async()=>{
+  for(const change of ['choice','reason','note','day','day0','retry','model','amount','leverage','run','invalid','native-invalid','pagehide']) {
+    const {get,fire,state,pagehide}=await mount([],true);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    await fire('quickFreeCopy');
+    get('quickFreePaste').value='STALE';await fire('quickFreeShow');
+    if(['choice','reason','note'].includes(change)) {
+      const id={choice:'quickHumanChoice',reason:'quickHumanReason',note:'quickHumanNote'}[change];
+      get(id).value='changed';await fire(id,'input');
+    }
+    if(change==='day')await fire('quickFollowing');
+    if(change==='day0')await fire('quickPrevious');
+    if(change==='retry')await fire('quickAgain');
+    if(change==='model'){get('quickModel').value='other';await fire('quickModel','change');}
+    if(change==='amount'){get('quickAmount').value='23';await fire('quickAmount','input');}
+    if(change==='leverage'){get('quickLeverage').value='2';await fire('quickLeverage','change');}
+    if(change==='run'){state.practice=async()=>{throw Error('failure');};await fire('quickForm','submit');await fire('quickRun');}
+    if(change==='invalid'){get('quickHumanReason').value='bad';await fire('quickReflectionForm','submit');}
+    if(change==='native-invalid')await fire('quickHumanChoice','invalid');
+    if(change==='pagehide')pagehide();
+    assert.equal(get('quickFreeChatGPT').hidden,true,change);
+    assert.equal(get('quickFreePrompt').value,'',change);
+    assert.equal(get('quickFreePaste').value,'',change);
+    assert.equal(get('quickFreeAnswer').textContent,'',change);
+    assert.equal(get('quickFreeCopyStatus').textContent,'',change);
+    await fire('quickFreeCopy');await fire('quickFreeShow');
+    assert.equal(get('quickFreeAnswer').textContent,'',change);
+  }
+  const fresh=await mount();
+  assert.equal(fresh.get('quickFreeChatGPT').hidden,true);
+  assert.equal(fresh.get('quickFreePrompt').value,'');
+  assert.equal(fresh.get('quickFreePaste').value,'');
+  assert.equal(fresh.get('quickFreeAnswer').textContent,'');
+});
+
+
+test('manual bridge survives automatic dialogue and session check errors',async()=>{
+  for(const change of ['auto-error','status-error']) {
+    const {get,fire,state,copies}=await mount([],change==='status-error'?'session':true);
+    await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+    await shareReflection(get,fire);
+    const prompt=get('quickFreePrompt').value;
+    get('quickFreePaste').value='手動の返答';await fire('quickFreeShow');
+    const answer=get('quickFreeAnswer').textContent;
+    if(change==='auto-error'){state.dialogue=async()=>{throw Error('failure');};await fire('quickChatGPTAsk');}
+    else {state.session=async()=>{throw Error('failure');};await fire('quickChatGPTStatusCheck');}
+    assert.equal(get('quickFreeChatGPT').hidden,false,change);
+    assert.equal(get('quickFreePrompt').value,prompt,change);
+    assert.equal(get('quickFreePaste').value,'手動の返答',change);
+    assert.equal(get('quickFreeAnswer').textContent,answer,change);
+    await fire('quickFreeCopy');
+    assert.deepEqual(copies,[prompt],change);
+    assert.match(get('quickFreeCopyStatus').textContent,/コピーしました/);
+    await fire('quickFreeShow');
+    assert.equal(get('quickFreeAnswer').textContent,answer,change);
+  }
+});
+
+test('missing clipboard API safely offers manual copying',async()=>{
+  const {get,fire,state}=await mount();
+  await fire('quickForm','submit');await fire('quickRun');await fire('quickFollowing');
+  await shareReflection(get,fire);
+  delete state.navigator.clipboard;
+  await fire('quickFreeCopy');
+  assert.match(get('quickFreeCopyStatus').textContent,/質問文の欄を選択.*手動でコピー/);
+  assert.equal(get('quickFreeChatGPT').hidden,false);
 });

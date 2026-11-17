@@ -1,4 +1,39 @@
-# ChatGPT primary conversation provider (Sprint69 pass 3)
+# ChatGPT primary conversation provider (Sprint70 pass 1)
+
+## Free manual web bridge
+
+After a successful optional reflection comparison on synthetic Day 1–12, a
+separate MANUAL block is available even on the default server without any
+`chatgptClient`. Its read-only Japanese question quotes the player's exact
+buy/wait choice, selected reason and note, alongside the separately recorded
+LONG/CASH signal. It asks for reflection, never predictor internals, real trade
+advice or model edits. It contains no prices or saved assets.
+
+Nothing is copied automatically. Only 「質問文をコピー」 calls the browser
+clipboard API; failure explains how to select and copy the preview manually.
+The ordinary https://chatgpt.com/ link opens the site without transferring text.
+The player must paste and send the question there, then manually copy any reply
+back. That user action sends the question to OpenAI's website. Creature Lab
+performs no network request for this bridge and uses no ChatGPT plan allowance.
+The optional return area accepts at most 1500 UTF-16 code units and displays
+plain text only after a separate click, labelled UNVERIFIED USER-PASTED. It does
+not authenticate, interpret or execute the pasted answer.
+
+Preview, pasted input and displayed answer live only in the page. Reflection
+edits, day navigation, new practice/retry, model/amount/leverage changes, reflection errors,
+pagehide and reload discard them. Automatic dialogue/session errors keep the
+manual bridge available. A saved local comparison may generate a fresh
+preview when revisiting its day; the pasted reply never returns. No localStorage,
+sessionStorage, server state, cookies, credentials or proxies are used.
+
+According to the [official quickstart](https://developers.openai.com/siwc/quickstart),
+automatic open-source subscription sharing is for eligible Plus/Pro accounts.
+A Free account can normally use the ChatGPT website; having an account alone
+does **not** grant `chatgpt.tokens.use.direct` or included automatic API access.
+The manual bridge needs no API billing, model download or local LLM. The optional
+automated integration below remains independent and disabled by default.
+
+## Optional automated plan dialogue
 
 ChatGPT is the sole planned conversation provider; the synthetic predictor remains
 independent. There is no local LLM, reviewer, automatic request or API-key fallback.
