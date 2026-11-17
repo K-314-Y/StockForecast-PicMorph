@@ -511,7 +511,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/quick-practice') {
-        if ((names !== 'amount|leverage|model_id' && names !== 'amount|model_id') ||
+        if (!['amount|leverage|model_id','amount|model_id',
+              'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names) ||
+            (Object.hasOwn(payload,'scenario_token') &&
+              (typeof payload.scenario_token !== 'string' || payload.scenario_token.length !== 19 ||
+               !/^v1_[0-9a-f]{16}$/.test(payload.scenario_token))) ||
             !Number.isSafeInteger(payload.amount) || payload.amount < 1 ||
             payload.amount > 10000 ||
             (payload.leverage !== undefined && (
@@ -529,7 +533,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const mine = payload.model_id === 'self' ?
           applyCompanion(originals,companion).models.mine :
           await modelShopStore.licensedModel(payload.model_id);
-        const plan = await predict({...originals,models:{...originals.models,mine}});
+        const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
+        const scenarioToken = payload.scenario_token ?? 'v1_'+randomBytes(8).toString('hex');
+        const plan = await predict({...originals,models:{...originals.models,mine},
+          scenario_token:scenarioToken});
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
         if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
@@ -549,6 +556,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         });
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
+          scenario_token:scenarioToken, scenario_kind:scenarioKind,
+          scenario_notice:scenarioKind==='replay' ?
+            '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
+            '今回は新しい架空相場です',
           companion_name:payload.model_id==='self' && companion.created ? companion.companion.name : null,
           companion_strategy:payload.model_id==='self' && companion.created ? {
             source:'saved_companion',approach:companion.companion.approach,
@@ -572,7 +583,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           steps:result.decisions.length,
           real_market:false, persisted:false, order_placed:false,
           xp_awarded:false,
-          notice:'架空相場の終値ベースで損益倍率を試算しています。資金が0になれば途中終了し復活しません。実際の強制決済とは異なり、所持コインも注文も変更しません。',
+          notice:'統計的に架空の価格です。現実的な市場再現やバックテストではありません。架空相場の終値ベースで損益倍率を試算しています。資金が0になれば途中終了し復活しません。実際の強制決済とは異なり、所持コインも注文も変更しません。',
         });
       }
       if (path === '/api/model-shop/buy') {

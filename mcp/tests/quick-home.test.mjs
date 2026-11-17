@@ -128,7 +128,7 @@ test('25x server integration is read-only and never creates a negative balance',
     assert.equal(out.data.order_placed,false);
     assert.equal(out.data.xp_awarded,false);
     assert.equal(out.data.steps,12);
-    const normal=await post(base,{amount:1000,model_id:'self',leverage:1});
+    const normal=await post(base,{amount:1000,model_id:'self',leverage:1,scenario_token:out.data.scenario_token});
     assert.equal(normal.status,200);
     assert.equal(plans.length,2);
     assert.deepEqual(plans[1],plans[0]);
@@ -190,15 +190,15 @@ test('saved companion attribution is server-backed, self-only and read-only',asy
   let licenses=0;
   await withServer(async({base,read})=>{
     const self=await post(base,{amount:1000,model_id:'self'});
-    const demo=await post(base,{amount:1000,model_id:'demo_stub'});
+    const demo=await post(base,{amount:1000,model_id:'demo_stub',scenario_token:self.data.scenario_token});
     assert.equal(self.status,200,JSON.stringify(self.data));
     assert.equal(demo.status,200,JSON.stringify(demo.data));
     assert.equal(self.data.companion_name,saved.companion.name);
     assert.equal(demo.data.companion_name,null);
     assert.deepEqual(self.data.companion_strategy,{source:'saved_companion',approach:'trend',risk_percent:35});
     assert.equal(demo.data.companion_strategy,null);
-    const {companion_name:selfName,companion_strategy:selfStrategy,model_id:selfId,...selfResult}=self.data;
-    const {companion_name:demoName,companion_strategy:demoStrategy,model_id:demoId,...demoResult}=demo.data;
+    const {companion_name:selfName,companion_strategy:selfStrategy,model_id:selfId,scenario_kind:selfKind,scenario_notice:selfNotice,...selfResult}=self.data;
+    const {companion_name:demoName,companion_strategy:demoStrategy,model_id:demoId,scenario_kind:demoKind,scenario_notice:demoNotice,...demoResult}=demo.data;
     assert.deepEqual(selfResult,demoResult,'attribution leaves calculation and prices identical');
     assert.deepEqual(saved,before);
     assert.equal(licenses,1);
@@ -216,7 +216,7 @@ test('strategy describes exactly the saved profile passed to prediction for self
     const plans=[];
     await withServer(async({base,read})=>{
       const self=await post(base,{amount:1000,model_id:'self'});
-      const demo=await post(base,{amount:1000,model_id:'demo_stub'});
+      const demo=await post(base,{amount:1000,model_id:'demo_stub',scenario_token:self.data.scenario_token});
       assert.equal(self.status,200);assert.equal(demo.status,200);
       assert.deepEqual(self.data.companion_strategy,{source:'saved_companion',approach,risk_percent});
       assert.equal(demo.data.companion_strategy,null);
@@ -241,7 +241,7 @@ test('risk changes capital use after LONG but never predictor signals or synthet
       })};
       const before=structuredClone(saved);
       await withServer(async({base,read})=>{
-        const {status,data}=await post(base,{amount:1000,model_id:'self',leverage:1});
+        const {status,data}=await post(base,{amount:1000,model_id:'self',leverage:1,scenario_token:'v1_0123456789abcdef'});
         assert.equal(status,200,JSON.stringify(data));
         assert.deepEqual(data.companion_strategy,{source:'saved_companion',approach,risk_percent});
         assert.equal(data.persisted,false);assert.equal(data.xp_awarded,false);
@@ -301,4 +301,41 @@ test('audit74: quick-practice uses unrounded equity without exposing it',async()
   assert.equal(out.data.liquidated_at_step,null);
   assert.equal(out.data.final_balance,10000.25);
   assert.equal(JSON.stringify(out.data).includes('raw_equity_path'),false);
+});
+
+test('sprint75: token validation precedes prediction; new and replay are read-only',async()=>{
+  let calls=0;
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),
+    companionStore:{read:async()=>companion},predict:async input=>{
+      calls++; return pythonPredict(input);
+    }});
+  const run=body=>directRequest(server,'/api/quick-practice',{method:'POST',body});
+  const body={amount:1000,model_id:'self'};
+  for(const token of [null,12,{},[],true,'','v2_0123456789abcdef','v1_0123456789ABCDEF',
+    'v1_0123456789abcdef\n','v1_0123456789abcdef0','x'.repeat(65)]) {
+    assert.equal((await run({...body,scenario_token:token})).status,400);
+  }
+  assert.equal((await run({...body,scenario_token:'v1_0123456789abcdef',seed:1})).status,400);
+  assert.equal(calls,0);
+  const fresh=await run(body);
+  assert.equal(fresh.status,200,JSON.stringify(fresh.data));
+  assert.match(fresh.data.scenario_token,/^v1_[0-9a-f]{16}$/);
+  assert.equal(fresh.data.scenario_kind,'new');
+  assert.ok(Buffer.byteLength(JSON.stringify({...body,scenario_token:fresh.data.scenario_token}))-
+    Buffer.byteLength(JSON.stringify(body))<=64);
+  const replay=await run({...body,scenario_token:fresh.data.scenario_token});
+  assert.equal(replay.status,200);
+  assert.equal(replay.data.scenario_kind,'replay');
+  assert.match(replay.data.scenario_notice,/初見の予想とは比較できません/);
+  assert.deepEqual(replay.data.daily_synthetic_prices,fresh.data.daily_synthetic_prices);
+  assert.deepEqual(replay.data.daily_ai_signals,fresh.data.daily_ai_signals);
+  assert.equal(replay.data.profit_coins,fresh.data.profit_coins);
+  const second=await run(body);
+  assert.equal(second.status,200);
+  assert.notEqual(second.data.scenario_token,fresh.data.scenario_token);
+  assert.notDeepEqual(second.data.daily_synthetic_prices,fresh.data.daily_synthetic_prices);
+  for(const {data} of [fresh,replay,second]) {
+    for(const flag of ['persisted','xp_awarded','order_placed','real_market'])assert.equal(data[flag],false);
+  }
+  assert.equal(calls,3);
 });

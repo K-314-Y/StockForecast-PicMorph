@@ -56,6 +56,8 @@ async function mount(models=[],chatgpt=false) {
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
   const state={models,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
+    scenario_token:body.scenario_token??'v1_0123456789abcdef',
+    scenario_kind:body.scenario_token?'replay':'new',
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
     daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
@@ -2534,4 +2536,103 @@ test('pagehide discards practice without form validation or unrelated scene and 
     assert.doesNotMatch(get('quickStatus').textContent,/late failure|試算が完了/);
     await fire('quickRun');assert.equal(calls.length,2,'pagehide also discards pending confirmation');
   }
+});
+
+test('sprint75: new by default, page-only replay survives edits, explicit replay is labelled',async()=>{
+  const {get,fire,calls,storageWrites,pagehide}=await mount();
+  const review=async()=>{get('quickAmount').value='1000';await fire('quickForm','submit');};
+  await review();
+  assert.equal(get('quickScenarioOption').hidden,true);
+  assert.match(get('quickScenarioNote').textContent,/今回は新しい架空相場です/);
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:1});
+  await fire('quickAgain');
+  await review();
+  assert.equal(get('quickScenarioOption').hidden,false);
+  assert.equal(get('quickSameScenario').checked,false);
+  get('quickSameScenario').checked=true;await fire('quickSameScenario','change');
+  assert.match(get('quickScenarioNote').textContent,/初見の予想とは比較できません/);
+  get('quickPreOptIn').checked=true;
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:1,scenario_token:'v1_0123456789abcdef'});
+  assert.match(get('quickStatus').textContent,/初見の予想とは比較できません/);
+  assert.doesNotMatch(get('quickStatus').textContent,/。。/);
+  await fire('quickPreSkip');
+  assert.match(get('quickPreSummary').textContent,/初見の予想とは比較できません/);
+  assert.ok(get('quickResult').children.some(n=>n.textContent.includes('初見の予想とは比較できません')));
+  await review();
+  assert.equal(get('quickSameScenario').checked,false);
+  assert.equal(get('quickScenarioOption').hidden,false);
+  pagehide();await review();
+  assert.equal(get('quickScenarioOption').hidden,true);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('sprint75: failed, invalid and unrevealed responses never become a replay option',async()=>{
+  for(const patch of [{error:'failed'},{scenario_token:'bad'},{scenario_token:'v1_0123456789abcdef\n'},
+    {scenario_kind:'replay'},{daily_balances:[]},null]) {
+    const {get,fire,state}=await mount();
+    const original=state.practice;
+    state.practice=async body=>({...await original(body),...patch});
+    get('quickAmount').value='1000';
+    await fire('quickForm','submit');
+    get('quickPreOptIn').checked=true;
+    await fire('quickRun');
+    assert.equal(get('quickScenarioOption').hidden,true);
+    if(patch===null) {
+      await fire('quickPreSkip');
+      await fire('quickForm','submit');
+      assert.equal(get('quickScenarioOption').hidden,false);
+    } else {
+      await fire('quickForm','submit');
+      assert.equal(get('quickScenarioOption').hidden,true);
+    }
+  }
+});
+
+test('sprint75: native replay checkbox is in separate confirm panel with wrapping layout',()=>{
+  const nodes=htmlNodes(),input=nodes.find(n=>n.id==='quickSameScenario');
+  assert.match(input.attributes,/type="checkbox"/);
+  assert.ok(input.parents.includes('quickReview'));
+  assert.ok(!input.parents.includes('quickForm'));
+  assert.match(html,/for="quickSameScenario"/);
+  assert.match(html,/\.quick-pre-option\{[^}]*overflow-wrap:anywhere/);
+  assert.match(html,/\.quick-pre-option input\{[^}]*width:auto/);
+});
+
+test('sprint75: invalid replay cannot replace the last fully revealed token; fresh remains default',async()=>{
+  const {get,fire,state,calls}=await mount();
+  const original=state.practice;
+  get('quickAmount').value='1000';
+  await fire('quickForm','submit');await fire('quickRun');
+  for(const patch of [{error:'failed'},{scenario_token:'v1_ffffffffffffffff'},{scenario_kind:'new'}]) {
+    await fire('quickForm','submit');
+    get('quickSameScenario').checked=true;
+    state.practice=async body=>({...await original(body),...patch});
+    await fire('quickRun');
+    assert.match(get('quickStatus').textContent,/試算できませんでした/);
+    assert.equal(get('quickResult').hidden,true);
+    assert.equal(calls.at(-1).body.scenario_token,'v1_0123456789abcdef');
+  }
+  state.practice=original;
+  await fire('quickForm','submit');
+  assert.equal(get('quickSameScenario').checked,false);
+  await fire('quickRun');
+  assert.equal(Object.hasOwn(calls.at(-1).body,'scenario_token'),false);
+});
+
+test('sprint75: abandoning a blind run and pagehide in flight never unlock a token',async()=>{
+  const {get,fire,state,pagehide}=await mount();
+  get('quickAmount').value='1000';
+  await fire('quickForm','submit');get('quickPreOptIn').checked=true;await fire('quickRun');
+  await fire('quickForm','submit');
+  assert.equal(get('quickScenarioOption').hidden,true);
+  let resolve;
+  const original=state.practice;
+  state.practice=body=>new Promise(done=>{resolve=async()=>done(await original(body));});
+  const running=fire('quickRun');
+  pagehide();
+  await resolve();await running;
+  await fire('quickForm','submit');
+  assert.equal(get('quickScenarioOption').hidden,true);
 });

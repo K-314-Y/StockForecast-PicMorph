@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,15 +35,35 @@ def model_from_record(data: dict) -> Model:
     )
 
 
+def scenario_prices(token: str) -> tuple:
+    """v1 fictional statistics, not realistic markets or a market backtest.
+
+    Index 0..11; full SHA256 big-endian modulo 701 minus 350 bps.
+    Integer cents round half up each day; independent of models.
+    Public replay identifiers are not secrets or authentication.
+    """
+    if type(token) is not str or re.fullmatch(r"v1_[0-9a-f]{16}", token) is None:
+        raise ValueError("invalid_scenario_token")
+    cents = 10900  # v1 freezes SYNTHETIC_PRICES[-1] = 109.00
+    prices = []
+    for index in range(12):
+        digest = hashlib.sha256(f"{token}:{index}".encode("ascii")).digest()
+        bps = int.from_bytes(digest, "big") % 701 - 350
+        cents = (cents * (10000 + bps) + 5000) // 10000
+        prices.append(cents / 100)
+    return tuple(prices)
+
+
 def create_prediction_plan(data: dict) -> dict:
-    if (type(data) is not dict or set(data) != {"base_model", "models"}
+    if (type(data) is not dict or set(data) not in ({"base_model", "models"}, {"base_model", "models", "scenario_token"})
             or type(data["models"]) is not dict or set(data["models"]) != set(SLOTS)):
         raise ValueError("invalid_prediction_request")
     base = model_from_record(data["base_model"])
     models = {key: model_from_record(data["models"][key]) for key in SLOTS}
+    future = scenario_prices(data["scenario_token"]) if "scenario_token" in data else FUTURE
     history = list(SYNTHETIC_PRICES)
     signals = []
-    for next_price in FUTURE:
+    for next_price in future:
         step = {}
         for key in SLOTS:
             p = prediction(models[key], tuple(history))
@@ -54,7 +75,7 @@ def create_prediction_plan(data: dict) -> dict:
         "initial_coins": 10000,
         "fee_rate": .001,
         "initial_price": SYNTHETIC_PRICES[-1],
-        "future_prices": list(FUTURE),
+        "future_prices": list(future),
         "signals": signals,
         "models": {k: {
             "risk_fraction": m.risk_fraction,
