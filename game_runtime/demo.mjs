@@ -23,6 +23,12 @@ let artworkActive = false;
 const artworkPreviews = new Map();
 const artworkDimensions = new Map();
 const artworkSelectionErrors = new Map();
+const expressionApi = '/api/artwork-expressions';
+const expressionNames = {happy:'うれしい',cautious:'しんぱい'};
+const expressionEditor = $('artworkExpressions')?.tagName === 'DETAILS';
+const expressionSelections = new Map();
+let savedExpressions = null;
+let expressionBusy = false;
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
 const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
@@ -41,8 +47,11 @@ async function call(path, body) {
   return value;
 }
 
-function scene(mood, message) {
-  $('scene').dataset.mood = mood;
+function scene(mood, message, otherModel = false) {
+  const state = $('scene').dataset;
+  if (otherModel) state.expressionOtherModel = 'true';
+  else delete state.expressionOtherModel;
+  state.mood = mood;
   $('speech').textContent = message;
 }
 
@@ -103,7 +112,8 @@ function chooseDay(index) {
     fmt(choice.price) + ' C / 判断 ' + signal +
     ' / 仮想コイン残高 ' + fmt(result.equity_path[index + 1]) + ' C';
   if (signal === 'CASH') {
-    scene('cautious', resultName() + 'は今日は現金待機。動かない判断も大切だよ。');
+    scene('cautious', resultName() + 'は今日は現金待機。動かない判断も大切だよ。',
+      result.brain?.kind === 'trained_practice_only');
   } else if (signal === 'LONG') {
     scene('thinking', resultName() + 'は上昇を狙う判断。結果を確かめよう。');
   } else {
@@ -618,6 +628,7 @@ function artworkSize(src) {
       size.pending = false;
       size.width = img.naturalWidth; size.height = img.naturalHeight;
       refreshArtworkButtons();
+      if (src === savedArtworkSource('base')) refreshExpressions();
     };
     img.onload = finish; img.onerror = finish;
     img.src = src;
@@ -691,6 +702,7 @@ function artworkSource(slot) {
   return artworkPreviews.get(slot)?.url || savedArtworkSource(slot);
 }
 function showArtwork() {
+  refreshExpressions();
   const base = artworkSource('base');
   if (!base) {
     defaultSkin('完成イラストを選ぶと、自分の画像で遊べます。');
@@ -765,6 +777,168 @@ async function artworkBase64(file) {
   }
   return btoa(binary);
 }
+
+function checkExpressionSelection(selection, baseSize) {
+  if (!selection) return {message:''};
+  if (selection.error) return {invalid:true,message:selection.error};
+  if (selection.pending) return {message:'画像を確認しています…'};
+  if (baseSize?.pending) return {message:'保存済みbaseの寸法を確認しています…'};
+  if (!knownArtworkSize(baseSize)) return {message:'先に表示できる完成イラスト（base）をSAVEしてください。'};
+  if (differentArtworkSize(baseSize,selection)) return {invalid:true,
+    message:'保存済みbaseと寸法が違います（' + artworkSizeText(baseSize) + ' / ' + artworkSizeText(selection) + '）。'};
+  return {valid:true,message:'保存済みbaseと同じ寸法です（' + artworkSizeText(selection) + '）。'};
+}
+
+function refreshExpressions() {
+  if (!expressionEditor) return;
+  const baseSource = savedArtworkSource('base');
+  const baseSize = artworkSize(baseSource);
+  const stage = $('artworkStage');
+  for (const mood of Object.keys(expressionNames)) {
+    const suffix = artworkId(mood);
+    const image = $('artworkExpression' + suffix);
+    const stored = savedExpressions?.moods[mood];
+    const size = {width:image.naturalWidth,height:image.naturalHeight};
+    const ready = stored?.exists && image.complete && image.currentSrc === image.src && knownArtworkSize(size) &&
+      knownArtworkSize(baseSize) && !differentArtworkSize(baseSize,size);
+    stage.dataset[mood + 'Expression'] = String(Boolean(ready && !artworkPreviews.size));
+    const selection = expressionSelections.get(mood);
+    const check = checkExpressionSelection(selection,baseSize);
+    $('expressionSave' + suffix).disabled = expressionBusy || artworkSaving || !savedExpressions || !check.valid;
+    $('expressionClear' + suffix).disabled = expressionBusy || !stored?.exists;
+    const input = $('expressionFile' + suffix);
+    input.disabled = expressionBusy;
+    input.setAttribute('aria-invalid',String(Boolean(check.invalid)));
+    let savedStatus = '保存状況は未取得';
+    if (stored) {
+      if (!stored.exists) savedStatus = '保存画像なし';
+      else if (!image.complete || baseSize?.pending) savedStatus = '保存済み（確認中）';
+      else if (!knownArtworkSize(size)) savedStatus = '保存済み（画像を読み込めません）';
+      else if (!ready) savedStatus = '保存済み（表示には同じ寸法の保存済みbaseが必要です）';
+      else savedStatus = '保存済み';
+    }
+    let status = savedStatus;
+    if (selection) status += '。未保存：' + selection.file.name + '。' + check.message;
+    else if (!baseSource) status += '。SAVEには保存済みbaseが必要です。';
+    const info = $('expressionInfo' + suffix);
+    if (info.textContent !== status) info.textContent = status;
+  }
+  $('reloadExpressions').disabled = expressionBusy;
+}
+
+function setSavedExpressions(record) {
+  savedExpressions = record;
+  for (const mood of Object.keys(expressionNames)) {
+    const image = $('artworkExpression' + artworkId(mood));
+    if (record?.moods[mood].exists) image.src = expressionApi + '/image/' + mood + '?revision=' + record.revision;
+    else image.removeAttribute('src');
+  }
+  refreshExpressions();
+}
+
+async function selectExpression(mood) {
+  const input = $('expressionFile' + artworkId(mood));
+  const file = input.files?.[0];
+  if (expressionBusy) return;
+  if (!file) {
+    expressionSelections.delete(mood);
+    refreshExpressions();
+    return;
+  }
+  const selection = {file,pending:true};
+  expressionSelections.set(mood,selection);
+  $('expressionStatus').textContent = '';
+  refreshExpressions();
+  let url;
+  try {
+    if (!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size <= 0 || file.size > 450 * 1024) {
+      throw Error('450 KiB以内のPNG・JPEG・WebP画像を選んでください。');
+    }
+    const header = new Uint8Array(await file.slice(0,12).arrayBuffer());
+    const signature = String.fromCharCode(...header);
+    const detectedType = signature.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png' :
+      signature.startsWith('\xff\xd8\xff') ? 'image/jpeg' :
+      signature.startsWith('RIFF') && signature.slice(8) === 'WEBP' ? 'image/webp' : null;
+    if (file.type !== detectedType) throw Error('画像の内容とファイル形式が一致しません。');
+    url = URL.createObjectURL(file);
+    const image = new Image();
+    image.src = url;
+    await image.decode().catch(() => {throw Error('選択した画像を読み込めません。');});
+    selection.width = image.naturalWidth;
+    selection.height = image.naturalHeight;
+    if (!knownArtworkSize(selection)) throw Error('画像の寸法を確認できません。');
+  } catch (error) {
+    selection.error = error.message || '選択した画像を読み込めません。';
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+    selection.pending = false;
+    if (expressionSelections.get(mood) === selection) refreshExpressions();
+  }
+}
+
+async function loadExpressions() {
+  if (expressionBusy) return;
+  expressionBusy = true;
+  $('expressionStatus').textContent = '表情イラストの保存状況を読み込んでいます…';
+  refreshExpressions();
+  try {
+    setSavedExpressions(await call(expressionApi));
+    $('expressionStatus').textContent = '';
+  } catch (error) {
+    setSavedExpressions(null);
+    $('expressionStatus').textContent = error.message;
+  } finally {
+    expressionBusy = false;
+    refreshExpressions();
+  }
+}
+
+async function saveExpression(mood, clear = false) {
+  if (expressionBusy || !savedExpressions) return;
+  const selection = expressionSelections.get(mood);
+  const baseSource = savedArtworkSource('base');
+  const exists = savedExpressions.moods[mood].exists;
+  if (clear && !exists) return;
+  if (!clear && (artworkSaving || !checkExpressionSelection(selection,artworkSize(baseSource)).valid)) return;
+  const name = expressionNames[mood];
+  if ((clear || exists) && !window.confirm(clear ?
+    name + 'の保存画像をこのPCから削除しますか？' :
+    name + 'の保存画像を選択中の画像で置き換えますか？')) return;
+  expressionBusy = true;
+  $('expressionStatus').textContent = clear ? '削除しています…' : '保存しています…';
+  refreshExpressions();
+  try {
+    const image = clear ? null : {mime:selection.file.type,base64:await artworkBase64(selection.file)};
+    if (!clear && (artworkSaving || baseSource !== savedArtworkSource('base'))) {
+      throw Error('保存済みbaseが更新されています。寸法を確認してから再度SAVEしてください。');
+    }
+    const record = await call(expressionApi,{expected_revision:savedExpressions.revision,mood,image});
+    expressionSelections.delete(mood);
+    $('expressionFile' + artworkId(mood)).value = '';
+    setSavedExpressions(record);
+    $('expressionStatus').textContent = name + (clear ? 'の保存画像を削除しました。' : 'の画像をこのPCに保存しました。');
+  } catch (error) {
+    $('expressionStatus').textContent = (clear ? '削除できません。' : '保存できません。') + error.message;
+  } finally {
+    expressionBusy = false;
+    refreshExpressions();
+  }
+}
+
+if (expressionEditor) {
+  for (const mood of Object.keys(expressionNames)) {
+    const suffix = artworkId(mood);
+    const image = $('artworkExpression' + suffix);
+    image.addEventListener('load',refreshExpressions);
+    image.addEventListener('error',refreshExpressions);
+    $('expressionFile' + suffix).addEventListener('change',() => selectExpression(mood));
+    $('expressionSave' + suffix).addEventListener('click',() => saveExpression(mood));
+    $('expressionClear' + suffix).addEventListener('click',() => saveExpression(mood,true));
+  }
+  $('reloadExpressions').addEventListener('click',loadExpressions);
+  loadExpressions();
+}
+
 async function saveArtworkSlot(slot, clear = false) {
   if (artworkSaving || !savedArtwork || (!clear && !artworkPreviews.has(slot))) return;
   if (clear || (slot === 'base' && savedArtwork.slots.base.exists)) {
@@ -784,6 +958,7 @@ async function saveArtworkSlot(slot, clear = false) {
     }
   }
   artworkSaving = true; refreshArtworkButtons();
+  refreshExpressions();
   try {
     const file = artworkPreviews.get(slot)?.file;
     const image = clear ? null : {mime:file.type,base64:await artworkBase64(file)};
@@ -794,7 +969,7 @@ async function saveArtworkSlot(slot, clear = false) {
     if (artworkActive) showArtwork();
   } catch (error) {
     $('artworkStatus').textContent = '保存できません: ' + error.message + '。「未保存を破棄して再取得」で現在の保存状況を確認できます。';
-  } finally {artworkSaving = false; refreshArtworkButtons();}
+  } finally {artworkSaving = false; refreshArtworkButtons(); refreshExpressions();}
 }
 async function loadArtwork(restore = false, discardPending = false) {
   const epoch = skinEpoch;
@@ -803,6 +978,7 @@ async function loadArtwork(restore = false, discardPending = false) {
   savedArtwork = record;
   artworkDimensions.clear();
   refreshArtworkButtons();
+  refreshExpressions();
   $('artworkStatus').textContent = record.created ? '保存済みイラストを復元しました。revision ' + record.revision :
     'まだ画像は保存されていません。完成イラスト1枚から使えます。';
   if (restore || (epoch === skinEpoch && !artworkPreviews.size && record.slots.base.exists)) showArtwork();
@@ -823,11 +999,12 @@ $('reloadArtwork')?.addEventListener('click', async () => {
   if (artworkPreviews.size && (typeof window === 'undefined' || typeof window.confirm !== 'function' ||
     !window.confirm('未保存の画像プレビューを破棄して、保存済みの画像を再取得しますか？\nSAVEしていない画像は失われます。'))) return;
   artworkSaving = true; refreshArtworkButtons();
+  refreshExpressions();
   try {
     await loadArtwork(true, true);
   } catch (error) {
     $('artworkStatus').textContent = '読み込めません: ' + error.message;
-  } finally {artworkSaving = false; refreshArtworkButtons();}
+  } finally {artworkSaving = false; refreshArtworkButtons(); refreshExpressions();}
 });
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('beforeunload', event => {
