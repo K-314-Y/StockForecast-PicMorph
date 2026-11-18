@@ -8,6 +8,7 @@ import {createChatGPTPlanDialogue, validateDialogueInput, validateDialogueResult
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
+import {deriveAppearanceModel} from './appearance-model.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {createModelShopStore} from './model-shop.mjs';
@@ -51,6 +52,7 @@ const MAX_ARTWORK_REQUEST = 750 * 1024;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
+const APPEARANCE_MODEL_VERSION = /^appearance-v[1-9]\d{0,2}(?:_\d{1,3}){5}$/;
 const SLOTS = ['mine', 'owl', 'turtle'];
 
 function failure(message, status = 503) {
@@ -369,6 +371,19 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       try {return json(res, 200, await companionStore.read());}
       catch {return json(res, 503, {error:'相棒の保存情報を読み取れません'});}
     }
+    if (req.method === 'GET' && path === '/api/companion/appearance-model') {
+      try {
+        const [companion, look] = await Promise.all([companionStore.read(), lookStore.read()]);
+        return json(res, 200, {
+          mode:'APPEARANCE_MODEL_PREVIEW',
+          companion_revision:companion.revision, companion_created:companion.created,
+          look_revision:look.revision, look_created:look.created,
+          ...deriveAppearanceModel(look.look, companion.companion),
+        });
+      } catch {
+        return json(res, 503, {error:'外見からモデル設定を読み取れません'});
+      }
+    }
     if (req.method === 'GET' && path === '/api/looks') {
       try {return json(res,200,await lookStore.read());}
       catch {return json(res,503,{error:'外見の保存情報を読み取れません'});}
@@ -509,10 +524,13 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
-      const names = Object.keys(payload).sort().join('|');
+      const fields = Object.keys(payload).sort();
+      const names = fields.join('|');
       if (path === '/api/quick-practice') {
+        const appearanceVersion = payload.appearance_model_version;
+        const quickNames = fields.filter(field => field !== 'appearance_model_version').join('|');
         if (!['amount|leverage|model_id','amount|model_id',
-              'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names) ||
+              'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(quickNames) ||
             (Object.hasOwn(payload,'scenario_token') &&
               (typeof payload.scenario_token !== 'string' || payload.scenario_token.length !== 19 ||
                !/^v1_[0-9a-f]{16}$/.test(payload.scenario_token))) ||
@@ -526,11 +544,24 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             !/^(self|demo_[a-z_]{1,40})$/.test(payload.model_id)) {
           throw failure('AI、1〜10,000の整数コイン額、1〜25の整数倍率を指定してください',400);
         }
+        if (Object.hasOwn(payload,'appearance_model_version') &&
+            (payload.model_id !== 'self' || typeof appearanceVersion !== 'string' ||
+             !APPEARANCE_MODEL_VERSION.test(appearanceVersion))) {
+          throw failure('外見モデル版は自分のAIにのみ指定できます。有効な版を取得してください',400);
+        }
         const leverage = payload.leverage ?? 1;
         const snapshot = await loadSnapshot();
         const companion = await companionStore.read();
+        const ownLook = appearanceVersion === undefined ? null : await lookStore.read();
+        if (ownLook && (!companion.created || !ownLook.created)) {
+          throw failure('相棒と外見パーツを保存してから再度お試しください',409);
+        }
+        const appearance = ownLook === null ? null : deriveAppearanceModel(ownLook.look,companion.companion);
+        if (appearance && appearance.model_version !== appearanceVersion) {
+          throw failure('外見モデル版が変わりました。再度お試しください',409);
+        }
         const originals = modelPlanFromSnapshot(snapshot,null);
-        const mine = payload.model_id === 'self' ?
+        const mine = appearance ? {...originals.models.mine,...appearance.model} : payload.model_id === 'self' ?
           applyCompanion(originals,companion).models.mine :
           await modelShopStore.licensedModel(payload.model_id);
         const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
@@ -540,7 +571,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
         if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
-           companion.revision !== currentCompanion.revision) {
+           companion.revision !== currentCompanion.revision ||
+           (ownLook && ownLook.revision !== (await lookStore.read()).revision)) {
           throw failure('練習中にモデルが変更されました。再度お試しください',409);
         }
         // Unallocated coins remain in cash; only the entered amount is simulated.
@@ -561,10 +593,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
             '今回は新しい架空相場です',
           companion_name:payload.model_id==='self' && companion.created ? companion.companion.name : null,
-          companion_strategy:payload.model_id==='self' && companion.created ? {
+          companion_strategy:!appearance && payload.model_id==='self' && companion.created ? {
             source:'saved_companion',approach:companion.companion.approach,
             risk_percent:companion.companion.risk_percent,
           } : null,
+          ...(appearance ? {brain:{kind:'appearance_model',version_id:appearance.model_version}} : {}),
           model_id:payload.model_id, initial_balance:10000,
           invested_coins:settled.invested_coins, cash_held:settled.cash_held,
           leverage:settled.leverage,
@@ -746,8 +779,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         } finally {item.busy = false;}
       }
       const preview = path === '/api/practice/preview';
-      if (!preview && names !== 'allocations' && names !== 'allocations|trained_version_id') {
-        throw failure('allocationsと保存済み練習版IDだけ指定できます', 400);
+      if (!preview && !['allocations', 'allocations|trained_version_id',
+        'allocations|appearance_model_version'].includes(names)) {
+        throw failure('配分と、保存済み練習版IDまたは外見モデル版を指定できます', 400);
       }
       if (preview && ![
         'allocations', 'allocations|candidate', 'allocations|trained_version_id'
@@ -759,6 +793,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (Object.hasOwn(payload, 'trained_version_id') &&
           (typeof selectedId !== 'string' || !TRAINED_ID.test(selectedId))) {
         throw failure('保存済み練習版IDが不正です', 400);
+      }
+      const appearanceVersion = payload.appearance_model_version;
+      if (Object.hasOwn(payload, 'appearance_model_version') &&
+          (typeof appearanceVersion !== 'string' || !APPEARANCE_MODEL_VERSION.test(appearanceVersion))) {
+        throw failure('外見モデル版が不正です', 400);
       }
       // Candidate belongs to THIS request only. It cannot be written by preview.
       const candidate = preview && Object.hasOwn(payload, 'candidate') ?
@@ -773,11 +812,17 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         throw failure('練習版モデルを確認できません');
       }
       const companion = await companionStore.read();
+      const ownLook = appearanceVersion === undefined ? null : await lookStore.read();
+      const appearance = ownLook === null ? null : deriveAppearanceModel(ownLook.look, companion.companion);
+      if (appearance && (!companion.created || appearance.model_version !== appearanceVersion)) {
+        throw failure('相棒を保存し、現在の外見モデル版を取得してください', 409);
+      }
       const snapshot = await loadSnapshot();
       const modelPlan = modelPlanFromSnapshot(snapshot, brain?.model || null);
+      if (appearance) modelPlan.models.mine = {...modelPlan.models.mine, ...appearance.model};
       const effectiveCompanion = candidate === null ?
         companion : {revision:companion.revision, created:true, companion:candidate};
-      const plan = await predict(selectedId === null ?
+      const plan = await predict(selectedId === null && appearance === null ?
         applyCompanion(modelPlan, effectiveCompanion) : modelPlan);
       // Re-read current model and progression so a concurrent edit never produces
       // a result incorrectly labelled with the latest model revision.
@@ -797,22 +842,28 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (companion.revision !== (await companionStore.read()).revision) {
         throw failure('相棒変更と重なりました。再実行してください', 409);
       }
+      if (ownLook && ownLook.revision !== (await lookStore.read()).revision) {
+        throw failure('外見変更と重なりました。再実行してください', 409);
+      }
+      const manualCompanionRules = selectedId === null && appearance === null && effectiveCompanion.created;
       return json(res, 200, {...result,
-        // Companion metadata is retained, but never claims its rules were used when a
-        // saved training version overrides it.  The brain field is authoritative.
+        // The top-level approach describes the manually selected companion rules.
         preview_only:preview,
         candidate_applied:candidate !== null,
         companion_name: selectedId === null ? effectiveCompanion.companion.name : null,
         companion_revision: companion.revision,
         companion_created: selectedId === null && companion.created,
-        companion_applied: selectedId === null && companion.created && candidate === null,
-        approach: selectedId === null && effectiveCompanion.created ? effectiveCompanion.companion.approach : null,
-        risk_percent: selectedId === null && effectiveCompanion.created ?
+        companion_applied: manualCompanionRules && candidate === null,
+        approach: manualCompanionRules ? effectiveCompanion.companion.approach : null,
+        risk_percent: appearance ? Math.round(appearance.model.risk_fraction * 100) : manualCompanionRules ?
           effectiveCompanion.companion.risk_percent : plan.models.mine.risk_fraction * 100,
         brain: selectedId !== null ? {
           kind:'trained_practice_only', version_id:selectedId,
           source_draft_id:brain.source_draft_id,
           parameters_sha256:brain.parameters_sha256,
+          effective_sha256:result.characters.mine.effective_sha256,
+        } : appearance ? {
+          kind:'appearance_model', version_id:appearance.model_version,
           effective_sha256:result.characters.mine.effective_sha256,
         } : {kind:candidate !== null ? 'unsaved_candidate_preview' :
           companion.created ? 'authored_companion' : 'standard_mine'},

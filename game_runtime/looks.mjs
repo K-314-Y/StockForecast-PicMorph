@@ -1,4 +1,4 @@
-/** Cosmetic-only chibi parts. Independent of stock models, training XP and companion brains. */
+/** Chibi parts and their local storage. Model derivation is handled separately. */
 import {readFile,mkdir,open,rename,unlink,lstat} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';

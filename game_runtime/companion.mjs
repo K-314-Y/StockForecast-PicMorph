@@ -12,6 +12,11 @@ const fail = (message, status=400) => Object.assign(new Error(message), {status}
 const keys = value => Object.keys(value).sort().join('|');
 const fields = 'approach|clothing_color|hair_color|name|risk_percent';
 
+export function normalizeCompanionColor(value) {
+  if (typeof value !== 'string' || !/^#[a-f\d]{6}$/i.test(value)) throw fail('色は #rrggbb 形式です');
+  return value.toLowerCase();
+}
+
 export function validateCompanion(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || keys(value) !== fields) {
     throw fail('相棒の名前・髪色・服色・予測方法・リスクを指定してください');
@@ -20,13 +25,12 @@ export function validateCompanion(value) {
       [...value.name].length > 16 || /[\u0000-\u001f\u007f-\u009f]/u.test(value.name)) {
     throw fail('名前は1〜16文字で指定してください（制御文字は使用不可）');
   }
-  for (const key of ['hair_color', 'clothing_color']) {
-    if (typeof value[key] !== 'string' || !/^#[a-f\d]{6}$/i.test(value[key])) throw fail('色は #rrggbb 形式です');
-  }
+  const hair_color = normalizeCompanionColor(value.hair_color);
+  const clothing_color = normalizeCompanionColor(value.clothing_color);
   if (!APPROACHES.includes(value.approach)) throw fail('予測方法が不正です');
   if (!Number.isInteger(value.risk_percent) || value.risk_percent < 5 ||
       value.risk_percent > 100 || value.risk_percent % 5 !== 0) throw fail('リスクは5〜100%を5刻みで指定してください');
-  return {...value, hair_color:value.hair_color.toLowerCase(), clothing_color:value.clothing_color.toLowerCase()};
+  return {...value, hair_color, clothing_color};
 }
 
 export function createCompanionStore({file=COMPANION_FILE}={}) {

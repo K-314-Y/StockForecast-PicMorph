@@ -4,7 +4,8 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
-import {validateCompanion} from '../../game_runtime/companion.mjs';
+import {createCompanionStore,validateCompanion} from '../../game_runtime/companion.mjs';
+import {createLookStore} from '../../game_runtime/looks.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 import {runSyntheticGame} from '../../game_runtime/practice.mjs';
 import {settleLeveragedPractice} from '../../game_runtime/leverage-practice.mjs';
@@ -284,6 +285,73 @@ function directRequest(server,url,{method='GET',body,remote='127.0.0.1'}={}) {
     server.emit('request',req,res);
   });
 }
+test('quick appearance model uses the saved settings in the Python forecast and JS settlement',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'quick-appearance-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const companionStore=createCompanionStore({file:join(dir,'companion.json')});
+  const lookStore=createLookStore({file:join(dir,'look.json')});
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),companionStore,lookStore});
+  const post=(url,body)=>directRequest(server,url,{method:'POST',body});
+  const preview=()=>directRequest(server,'/api/companion/appearance-model');
+  const amount=1000;
+  const body={model_id:'self',amount,scenario_token:'v1_0000000000000009'};
+  const run=extra=>post('/api/quick-practice',{...body,...extra});
+  const profile={name:'相棒',hair_color:'#0000ff',clothing_color:'#0000ff',approach:'reversion',risk_percent:100};
+  const look={hair_style:'bob',expression:'calm',accessory:'none'};
+  assert.equal((await post('/api/companion',{expected_revision:0,companion:profile})).status,200);
+  const unsaved=(await preview()).data;
+  assert.equal(unsaved.look_created,false);
+  assert.equal((await run({appearance_model_version:unsaved.model_version})).status,409);
+  assert.equal((await post('/api/looks',{expected_revision:0,look})).status,200);
+  const {data:appearance}=await preview();
+  const appearance_model_version=appearance.model_version;
+  assert.equal((await run({appearance_model_version,model_id:'demo_owl'})).status,400);
+  assert.equal((await run({appearance_model_version:null})).status,400);
+  const result=await run({appearance_model_version});
+  assert.equal(result.status,200,JSON.stringify(result.data));
+  assert.deepEqual(result.data.brain,{kind:'appearance_model',version_id:appearance_model_version});
+  assert.equal(result.data.companion_name,'相棒');
+  assert.equal(result.data.companion_strategy,null);
+  const plan=await pythonPredict({base_model:MODEL,models:{mine:{...MODEL,...appearance.model},
+    owl:MODEL,turtle:MODEL},scenario_token:body.scenario_token});
+  const game=runSyntheticGame({...plan,initial_coins:amount,allocations:{mine:100,owl:0,turtle:0}});
+  assert.deepEqual(result.data.daily_ai_signals,game.decisions.map(day=>day.signals.mine));
+  const expected=settleLeveragedPractice({equityPath:game.raw_equity_path,amount,leverage:1});
+  assert.equal(result.data.profit_coins,expected.profit_coins);
+  assert.notEqual(result.data.profit_coins,0);
+  const standard=await run();
+  assert.equal(standard.status,200,JSON.stringify(standard.data));
+  assert.equal(standard.data.brain,undefined);
+  assert.equal(standard.data.companion_strategy.approach,'reversion');
+  assert.deepEqual(standard.data.daily_synthetic_prices,result.data.daily_synthetic_prices);
+  assert.notDeepEqual(standard.data.daily_ai_signals,result.data.daily_ai_signals);
+  assert.equal((await post('/api/looks',{expected_revision:1,look:{...look,expression:'determined'}})).status,200);
+  assert.equal((await run({appearance_model_version})).status,409);
+});
+
+test('saving either appearance input during the real forecast invalidates quick practice',async()=>{
+  const look={hair_style:'bob',expression:'cheerful',accessory:'none'};
+  const profile={name:'相棒',hair_color:'#808080',clothing_color:'#808080',approach:'trend',risk_percent:50};
+  for(const edited of ['companion','look']) {
+    const revisions={companion:1,look:1};
+    const server=createGameServer({loadSnapshot:async()=>snapshot(),
+      companionStore:{read:async()=>({created:true,revision:revisions.companion,companion:profile})},
+      lookStore:{read:async()=>({created:true,revision:revisions.look,look})},
+      predict:async plan=>{
+        const prediction=await pythonPredict(plan);
+        revisions[edited]++;
+        return prediction;
+      },
+    });
+    const {data}=await directRequest(server,'/api/companion/appearance-model');
+    const result=await directRequest(server,'/api/quick-practice',{method:'POST',body:{
+      model_id:'self',amount:1000,appearance_model_version:data.model_version,
+    }});
+    assert.equal(result.status,409,JSON.stringify(result.data));
+    assert.equal(result.data.daily_ai_signals,undefined);
+  }
+});
+
 test('audit74: malformed request target returns 400 and health survives without sockets',async()=>{
   const server=createGameServer();
   for(const url of ['//[',undefined,'','http://localhost/health','//localhost/health','/\\evil','/health#x','/bad%xx']) {

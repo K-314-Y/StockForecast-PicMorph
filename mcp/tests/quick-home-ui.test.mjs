@@ -69,6 +69,7 @@ async function mount(models=[],chatgpt=false) {
     const body=options?.body?JSON.parse(options.body):undefined;
     calls.push({path,body});
     if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models})};
+    if(path==='/api/companion/appearance-model')return {ok:true,json:async()=>state.appearance()};
     if(path==='/api/chatgpt-session'){
       assert.equal(options?.method??'GET','GET');
       assert.equal(body,undefined);
@@ -299,6 +300,50 @@ test('artwork shortcut expands the workshop and returns to practice without requ
   assert.equal(get('quickAmount').value,'2345');
   assert.equal(get('quickLeverage').value,'3');
   assert.equal(get('quickReview').hidden,false);
+});
+
+test('quick appearance opt-in checks saved parts before practice and labels the applied model',async()=>{
+  const demo={id:'demo_owl',name:'デモAI',owned:true};
+  const {get,fire,state,calls}=await mount([demo]);
+  const checkbox=get('quickAppearanceModel');
+  assert.equal(checkbox.checked,false);
+  assert.equal(checkbox.disabled,false);
+  checkbox.checked=true;
+  get('quickModel').value=demo.id;
+  await fire('quickModel','change');
+  assert.equal(checkbox.disabled,true);
+  assert.equal(checkbox.checked,false);
+  get('quickModel').value='self';
+  await fire('quickModel','change');
+  assert.equal(checkbox.disabled,false);
+  get('quickAmount').value='1000';
+  const version='appearance-v1_42_23_23_12_50';
+  const preview={mode:'APPEARANCE_MODEL_PREVIEW',companion_created:true,look_created:false,model_version:version};
+  state.appearance=async()=>preview;
+  checkbox.checked=true;
+  await fire('quickAppearanceModel','change');
+  await fire('quickForm','submit');
+  assert.match(get('quickReviewText').textContent,/保存パーツのAI/);
+  assert.deepEqual(calls.map(call=>call.path),['/api/model-shop']);
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1),{path:'/api/companion/appearance-model',body:undefined});
+  assert.equal(calls.length,2);
+  assert.match(get('quickStatus').textContent,/相棒と外見パーツを保存/);
+
+  preview.look_created=true;
+  const practice=state.practice;
+  state.practice=async body=>({...await practice(body),model_id:'self',companion_name:'相棒',
+    companion_strategy:{source:'saved_companion',approach:'trend',risk_percent:50},
+    brain:{kind:'appearance_model',version_id:version}});
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.deepEqual(calls.slice(2),[
+    {path:'/api/companion/appearance-model',body:undefined},
+    {path:'/api/quick-practice',body:{model_id:'self',amount:1000,leverage:1,appearance_model_version:version}},
+  ]);
+  assert.equal(get('quickResult').hidden,false);
+  assert.match(get('quickResult').children[1].textContent,/相棒：相棒.*モデル：保存パーツのAI/);
+  assert.equal(get('quickCompanionStrategy').hidden,true);
 });
 
 test('both return buttons refresh owned AI choices and preserve the current selection',async()=>{

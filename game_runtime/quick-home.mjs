@@ -6,6 +6,9 @@ let practiceEpoch = 0;
 let preReveal = null;
 let lastScenarioToken = null;
 const validScenarioToken = token => typeof token==='string' && token.length===19 && /^v1_[0-9a-f]{16}$/.test(token);
+const validAppearanceVersion = version => typeof version==='string' && /^appearance-v[1-9]\d{0,2}(?:_\d{1,3}){5}$/.test(version);
+const appearanceField = element('quickAppearanceModel');
+const appearanceLabel = '保存パーツのAI';
 const scenarioNote = kind => kind==='replay' ?
   '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
   '今回は新しい架空相場です。';
@@ -25,7 +28,7 @@ function renderPreBuddyLine(agrees) {
   const {value,ordered,index}=preReveal;
   // Authored copy: no prices, signals, profit or model-generated explanations.
   const speaker=typeof value.companion_name==='string' && value.companion_name.trim() &&
-    validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id) ?
+    (ordered.appearance || validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)) ?
     '相棒（定型文）：' : '冒険ガイド（定型文）：';
   const line=agrees===undefined ? preBuddyPrompts[index] :
     'あなたの選択は、今回使ったAIの判断'+(agrees?'と同じだったね。':'とは違ったね。');
@@ -672,6 +675,7 @@ async function loadModels() {
       modelField.append(option);
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
+    syncAppearanceOption();
     if(prior && prior!==modelField.value)clearReplay();
     statusField.textContent=next.length>1 ?
       '自作AIと、解放済みのAIから選べます。' :
@@ -681,10 +685,16 @@ async function loadModels() {
     statusField.textContent='モデル一覧を読み込めません。自分のAIで練習できます。';
   }
 }
+function syncAppearanceOption() {
+  const self=modelField.value==='self';
+  appearanceField.disabled=busy || !self;
+  if(!self)appearanceField.checked=false;
+}
 function setBusy(next) {
   busy=next;
   for(const id of ['quickConfirm','quickRun','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage','quickPreOptIn','quickSameScenario'])
     element(id).disabled=next;
+  syncAppearanceOption();
 }
 element('quickForm').addEventListener('submit',event=>{
   event.preventDefault();
@@ -698,9 +708,11 @@ element('quickForm').addEventListener('submit',event=>{
   if(leverage===null){errorField.textContent='倍率は1〜25の整数を選んでください。';leverageField.focus();return;}
   const option=modelField.selectedOptions[0];
   if(!option) return;
-  pending={amount,leverage,model_id:modelField.value,model_name:option.textContent};
+  pending={amount,leverage,model_id:modelField.value,model_name:option.textContent,
+    appearance:modelField.value==='self' && appearanceField.checked};
   element('quickReviewText').textContent=
-    'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
+    'AI：'+pending.model_name+(pending.appearance ? ' ／ モデル：'+appearanceLabel : '')+
+    ' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
     ' ／ 試算に使わないコイン：'+money(BALANCE-amount)+
     ' C。最大損失は'+money(amount)+' C。実際の注文ではなく12日間の練習です。';
   element('quickReviewRisk').textContent=riskText(amount,leverage);
@@ -723,7 +735,8 @@ element('quickEdit').addEventListener('click',()=>{
 });
 amountField.addEventListener('input',()=>{resetReview();});
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
-modelField.addEventListener('change',resetReview);
+modelField.addEventListener('change',()=>{syncAppearanceOption();resetReview();});
+appearanceField.addEventListener('change',resetReview);
 leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();});
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
@@ -754,7 +767,8 @@ function revealResult(value,ordered) {
   const resultModelName=ordered.model_id==='self' &&
     typeof value.companion_name==='string' && value.companion_name.trim() ?
     '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
-  summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
+  summary.textContent='今回のAI：'+resultModelName+(ordered.appearance ? ' ／ モデル：'+appearanceLabel : '')+
+    ' ／ 試算額：'+money(ordered.amount)+' C ／ '+
     (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
       '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
       (value.normal_profit_coins>=0?'+':'')+money(value.normal_profit_coins)+
@@ -781,7 +795,8 @@ function revealResult(value,ordered) {
       (index===0?'増えた日なし':'減った日なし');
   }
   replayIsSelf=ordered.model_id==='self';
-  replay={...value,companion_strategy:validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
+  replay={...value,companion_strategy:ordered.appearance ? null :
+    validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
   replayModel=ordered.model_id;
   replayDay=0;
   renderReplay();
@@ -808,12 +823,26 @@ element('quickRun').addEventListener('click',async()=>{
   setBusy(true);
   statusField.textContent='AIの判断と架空12日間の損益を計算しています…';
   try{
+    let appearanceVersion;
+    if(ordered.appearance) {
+      const preview=await request('/api/companion/appearance-model');
+      if(epoch!==practiceEpoch)return;
+      if(preview?.mode!=='APPEARANCE_MODEL_PREVIEW' ||
+         preview.companion_created!==true || preview.look_created!==true) {
+        throw Error('相棒と外見パーツを保存してから再度お試しください');
+      }
+      if(!validAppearanceVersion(preview.model_version))throw Error('外見モデル版を確認できません');
+      appearanceVersion=preview.model_version;
+    }
     const value=await request('/api/quick-practice',{
       model_id:ordered.model_id,amount:ordered.amount,leverage:ordered.leverage,
+      ...(appearanceVersion ? {appearance_model_version:appearanceVersion} : {}),
       ...(ordered.scenario_token ? {scenario_token:ordered.scenario_token} : {})});
     if(!validScenarioToken(value.scenario_token)||
        value.scenario_kind!==(ordered.scenario_token ? 'replay' : 'new')||
        (ordered.scenario_token && value.scenario_token!==ordered.scenario_token)||
+       (appearanceVersion && (value.model_id!=='self' || value.brain?.kind!=='appearance_model' ||
+         value.brain.version_id!==appearanceVersion))||
        value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY'||value.real_market!==false||
        value.persisted!==false||value.invested_coins!==ordered.amount||
        value.leverage!==ordered.leverage ||
@@ -852,6 +881,8 @@ element('quickRun').addEventListener('click',async()=>{
   }finally{setBusy(false);}
 });
 element('quickPreOptIn').checked=false;
+appearanceField.checked=false;
+syncAppearanceOption();
 clearReplay();
 renderValidation();
 loadModels();

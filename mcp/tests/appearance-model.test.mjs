@@ -1,0 +1,198 @@
+import assert from 'node:assert/strict';
+import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {Readable} from 'node:stream';
+import test from 'node:test';
+import {deriveAppearanceModel} from '../../game_runtime/appearance-model.mjs';
+import {APPROACHES, createCompanionStore} from '../../game_runtime/companion.mjs';
+import {LOOK_CHOICES, createLookStore} from '../../game_runtime/looks.mjs';
+import {createGameServer, pythonPredict} from '../../game_runtime/server.mjs';
+
+const LOOK = Object.freeze({hair_style:'bob', expression:'cheerful', accessory:'none'});
+const COLORS = Object.freeze({hair_color:'#808080', clothing_color:'#808080'});
+const COMPANION = {name:'相棒', ...COLORS, approach:'reversion', risk_percent:75};
+const PREVIEW = '/api/companion/appearance-model';
+const ALLOCATIONS = {mine:100, owl:0, turtle:0};
+const MODEL = {fast_window:3, slow_window:9, risk_fraction:.35,
+  plugin_weights:{trend:100, momentum:0, reversion:0, volatility:0},
+  plugin_strengths:{trend:117, momentum:83, reversion:105, volatility:92}};
+
+test('appearance mapping is deterministic, rounds weights to 100 and validates its inputs', () => {
+  assert.deepEqual(deriveAppearanceModel(LOOK, COLORS), {
+    model_version:'appearance-v1_42_23_23_12_50',
+    model:{plugin_weights:{trend:42, momentum:23, reversion:23, volatility:12}, risk_fraction:.50},
+  });
+  const colors = ['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#a3bc51'];
+  for (const hair_style of LOOK_CHOICES.hair_style) {
+    for (const expression of LOOK_CHOICES.expression) {
+      for (const accessory of LOOK_CHOICES.accessory) {
+        for (const hair_color of colors) {
+          for (const clothing_color of colors) {
+            const {model} = deriveAppearanceModel({hair_style, expression, accessory}, {hair_color, clothing_color});
+            const weights = Object.values(model.plugin_weights);
+            assert.deepEqual(Object.keys(model.plugin_weights), APPROACHES);
+            assert.ok(weights.every(weight => Number.isInteger(weight) && weight >= 0 && weight <= 100));
+            assert.equal(weights.reduce((sum, weight) => sum + weight, 0), 100);
+            assert.ok(model.risk_fraction >= .05 && model.risk_fraction <= 1);
+          }
+        }
+      }
+    }
+  }
+  for (const invalid of [null, [], {...LOOK, hair_style:'unknown'}, {...LOOK, expression:'unknown'},
+    {...LOOK, accessory:'unknown'}, {...LOOK, medals:100}]) {
+    assert.throws(() => deriveAppearanceModel(invalid, COLORS), {status:400});
+  }
+  for (const invalid of [null, {}, {...COLORS, hair_color:'#123'}, {...COLORS, clothing_color:123},
+    {...COLORS, hair_color:'#123456\n'}, {...COLORS, clothing_color:'#abcdzz'}]) {
+    assert.throws(() => deriveAppearanceModel(LOOK, invalid), {status:400});
+  }
+});
+
+test('each part and color changes the intended settings and near colors stay close', () => {
+  const baseline = deriveAppearanceModel(LOOK, COLORS);
+  for (const [hair_style, signal] of [['long', 'reversion'], ['twintails', 'momentum']]) {
+    const {model} = deriveAppearanceModel({...LOOK, hair_style}, COLORS);
+    assert.ok(model.plugin_weights[signal] >= baseline.model.plugin_weights[signal] + 10);
+  }
+  for (const [accessory, signal] of [['ribbon', 'momentum'], ['glasses', 'reversion'], ['star', 'volatility']]) {
+    const {model} = deriveAppearanceModel({...LOOK, accessory}, COLORS);
+    assert.ok(model.plugin_weights[signal] >= baseline.model.plugin_weights[signal] + 10);
+  }
+  for (const field of ['hair_color', 'clothing_color']) {
+    const red = deriveAppearanceModel(LOOK, {...COLORS, [field]:'#FF0000'}).model;
+    const blue = deriveAppearanceModel(LOOK, {...COLORS, [field]:'#0000ff'}).model;
+    assert.ok(red.plugin_weights.momentum >= blue.plugin_weights.momentum + 8);
+    assert.ok(blue.plugin_weights.trend >= red.plugin_weights.trend + 8);
+    const dark = deriveAppearanceModel(LOOK, {...COLORS, [field]:'#000000'}).model;
+    const light = deriveAppearanceModel(LOOK, {...COLORS, [field]:'#ffffff'}).model;
+    assert.ok(light.risk_fraction - dark.risk_fraction >= .15);
+  }
+  const calm = deriveAppearanceModel({...LOOK, expression:'calm'}, COLORS);
+  assert.deepEqual(calm.model.plugin_weights, baseline.model.plugin_weights);
+  assert.equal(calm.model.risk_fraction, .32);
+  assert.equal(deriveAppearanceModel({...LOOK, expression:'determined'}, COLORS).model.risk_fraction, .68);
+  assert.notEqual(calm.model_version, baseline.model_version);
+
+  assert.deepEqual(deriveAppearanceModel(LOOK, {...COMPANION, risk_percent:5, medals:10000}), baseline);
+  assert.deepEqual(deriveAppearanceModel(LOOK, {hair_color:'#81807f', clothing_color:'#7f8180'}), baseline);
+  for (const [color, near] of [['#a3bc51', '#a2bd50'], ['#ff0000', '#fe0101'], ['#ffffff', '#fffeff']]) {
+    const first = deriveAppearanceModel(LOOK, {hair_color:color, clothing_color:color});
+    const second = deriveAppearanceModel(LOOK, {hair_color:near, clothing_color:near});
+    for (const id of APPROACHES) assert.ok(Math.abs(first.model.plugin_weights[id] - second.model.plugin_weights[id]) <= 1);
+    assert.ok(Math.abs(first.model.risk_fraction - second.model.risk_fraction) <= .011);
+    assert.deepEqual(deriveAppearanceModel(LOOK, {hair_color:color.toUpperCase(), clothing_color:color}), first);
+  }
+});
+
+async function request(server, path, payload) {
+  const bytes = payload === undefined ? null : Buffer.from(JSON.stringify(payload));
+  const req = Readable.from(bytes ? [bytes] : []);
+  req.method = bytes ? 'POST' : 'GET';
+  req.url = path;
+  req.headers = {host:'127.0.0.1:18890', ...(bytes && {
+    'content-type':'application/json', 'content-length':String(bytes.length),
+  })};
+  req.socket = {remoteAddress:'127.0.0.1'};
+  server.address = () => ({port:18890});
+  return new Promise((resolve, reject) => {
+    let status, headers;
+    server.listeners('request')[0](req, {
+      writeHead(code, fields) {status = code; headers = fields;},
+      end(body) {resolve({status, headers, data:JSON.parse(body.toString())});},
+    }).catch(reject);
+  });
+}
+
+test('read-only preview restores saved looks and opts the same model into actual synthetic practice', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'appearance-model-'));
+  t.after(() => rm(dir, {recursive:true, force:true}));
+  const companionFile = join(dir, 'companion.json');
+  const lookFile = join(dir, 'looks.json');
+  const loadSnapshot = async () => ({state:{model:MODEL}, lineup:{slots:[
+    {slot:'owl', model:MODEL}, {slot:'turtle', model:MODEL},
+  ]}, source_revision:1, lineup_revision:2, growth_revision:3});
+  const plans = [];
+  const serve = () => createGameServer({
+    companionStore:createCompanionStore({file:companionFile}), lookStore:createLookStore({file:lookFile}),
+    loadSnapshot, predict:async plan => {plans.push(plan); return pythonPredict(plan);},
+  });
+  const first = serve();
+  const defaults = await request(first, PREVIEW);
+  assert.equal(defaults.status, 200);
+  assert.equal(defaults.data.mode, 'APPEARANCE_MODEL_PREVIEW');
+  assert.equal(defaults.data.companion_created, false);
+  assert.equal(defaults.data.look_created, false);
+  assert.equal((await request(first, '/api/practice', {
+    allocations:ALLOCATIONS, appearance_model_version:defaults.data.model_version,
+  })).status, 409);
+  assert.equal(plans.length, 0);
+  assert.deepEqual(await readdir(dir), []);
+  assert.equal((await request(first, PREVIEW, {})).status, 404);
+
+  const look = {...LOOK, hair_style:'twintails', accessory:'star'};
+  assert.equal((await request(first, '/api/companion', {expected_revision:0, companion:COMPANION})).status, 200);
+  assert.equal((await request(first, '/api/looks', {expected_revision:0, look})).status, 200);
+  const files = await Promise.all([readFile(companionFile), readFile(lookFile)]);
+  const preview = await request(first, PREVIEW);
+  const derived = deriveAppearanceModel(look, COLORS);
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(preview.data, {mode:'APPEARANCE_MODEL_PREVIEW', companion_revision:1,
+    companion_created:true, look_revision:1, look_created:true, ...derived});
+  const restarted = serve();
+  assert.deepEqual((await request(restarted, PREVIEW)).data, preview.data);
+  assert.equal(plans.length, 0);
+
+  const settings = {allocations:ALLOCATIONS, appearance_model_version:derived.model_version};
+  assert.equal((await request(restarted, '/api/practice', {...settings, appearance_model_version:1})).status, 400);
+  assert.equal((await request(restarted, '/api/practice', {...settings, trained_version_id:'tv_'+'a'.repeat(32)})).status, 400);
+  assert.equal((await request(restarted, '/api/practice/preview', settings)).status, 400);
+  const applied = await request(restarted, '/api/practice', settings);
+  assert.equal(applied.status, 200);
+  assert.equal(applied.data.mode, 'PRACTICE_SYNTHETIC_ONLY');
+  assert.equal(applied.data.companion_name, COMPANION.name);
+  assert.equal(applied.data.approach, null);
+  assert.equal(applied.data.risk_percent, Math.round(derived.model.risk_fraction * 100));
+  assert.deepEqual(plans[0], {base_model:MODEL, models:{mine:{...MODEL, ...derived.model}, owl:MODEL, turtle:MODEL}});
+  assert.deepEqual(applied.data.characters.mine.plugin_weights, derived.model.plugin_weights);
+  assert.equal(applied.data.characters.mine.risk_fraction, derived.model.risk_fraction);
+  assert.deepEqual(applied.data.brain, {kind:'appearance_model', version_id:derived.model_version,
+    effective_sha256:applied.data.characters.mine.effective_sha256});
+
+  const legacy = await request(restarted, '/api/practice', {allocations:ALLOCATIONS});
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.data.brain.kind, 'authored_companion');
+  assert.equal(legacy.data.risk_percent, COMPANION.risk_percent);
+  assert.equal(plans[1].models.mine.plugin_weights[COMPANION.approach], 100);
+  assert.notEqual(legacy.data.characters.mine.effective_sha256, applied.data.brain.effective_sha256);
+  assert.deepEqual(await Promise.all([readFile(companionFile), readFile(lookFile)]), files);
+
+  const updated = {...look, expression:'calm'};
+  assert.equal((await request(restarted, '/api/looks', {expected_revision:1, look:updated})).status, 200);
+  const stale = await request(restarted, '/api/practice', settings);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.data.training_ticket, undefined);
+  assert.equal(plans.length, 2);
+  await writeFile(lookFile, '{}');
+  assert.equal((await request(restarted, PREVIEW)).status, 503);
+  assert.equal(await readFile(lookFile, 'utf8'), '{}');
+});
+
+test('editing the look during opted-in practice invalidates the result and ticket', async () => {
+  let revision = 1;
+  const server = createGameServer({
+    lookStore:{read:async () => ({revision, created:true, look:LOOK})},
+    companionStore:{read:async () => ({revision:1, created:true, companion:COMPANION})},
+    loadSnapshot:async () => ({state:{model:MODEL}, lineup:{slots:[
+      {slot:'owl', model:MODEL}, {slot:'turtle', model:MODEL},
+    ]}, source_revision:1, lineup_revision:2, growth_revision:3}),
+    predict:async plan => {revision++; return pythonPredict(plan);},
+  });
+  const version = (await request(server, PREVIEW)).data.model_version;
+  const result = await request(server, '/api/practice', {allocations:ALLOCATIONS, appearance_model_version:version});
+  assert.equal(result.status, 409);
+  assert.match(result.data.error, /外見変更/);
+  assert.equal(result.data.training_ticket, undefined);
+});
