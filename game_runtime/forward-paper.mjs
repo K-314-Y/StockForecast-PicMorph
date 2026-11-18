@@ -4,11 +4,14 @@
  * ONLY a trusted server-side market adapter may supply observations/timestamps.
  * One open position per AI wallet in this first, intentionally isolated seam.
  */
+import {
+  MARKET_PAPER_MODE, MARKET_SYMBOL, TEST_FIXTURE_SOURCE,
+  guardMarketQuotes, isMarketPrice, utcTime,
+} from './forward-market-guard.mjs';
+
 export const FORWARD_PAPER_MODE = 'FORWARD_PAPER_CORE_UNCONNECTED';
 const MAX_MEDALS = 1_000_000_000_000;
-const MAX_PRICE = 1_000_000_000;
 const AI_ID = /^[a-z][a-z0-9_-]{1,39}$/;
-const SYMBOL = /^[0-9A-Z]{4,5}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ORDER_ID = /^[a-zA-Z0-9_-]{1,60}$/;
 const EPS = 1e-8;
@@ -20,18 +23,12 @@ function medals(value, name, allowZero = false) {
   return value;
 }
 function dateMs(value) {
-  if (typeof value !== 'string' ||
-      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(value) ||
-      !Number.isFinite(Date.parse(value)) ||
-      new Date(value).toISOString().slice(0,10) !== value.slice(0,10)) {
-    fail('時刻は有効なUTC日時で指定してください');
-  }
-  return Date.parse(value);
+  const time = utcTime(value);
+  if (!Number.isFinite(time)) fail('時刻は有効なUTC日時で指定してください');
+  return time;
 }
-function price(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value) ||
-      value < 0.000001 || value > MAX_PRICE) fail('市場価格が不正です');
-  return value;
+function ledgerMode(mode) {
+  return mode === FORWARD_PAPER_MODE || mode === MARKET_PAPER_MODE;
 }
 function walletOf(state, id) {
   if (typeof id !== 'string' || !Object.hasOwn(state.wallets, id)) {
@@ -62,7 +59,8 @@ function walletEquity(wallet) {
  * All medals are virtual. Allocation never increases total starting balance.
  * Model versions are frozen identifiers so an edited character starts a new AI.
  */
-export function createForwardLedger({initialMedals, allocations}) {
+export function createForwardLedger({initialMedals, allocations, mode = FORWARD_PAPER_MODE}) {
+  if (!ledgerMode(mode)) fail('仮想取引台帳のモードが不正です');
   medals(initialMedals, '開始メダル');
   if (!Array.isArray(allocations) || allocations.length < 1 ||
       allocations.length > 50) fail('AIの配分が不正です');
@@ -81,13 +79,14 @@ export function createForwardLedger({initialMedals, allocations}) {
     };
   }
   return {
-    mode: FORWARD_PAPER_MODE,
+    mode,
     initialMedals,
     unallocated: initialMedals - assigned,
     wallets,
     pending: [],
     journal: [],
     lastBatchAt: null,
+    ...(mode === MARKET_PAPER_MODE ? {lastTradeAt: {}} : {}),
   };
 }
 
@@ -97,13 +96,13 @@ export function createForwardLedger({initialMedals, allocations}) {
  * In this first slice, one active or pending order is allowed per AI.
  */
 export function queueForwardOrder(ledger, order, receivedAt) {
-  if (ledger?.mode !== FORWARD_PAPER_MODE || !order ||
+  if (!ledgerMode(ledger?.mode) || !order ||
       typeof order !== 'object' || Array.isArray(order)) fail('注文データが不正です');
   const stamp = dateMs(receivedAt);
   if (ledger.lastBatchAt !== null && stamp <= dateMs(ledger.lastBatchAt)) {
     fail('過去の時刻では注文できません');
   }
-  if (!ORDER_ID.test(order.id) || !SYMBOL.test(order.symbol) ||
+  if (!ORDER_ID.test(order.id) || typeof order.symbol !== 'string' || !MARKET_SYMBOL.test(order.symbol) ||
       !['OPEN_LONG', 'OPEN_SHORT', 'CLOSE'].includes(order.action)) {
     fail('注文ID・銘柄・売買区分が不正です');
   }
@@ -137,40 +136,55 @@ export function queueForwardOrder(ledger, order, receivedAt) {
   return next;
 }
 
-/**
- * Quotes are INTERNAL inputs from a future trusted adapter, not an API request.
- * Tests use synthetic fixtures; this does NOT connect to any actual market.
- * Missing prices defer orders and leave risk unobservable: production must
- * explicitly handle feed outages rather than inventing a price.
- */
-export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}) {
-  if (ledger?.mode !== FORWARD_PAPER_MODE) fail('仮想取引台帳が不正です');
+function eventObservation(quote, symbol, observedAt, sourceId) {
+  const {price, tradeAt, publishedAt, ingestedAt} = quote;
+  return {
+    observedAt, sourceId, price,
+    ...(tradeAt === undefined ? {} : {symbol, tradeAt, publishedAt, ingestedAt}),
+  };
+}
+
+/** Observations and policy are supplied separately by trusted server code. */
+export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {providerPolicy, now = Date.now()} = {}) {
+  if (!ledgerMode(ledger?.mode)) fail('仮想取引台帳が不正です');
   const time = dateMs(observedAt);
   if (ledger.lastBatchAt !== null && time <= dateMs(ledger.lastBatchAt)) {
     fail('市場観測は必ず時系列順に処理してください');
   }
-  if (typeof sourceId !== 'string' || !/^[A-Z0-9_]{3,40}$/.test(sourceId) ||
-      !quotes || typeof quotes !== 'object' || Array.isArray(quotes) ||
-      Object.keys(quotes).length > 200) fail('観測元または銘柄一覧が不正です');
-  for (const [symbol, amount] of Object.entries(quotes)) {
-    if (!SYMBOL.test(symbol)) fail('銘柄コードが不正です');
-    price(amount);
+  if (!quotes || typeof quotes !== 'object' || Array.isArray(quotes)) fail('銘柄一覧が不正です');
+  const entries = Object.entries(quotes);
+  if (entries.length > 200) fail('銘柄一覧が不正です');
+  if (entries.some(([symbol]) => !MARKET_SYMBOL.test(symbol))) fail('銘柄コードが不正です');
+  const market = ledger.mode === MARKET_PAPER_MODE;
+  let accepted;
+  if (market) {
+    accepted = guardMarketQuotes({sourceId, quotes}, time, ledger.lastTradeAt, providerPolicy, now);
+  } else {
+    if (sourceId !== TEST_FIXTURE_SOURCE) fail('試験台帳には試験用の観測元が必要です');
+    accepted = new Map(entries.map(([symbol, price]) => {
+      if (!isMarketPrice(price)) fail('市場価格が不正です');
+      return [symbol, {price, trade: time}];
+    }));
   }
   const next = structuredClone(ledger);
   next.lastBatchAt = observedAt;
+  if (market) {
+    for (const [symbol, quote] of accepted) next.lastTradeAt[symbol] = quote.tradeAt;
+  }
   // Mark all held positions before any new orders. A cash gap cannot erase
   // losses, and another AI wallet can never be used as collateral.
   for (const [aiId, wallet] of Object.entries(next.wallets)) {
     const position = wallet.position;
-    if (!position || !Object.hasOwn(quotes, position.symbol)) continue;
-    position.lastPrice = quotes[position.symbol];
+    const quote = position && accepted.get(position.symbol);
+    if (!quote) continue;
+    position.lastPrice = quote.price;
     if (walletEquity(wallet) <= EPS) {
       wallet.cash = 0;
       wallet.position = null;
       wallet.status = 'LIQUIDATED';
       next.journal.push({
         kind: 'LIQUIDATED', aiId, modelHash: wallet.modelHash,
-        observedAt, sourceId, price: quotes[position.symbol],
+        ...eventObservation(quote, position.symbol, observedAt, sourceId),
       });
     }
   }
@@ -182,13 +196,12 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}) {
         observedAt, reason:'WALLET_LIQUIDATED'});
       continue;
     }
-    // The observation must be strictly later than order reception.
-    if (dateMs(order.receivedAt) >= time ||
-        !Object.hasOwn(quotes, order.symbol)) {
+    const quote = accepted.get(order.symbol);
+    if (!quote || quote.trade <= dateMs(order.receivedAt)) {
       remaining.push(order);
       continue;
     }
-    const observedPrice = quotes[order.symbol];
+    const observedPrice = quote.price;
     if (order.action === 'CLOSE') {
       const pos = wallet.position;
       if (!pos || pos.symbol !== order.symbol) {
@@ -225,7 +238,8 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}) {
     next.journal.push({
       kind: order.action === 'CLOSE' ? 'CLOSED' : 'OPENED',
       orderId: order.id, aiId: order.aiId, modelHash: wallet.modelHash,
-      observedAt, sourceId, price: observedPrice,
+      ...eventObservation(quote, order.symbol, observedAt, sourceId),
+      ...(market ? {receivedAt: order.receivedAt} : {}),
     });
   }
   next.pending = remaining;
@@ -233,7 +247,7 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}) {
 }
 
 export function inspectForwardWallet(ledger, aiId) {
-  if (ledger?.mode !== FORWARD_PAPER_MODE) fail('仮想取引台帳が不正です');
+  if (!ledgerMode(ledger?.mode)) fail('仮想取引台帳が不正です');
   const wallet = walletOf(ledger, aiId);
   return {
     status: wallet.status, initial: wallet.initial,

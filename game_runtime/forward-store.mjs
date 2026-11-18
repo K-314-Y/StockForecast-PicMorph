@@ -7,6 +7,9 @@ import {
   FORWARD_PAPER_MODE, applyForwardBatch, createForwardLedger,
   inspectForwardWallet, queueForwardOrder,
 } from './forward-paper.mjs';
+import {
+  MARKET_PAPER_MODE, MARKET_SOURCE_ID, MARKET_SYMBOL, TEST_FIXTURE_SOURCE, isMarketPrice, utcTime,
+} from './forward-market-guard.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STATE_DIRECTORY = join(ROOT, 'local_state');
@@ -17,10 +20,8 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_MEDALS = 1_000_000_000_000;
 const MAX_BALANCE = Number.MAX_SAFE_INTEGER / 100;
 const AI_ID = /^[a-z][a-z0-9_-]{1,39}$/;
-const SYMBOL = /^[0-9A-Z]{4,5}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ORDER_ID = /^[a-zA-Z0-9_-]{1,60}$/;
-const SOURCE_ID = /^[A-Z0-9_]{3,40}$/;
 const operations = new Map();
 const decoder = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
 
@@ -38,23 +39,20 @@ const fields = (value, ...keys) => record(value) &&
 const matches = (value, pattern) => typeof value === 'string' && pattern.test(value);
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
 const amount = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
-const price = value => amount(value, 0.000001, 1_000_000_000);
 
 function timestamp(value) {
-  requireValid(matches(value, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/), 'UTC日時');
-  const time = Date.parse(value);
-  requireValid(Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value.slice(0, 10),
-    'UTC日時');
+  const time = utcTime(value);
+  requireValid(Number.isFinite(time), 'UTC日時');
   return time;
 }
 
 function validatePosition(position, wallet, lastBatch) {
   requireValid(fields(position, 'symbol', 'direction', 'margin', 'leverage', 'units',
     'entryPrice', 'lastPrice', 'openedAt', 'modelHash'), '保有ポジション');
-  requireValid(matches(position.symbol, SYMBOL) && ['LONG', 'SHORT'].includes(position.direction) &&
+  requireValid(matches(position.symbol, MARKET_SYMBOL) && ['LONG', 'SHORT'].includes(position.direction) &&
     integer(position.margin, 1, MAX_MEDALS) && integer(position.leverage, 1, 25) &&
     amount(position.units, Number.MIN_VALUE, MAX_BALANCE) &&
-    price(position.entryPrice) && price(position.lastPrice) &&
+    isMarketPrice(position.entryPrice) && isMarketPrice(position.lastPrice) &&
     position.units === position.margin * position.leverage / position.entryPrice &&
     position.modelHash === wallet.modelHash && timestamp(position.openedAt) <= lastBatch, '保有ポジション');
 }
@@ -67,7 +65,7 @@ function validatePending(pending, wallets, orderIds) {
     requireValid(fields(order, 'id', 'aiId', 'symbol', 'action', 'receivedAt', ...extra) &&
       matches(order.id, ORDER_ID) && !orderIds.has(order.id) &&
       matches(order.aiId, AI_ID) && Object.hasOwn(wallets, order.aiId) && !aiIds.has(order.aiId) &&
-      matches(order.symbol, SYMBOL), '予約注文');
+      matches(order.symbol, MARKET_SYMBOL), '予約注文');
     const wallet = wallets[order.aiId];
     requireValid(wallet.status === 'ACTIVE', '予約注文の財布');
     if (close) {
@@ -83,7 +81,7 @@ function validatePending(pending, wallets, orderIds) {
   }
 }
 
-function validateJournal(journal, wallets, lastBatch, orderIds) {
+function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
   let previous = -Infinity;
   for (const event of journal) {
     requireValid(record(event) && matches(event.aiId, AI_ID) &&
@@ -94,6 +92,7 @@ function validateJournal(journal, wallets, lastBatch, orderIds) {
 
     const base = ['kind', 'aiId', 'observedAt'];
     const observation = ['modelHash', 'sourceId', 'price'];
+    if (lastTradeAt) observation.push('symbol', 'tradeAt', 'publishedAt', 'ingestedAt');
     if (event.kind === 'LIQUIDATED') {
       requireValid(fields(event, ...base, ...observation), '強制決済履歴');
     } else {
@@ -106,22 +105,39 @@ function validateJournal(journal, wallets, lastBatch, orderIds) {
         continue;
       }
       requireValid(['OPENED', 'CLOSED'].includes(event.kind) &&
-        fields(event, ...base, 'orderId', ...observation), '約定履歴');
+        fields(event, ...base, 'orderId', ...observation, ...(lastTradeAt ? ['receivedAt'] : [])), '約定履歴');
     }
     requireValid(event.modelHash === wallets[event.aiId].modelHash &&
-      matches(event.sourceId, SOURCE_ID) && price(event.price), '取引履歴の観測');
+      matches(event.sourceId, MARKET_SOURCE_ID) && isMarketPrice(event.price), '取引履歴の観測');
+    if (lastTradeAt) {
+      const trade = timestamp(event.tradeAt);
+      const published = timestamp(event.publishedAt);
+      const ingested = timestamp(event.ingestedAt);
+      requireValid(event.sourceId !== TEST_FIXTURE_SOURCE && matches(event.symbol, MARKET_SYMBOL) &&
+        Object.hasOwn(lastTradeAt, event.symbol) &&
+        trade <= timestamp(lastTradeAt[event.symbol]) &&
+        trade <= published && published <= ingested && ingested <= time &&
+        (event.kind === 'LIQUIDATED' || timestamp(event.receivedAt) < trade), '取引履歴の市場時刻');
+    }
   }
 }
 
 function validateLedger(ledger) {
+  const market = ledger?.mode === MARKET_PAPER_MODE;
   requireValid(fields(ledger, 'mode', 'initialMedals', 'unallocated', 'wallets', 'pending', 'journal',
-    'lastBatchAt') && ledger.mode === FORWARD_PAPER_MODE &&
+    'lastBatchAt', ...(market ? ['lastTradeAt'] : [])) && (market || ledger.mode === FORWARD_PAPER_MODE) &&
     integer(ledger.initialMedals, 1, MAX_MEDALS) && integer(ledger.unallocated, 0, MAX_MEDALS) &&
     record(ledger.wallets) && Array.isArray(ledger.pending) && Array.isArray(ledger.journal), '形式');
   const wallets = Object.entries(ledger.wallets);
   requireValid(wallets.length >= 1 && wallets.length <= 50 && ledger.pending.length <= wallets.length,
     '財布・予約注文の件数');
   const lastBatch = ledger.lastBatchAt === null ? -Infinity : timestamp(ledger.lastBatchAt);
+  if (market) {
+    requireValid(record(ledger.lastTradeAt), '銘柄別の最新市場時刻');
+    for (const [symbol, at] of Object.entries(ledger.lastTradeAt)) {
+      requireValid(matches(symbol, MARKET_SYMBOL) && timestamp(at) <= lastBatch, '銘柄別の最新市場時刻');
+    }
+  }
   let allocated = ledger.unallocated;
   for (const [aiId, wallet] of wallets) {
     requireValid(matches(aiId, AI_ID) && fields(wallet, 'modelHash', 'initial', 'cash', 'position', 'status') &&
@@ -139,7 +155,7 @@ function validateLedger(ledger) {
   requireValid(allocated === ledger.initialMedals, '開始メダル配分');
   const orderIds = new Set();
   validatePending(ledger.pending, ledger.wallets, orderIds);
-  validateJournal(ledger.journal, ledger.wallets, lastBatch, orderIds);
+  validateJournal(ledger.journal, ledger.wallets, lastBatch, orderIds, ledger.lastTradeAt);
 }
 
 function encode(revision, ledger) {
@@ -298,9 +314,10 @@ function uninitialized() {
  * filePath for tests requires an existing parent. Pass initial ({initialMedals,
  * allocations}) only to create a ledger. Snapshots include a revision, starting at 0.
  *
- * receivedAt is assigned by the caller's trusted server clock. Only an injected
- * getObservation() supplies batches. It must return real observations for live
- * use, and must not call the same store while the transaction holds the lock.
+ * receivedAt is assigned by the caller's trusted server clock. getObservation()
+ * supplies batches under the lock and must avoid reentering the store.
+ * A market ledger requires an explicit initial.mode and separate server-owned
+ * providerPolicy. clock returns epoch milliseconds (Date.now by default).
  *
  * Across processes, a busy lock fails immediately. After an abnormal exit a lock
  * may remain. Remove it manually only after stopping every writer and checking
@@ -308,7 +325,9 @@ function uninitialized() {
  * After a replacement with uncertain durability, reopen and inspect the revision
  * before retrying. The format retains IDs and stops at 4 MiB without pruning.
  */
-export async function openForwardStore({filePath = DEFAULT_FILE, initial, getObservation} = {}) {
+export async function openForwardStore({
+  filePath = DEFAULT_FILE, initial, getObservation, providerPolicy, clock = Date.now,
+} = {}) {
   filePath = resolve(filePath);
   const directory = dirname(filePath);
   if (filePath === DEFAULT_FILE && initial !== undefined) await prepareDefaultDirectory();
@@ -329,7 +348,8 @@ export async function openForwardStore({filePath = DEFAULT_FILE, initial, getObs
       return;
     }
     if (initial === undefined) throw uninitialized();
-    requireValid(fields(initial, 'initialMedals', 'allocations') && Array.isArray(initial.allocations) &&
+    requireValid((fields(initial, 'initialMedals', 'allocations') ||
+      fields(initial, 'initialMedals', 'allocations', 'mode')) && Array.isArray(initial.allocations) &&
       initial.allocations.every(item => fields(item, 'id', 'modelHash', 'medals') &&
         matches(item.id, AI_ID) && matches(item.modelHash, HASH)), '初期メダル配分');
     await writeSnapshot(filePath, {revision: 0, ledger: createForwardLedger(initial)});
@@ -361,7 +381,8 @@ export async function openForwardStore({filePath = DEFAULT_FILE, initial, getObs
       if (observation == null) {
         throw storeError('FORWARD_STORE_NO_OBSERVATION', '内部の市場観測データがありません');
       }
-      return applyForwardBatch(ledger, structuredClone(observation));
+      const options = ledger.mode === MARKET_PAPER_MODE ? {providerPolicy, now: clock()} : undefined;
+      return applyForwardBatch(ledger, structuredClone(observation), options);
     }),
   };
 }
