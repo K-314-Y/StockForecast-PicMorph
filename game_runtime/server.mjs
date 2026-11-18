@@ -28,6 +28,8 @@ const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.
 const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
+const HATCH_IDLE_PATH = '/assets/hatchpet-demo-idle.webp';
+const HATCH_IDLE_ASSET = new URL('./assets/hatchpet-demo-idle.webp', import.meta.url);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
@@ -325,6 +327,25 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if (req.method === 'GET' && rawPath === HATCH_IDLE_PATH) {
+      if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+        return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});
+      }
+      let bytes;
+      try {
+        bytes = await readFile(HATCH_IDLE_ASSET);
+      } catch {
+        return json(res, 404, {error: '見つかりません'});
+      }
+      res.writeHead(200, {
+        'Content-Type': 'image/webp', 'Content-Length': bytes.length,
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox",
+      });
+      return res.end(bytes);
+    }
     if ([rawPath,path].some(target=>target===EXPRESSIONS_API || target.startsWith(EXPRESSIONS_API+'/'))) {
       if (rawPath===EXPRESSIONS_API && req.method==='GET') {
         try {return json(res,200,await artworkExpressionStore.read());}

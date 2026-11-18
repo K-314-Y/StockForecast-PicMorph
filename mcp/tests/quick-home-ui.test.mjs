@@ -144,7 +144,7 @@ test('the single original scene is the first game panel, outside advanced traini
     if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
   }
   const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
-  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork']);
+  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork','hatchIdleToggle']);
   for(const button of buttons)assert.match(button.attributes,/type="button"/);
   for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
     assert.ok(get(id).parents.includes('simpleHome'),id);

@@ -295,6 +295,72 @@ function discard() {
 
 // Appearance is purely page-local and never changes the forecast model or XP.
 let skinEpoch = 0;
+let hatchIdlePreview = null;
+
+function refreshHatchIdle(message) {
+  const button = $('hatchIdleToggle');
+  if (!button) return;
+  const chibi = $('chibi');
+  const {hairStyle,expression,accessory} = chibi.dataset;
+  const appearanceLoaded = savedCompanion && savedLook && savedArtwork;
+  const eligible = appearanceLoaded && !artworkActive && !$('skinSelect').value && !chibi.hidden &&
+    $('creatorHair').value.toLowerCase() === '#8882db' && $('creatorClothing').value.toLowerCase() === '#92e1d4' &&
+    hairStyle === 'bob' && expression === 'cheerful' && accessory === 'ribbon';
+  if (!eligible && hatchIdlePreview) {
+    if (hatchIdlePreview.url) URL.revokeObjectURL(hatchIdlePreview.url);
+    hatchIdlePreview = null;
+  }
+  const url = hatchIdlePreview?.url;
+  if (url) {
+    chibi.style.setProperty('--hatch-idle-image', `url("${url}")`);
+    chibi.dataset.hatchIdle = 'true';
+  } else if (chibi.dataset.hatchIdle) {
+    delete chibi.dataset.hatchIdle;
+    chibi.style.removeProperty('--hatch-idle-image');
+  }
+  button.disabled = !eligible || Boolean(hatchIdlePreview && !url);
+  button.setAttribute('aria-pressed', String(Boolean(url)));
+  $('hatchIdleStatus').textContent = message ?? (!appearanceLoaded ? '外見の設定を確認するとデモを選べます。' :
+    !eligible ? '初期の髪色・服色・パーツのchibiで使えます。' : '');
+}
+
+$('hatchIdleToggle')?.addEventListener('click', async () => {
+  if ($('hatchIdleToggle').disabled) return;
+  if (hatchIdlePreview?.url) {
+    URL.revokeObjectURL(hatchIdlePreview.url);
+    hatchIdlePreview = null;
+    refreshHatchIdle();
+    return;
+  }
+
+  const preview = {url: ''};
+  hatchIdlePreview = preview;
+  refreshHatchIdle('デモ画像を読み込んでいます…');
+  let url;
+  try {
+    const response = await fetch('/assets/hatchpet-demo-idle.webp', {mode:'same-origin'});
+    if (!response.ok) throw Error('Demo image unavailable');
+    const blob = await response.blob();
+    if (hatchIdlePreview !== preview) return;
+    // Display the same bytes that were decoded, without a second network request.
+    url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (image.naturalWidth !== 1152 || image.naturalHeight !== 208) throw Error('Unexpected demo image dimensions');
+    if (hatchIdlePreview !== preview) return;
+    preview.url = url;
+    url = undefined;
+    refreshHatchIdle();
+  } catch {
+    if (hatchIdlePreview !== preview) return;
+    hatchIdlePreview = null;
+    refreshHatchIdle('デモ画像を表示できません。通常のchibiで遊べます。');
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+});
+
 function defaultSkin(message='デモ用キャラを表示しています。') {
   skinEpoch++;
   artworkActive = false;
@@ -306,6 +372,7 @@ function defaultSkin(message='デモ用キャラを表示しています。') {
   $('chibi').hidden = false;
   $('skinCaption').textContent = '外見：カスタムchibi（編集中は一時プレビュー）';
   $('skinStatus').textContent = message;
+  refreshHatchIdle();
 }
 async function loadSkins(preferredId = '') {
   if (busy) return;
@@ -367,6 +434,7 @@ function chooseSkin() {
   img.hidden = true;
   $('chibi').hidden = false;
   $('skinStatus').textContent = '外見の画像を確認しています…';
+  refreshHatchIdle();
   img.onload = () => {
     if (epoch !== skinEpoch || select.value !== id) return;
     img.hidden = false;
@@ -495,6 +563,7 @@ function previewLook() {
   $('chibi').dataset.hairStyle=hair;
   $('chibi').dataset.expression=expression;
   $('chibi').dataset.accessory=accessory;
+  refreshHatchIdle();
 }
 function displayLook(record) {
   savedLook=record;
@@ -556,6 +625,7 @@ function previewCompanion() {
   const clothing = /^#[a-f0-9]{6}$/i.test(value.clothing_color) ? value.clothing_color : '#92e1d4';
   $('chibi').setAttribute('style', '--hair:' + hair + ';--clothing:' + clothing);
   $('chibi').setAttribute('aria-label', value.name + 'のカスタムchibi');
+  refreshHatchIdle();
   $('creatorPreview').textContent = '一時プレビュー：' + (approachLabels[value.approach] || '未選択') +
     'を重視 / 上昇判断時の資金使用率 ' + value.risk_percent + '%。残りは現金で待機。';
 }
@@ -716,6 +786,7 @@ function showArtwork() {
   portrait.onload = null; portrait.onerror = null; portrait.hidden = true;
   $('artworkStage').hidden = true;
   $('chibi').hidden = false;
+  refreshHatchIdle();
   for (const slot of artworkSlots) {
     const img = $('artwork' + artworkId(slot));
     const src = artworkSource(slot);
@@ -982,6 +1053,7 @@ async function loadArtwork(restore = false, discardPending = false) {
   $('artworkStatus').textContent = record.created ? '保存済みイラストを復元しました。revision ' + record.revision :
     'まだ画像は保存されていません。完成イラスト1枚から使えます。';
   if (restore || (epoch === skinEpoch && !artworkPreviews.size && record.slots.base.exists)) showArtwork();
+  refreshHatchIdle();
 }
 for (const slot of artworkSlots) {
   const suffix = artworkId(slot);

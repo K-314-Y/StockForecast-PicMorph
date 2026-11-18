@@ -13,6 +13,8 @@ const png = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]);
 const root = new URL('../../game_runtime/',import.meta.url);
 const html = await readFile(new URL('demo.html',root),'utf8');
 const script = await readFile(new URL('demo.mjs',root),'utf8');
+const idlePath = '/assets/hatchpet-demo-idle.webp';
+const idleBytes = await readFile(new URL('.'+idlePath,root));
 
 async function serve(opts,fn) {
   const server = createGameServer(opts);
@@ -79,41 +81,68 @@ class Element {
   constructor(){
     this.handlers={};this.children=[];this.attributes={};this.dataset={};this.value='';
     this.hidden=false;this.disabled=false;this.textContent='';
+    this.style=new Map();
+    this.style.setProperty=this.style.set.bind(this.style);
+    this.style.removeProperty=this.style.delete.bind(this.style);
   }
   addEventListener(k,fn){this.handlers[k]=fn;}
   replaceChildren(...nodes){this.children=[...nodes];}
   append(n){this.children.push(n);}
   setAttribute(k,v){this.attributes[k]=v;}
-  async click(name='click'){return this.handlers[name]?.();}
+  async click(name='click'){return this.handlers[name]?.({preventDefault(){}});}
 }
-async function mount(drafts=catalog().drafts) {
-  const nodes=new Map(),calls=[];
+async function mount(drafts=catalog().drafts, {artwork=false, companion={}, look={}, decode=async()=>{}}={}) {
+  const nodes=new Map(),calls=[],writes=[],urls=new Map();
+  const companionRecord={revision:0,created:false,companion:{name:'私の相棒',hair_color:'#8882db',
+    clothing_color:'#92e1d4',approach:'trend',risk_percent:35,...companion}};
+  const lookRecord={revision:0,created:false,look:{hair_style:'bob',expression:'cheerful',accessory:'ribbon',...look}};
   const $=id=>{
     if(!nodes.has(id))nodes.set(id,new Element());
     return nodes.get(id);
   };
   const fetch=async (path,options)=>{
     calls.push(path);
-    assert.equal(options?.method ?? 'GET','GET','preview must only read metadata');
+    if (options?.method === 'POST') {
+      const body=JSON.parse(options.body);
+      writes.push({path,body});
+      const record=path==='/api/companion' ? companionRecord : path==='/api/looks' ? lookRecord : null;
+      assert.ok(record,'only appearance forms can write in this harness');
+      record.revision++;
+      record.created=true;
+      Object.assign(record,body.companion ? {companion:body.companion} : {look:body.look});
+    }
+    if(path===idlePath) {
+      assert.equal(options.mode,'same-origin');
+      return {ok:true,blob:async()=>new Blob([idleBytes],{type:'image/webp'})};
+    }
     if(path==='/api/growth')return {ok:true,json:async()=>({
       revision:0,slots:[{slot:'mine',level:1,xp:0,gear:'none',
         gear_options:[{id:'none',unlocked:true,name:'装備なし',icon:'·'}]}]})};
     if(path==='/api/appearance/drafts')return {ok:true,json:async()=>({drafts})};
-    if(path==='/api/looks')return {ok:true,json:async()=>({revision:0,created:false,
-      look:{hair_style:'bob',expression:'cheerful',accessory:'ribbon'}})};
-    if(path==='/api/companion')return {ok:true,json:async()=>({revision:0,created:false,
-      companion:{name:'私の相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35}})};
-    if(path==='/api/artwork')return {ok:true,json:async()=>({revision:0,created:false,
-      slots:Object.fromEntries(['base','hair','face','outfit'].map(slot=>[slot,{exists:false,mime:null,size:0}]))})};
+    if(path==='/api/looks')return {ok:true,json:async()=>lookRecord};
+    if(path==='/api/companion')return {ok:true,json:async()=>companionRecord};
+    if(path==='/api/artwork')return {ok:true,json:async()=>({revision:0,created:artwork,
+      slots:Object.fromEntries(['base','hair','face','outfit'].map(slot=>[slot,{exists:artwork && slot==='base',mime:null,size:0}]))})};
     throw Error('unexpected browser fetch '+path);
   };
-  runInNewContext(script,{document:{getElementById:$,createElement:()=>new Element()},fetch});
+  class Image {
+    async decode() {
+      assert.ok(urls.has(this.src));
+      await decode();
+      this.naturalWidth=1152;
+      this.naturalHeight=208;
+    }
+  }
+  let nextUrl=0;
+  runInNewContext(script,{document:{getElementById:$,createElement:()=>new Element()},fetch,Image,
+    URL:{createObjectURL(blob){const url='blob:fixture/'+ ++nextUrl;urls.set(url,blob);return url;},
+      revokeObjectURL:url=>urls.delete(url)}});
   // Drain initialization fetch/json continuations before firing UI events or ending a test.
   await new Promise(resolve=>setImmediate(resolve));
   assert.match($('lookStatus').textContent,/パーツは未保存/);
   assert.match($('companionStatus').textContent,/まだ未作成/);
-  assert.match($('artworkStatus').textContent,/まだ画像は保存されていません/);
-  return {get:$,calls,click:async(id,evt='click')=>$(id).click(evt)};
+  assert.match($('artworkStatus').textContent,artwork?/保存済みイラストを復元/:/まだ画像は保存されていません/);
+  return {get:$,calls,writes,urls,click:async(id,evt='click')=>$(id).click(evt)};
 }
 test('UI keeps draft visuals separate from saved companion rules, falls back on deleted image, never contacts Python directly',async()=>{
   assert.match(html,/予測：標準モデル mine（未作成）/);
@@ -133,6 +162,153 @@ test('UI keeps draft visuals separate from saved companion rules, falls back on 
   assert.match(get('skinStatus').textContent,/初期外見に戻しました/);
   assert.deepEqual(calls,['/api/growth','/api/looks','/api/companion','/api/artwork','/api/appearance/drafts']);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
+});
+
+test('the demo atlas route serves exact bytes and accepts only same-origin GET to the fixed path',async()=>{
+  const server=createGameServer();
+  server.address=()=>({port:8890});
+  const [handleRequest]=server.listeners('request');
+  async function send(url,method='GET',headers={}) {
+    const response={};
+    await handleRequest({url,method,headers:{host:'127.0.0.1:8890',...headers},socket:{remoteAddress:'127.0.0.1'}},{
+      writeHead(status,headers) {
+        response.status=status;
+        response.headers=new Headers(headers);
+      },
+      end(body){response.body=body;},
+    });
+    return response;
+  }
+  const response=await send(idlePath);
+  assert.equal(response.status,200);
+  for (const [name,value] of Object.entries({'content-type':'image/webp','cache-control':'no-store',
+    'x-content-type-options':'nosniff','x-frame-options':'DENY','content-length':String(idleBytes.length),
+    'cross-origin-resource-policy':'same-origin',
+    'content-security-policy':"default-src 'none'; frame-ancestors 'none'; sandbox"})) {
+    assert.equal(response.headers.get(name),value,name);
+  }
+  assert.deepEqual(response.body,idleBytes);
+  for (const path of ['/assets/', '/assets/other.webp', '/assets/%2e%2e%2flocal_state/private',
+    '/assets/../assets/hatchpet-demo-idle.webp', '/assets/%68atchpet-demo-idle.webp', '/local_state/private', '/workspaces/private']) {
+    assert.equal((await send(path)).status,404,path);
+  }
+  assert.equal((await send(idlePath,'HEAD')).status,404);
+  assert.equal((await send(idlePath,'POST')).status,404);
+  assert.equal((await send(idlePath,'GET',{origin:'https://other.invalid'})).status,403);
+  assert.equal((await send(idlePath,'GET',{origin:'http://localhost:8890'})).status,403);
+  assert.equal((await send(idlePath,'GET',{origin:'http://127.0.0.1:8890'})).status,200);
+});
+
+test('the optional front character button uses six idle frames inside the chibi and a static first frame for reduced motion',()=>{
+  const front=html.slice(html.indexOf('id="frontCharacter"'),html.indexOf('id="simpleHome"'));
+  assert.match(front,/<button id="hatchIdleToggle"[^>]*aria-pressed="false"[^>]*>動くデモを見る<\/button>/);
+  assert.match(front,/実験用に生成した固定デモ画像。髪や服の色・予測モデルは変わりません。自作イラストには適用しません。/);
+  const sprite=/\.scene\[data-mood="ready"\]:not\(\[data-expression-other-model\]\) #chibi\[data-hatch-idle="true"\]:not\(\[hidden\]\)::after/;
+  const declarations=html.match(new RegExp(sprite.source+'\\{([^}]+)\\}'))?.[1];
+  assert.ok(declarations);
+  assert.match(declarations,/width:150px;height:162\.5px/);
+  assert.match(declarations,/background-size:900px 162\.5px;background-position:0 0/);
+  assert.match(declarations,/steps\(6,jump-none\)/);
+  assert.match(html,/@keyframes hatch-idle-frames\{to\{background-position:-750px 0\}\}/);
+  const reduced=html.split('@media(prefers-reduced-motion:reduce)')[1].split('</style>')[0];
+  assert.match(reduced,sprite);
+  assert.match(reduced,/animation:none/);
+  assert.doesNotMatch(html,/\/assets\/hatchpet-demo-idle/);
+  assert.doesNotMatch(script,/setTimeout|setInterval|requestAnimationFrame/);
+});
+
+test('preview loads on click and can be toggled off without persisting appearance',async()=>{
+  const {get,click,calls,writes,urls}=await mount();
+  const button=get('hatchIdleToggle');
+  const chibi=get('chibi');
+  assert.equal(button.disabled,false);
+  assert.equal(button.attributes['aria-pressed'],'false');
+  assert.equal(calls.includes(idlePath),false);
+  await click('hatchIdleToggle');
+  assert.equal(button.attributes['aria-pressed'],'true');
+  assert.equal(chibi.dataset.hatchIdle,'true');
+  assert.equal(chibi.style.get('--hatch-idle-image'),'url("blob:fixture/1")');
+  await click('hatchIdleToggle');
+  assert.equal(button.attributes['aria-pressed'],'false');
+  assert.equal(chibi.dataset.hatchIdle,undefined);
+  assert.equal(urls.size,0);
+  assert.deepEqual(writes,[]);
+});
+
+test('custom preview, save, reload and restored appearance take priority over the sprite',async()=>{
+  const ui=await mount();
+  const {get,click,writes}=ui;
+  await click('hatchIdleToggle');
+  get('creatorClothing').value='#ff6677';
+  await click('creatorClothing','input');
+  assert.equal(get('hatchIdleToggle').disabled,true);
+  assert.equal(get('hatchIdleToggle').attributes['aria-pressed'],'false');
+  assert.equal(get('chibi').dataset.hatchIdle,undefined);
+  assert.match(get('chibi').attributes.style,/--clothing:#ff6677/);
+  await click('companionForm','submit');
+  await click('reloadCompanion');
+  assert.equal(writes[0].body.companion.clothing_color,'#ff6677');
+  assert.equal(get('hatchIdleToggle').disabled,true);
+  assert.match(get('chibi').attributes.style,/--clothing:#ff6677/);
+  get('creatorClothing').value='#92e1d4';
+  await click('creatorClothing','input');
+  assert.equal(get('hatchIdleToggle').disabled,false);
+  assert.equal(get('hatchIdleToggle').attributes['aria-pressed'],'false');
+  for (const appearance of [{companion:{clothing_color:'#ff6677'}},{companion:{hair_color:'#ff6677'}},
+    {look:{hair_style:'long'}},{look:{expression:'calm'}},{look:{accessory:'glasses'}}]) {
+    const restored=await mount(undefined,appearance);
+    assert.equal(restored.get('hatchIdleToggle').disabled,true);
+    await restored.click('hatchIdleToggle');
+    assert.equal(restored.calls.includes(idlePath),false);
+  }
+});
+
+test('saved artwork and portraits suppress the preview during loading and after display',async()=>{
+  const {get,click,calls}=await mount(undefined,{artwork:true});
+  assert.equal(get('hatchIdleToggle').disabled,true);
+  get('artworkBase').onload();
+  assert.equal(get('chibi').hidden,true);
+  assert.equal(calls.includes(idlePath),false);
+  await click('showChibi');
+  await click('hatchIdleToggle');
+  await click('showArtwork');
+  assert.equal(get('chibi').dataset.hatchIdle,undefined);
+  assert.equal(get('hatchIdleToggle').disabled,true);
+  await click('showChibi');
+  await click('loadSkins');
+  await click('hatchIdleToggle');
+  get('skinSelect').value=id;
+  await click('skinSelect','change');
+  assert.equal(get('chibi').dataset.hatchIdle,undefined);
+  assert.equal(get('hatchIdleToggle').disabled,true);
+  get('portrait').onload();
+  assert.equal(get('chibi').hidden,true);
+  await click('showChibi');
+  assert.equal(get('hatchIdleToggle').disabled,false);
+  assert.equal(get('hatchIdleToggle').attributes['aria-pressed'],'false');
+});
+
+test('decode failure and switching appearance during decode leave the CSS chibi intact',async()=>{
+  const failed=await mount(undefined,{decode:async()=>{throw Error('corrupt image');}});
+  await failed.click('hatchIdleToggle');
+  assert.equal(failed.get('chibi').dataset.hatchIdle,undefined);
+  assert.equal(failed.get('hatchIdleToggle').disabled,false);
+  assert.match(failed.get('hatchIdleStatus').textContent,/デモ画像を表示できません/);
+  assert.equal(failed.urls.size,0);
+
+  let finish;
+  const decoding=new Promise(resolve=>{finish=resolve;});
+  const pending=await mount(undefined,{decode:()=>decoding});
+  const activation=pending.click('hatchIdleToggle');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(pending.urls.size,1);
+  pending.get('lookHair').value='long';
+  await pending.click('lookHair','change');
+  finish();
+  await activation;
+  assert.equal(pending.get('chibi').dataset.hatchIdle,undefined);
+  assert.equal(pending.get('chibi').dataset.hairStyle,'long');
+  assert.equal(pending.urls.size,0);
 });
 test('empty catalog and missing art keep default cosmetic avatar',async()=>{
   const {get,click}=await mount([]);

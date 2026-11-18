@@ -17,6 +17,7 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .front-character .scene{min-height:360px}
 .front-character #artworkStage{width:min(220px,100%);height:auto;aspect-ratio:150/192}
 .front-character .actions button{max-inline-size:100%;white-space:normal}
+#hatchIdleToggle[aria-pressed="true"]{background:var(--mint);color:#12303b}
 @media(max-width:680px){
  .front-character{grid-template-columns:minmax(0,1fr);gap:14px}
  /* Let speech and scaled text grow naturally; keep the entire character visible. */
@@ -85,6 +86,15 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .scene[data-growing="true"] > :is(#chibi,#artworkStage,#portrait):not([hidden]){animation:companion-growth .7s ease-out}
 @keyframes companion-growth{50%{transform:translateY(-8px) scale(1.035)}}
 .scene[data-mood="ready"] #chibi:not([hidden]) .eye{animation:companion-blink 5.2s ease-in-out infinite}
+.scene[data-mood="ready"]:not([data-expression-other-model]) #chibi[data-hatch-idle="true"]:not([hidden]){animation:none}
+.scene[data-mood="ready"]:not([data-expression-other-model]) #chibi[data-hatch-idle="true"]:not([hidden]) > *{display:none}
+.scene[data-mood="ready"]:not([data-expression-other-model]) #chibi[data-hatch-idle="true"]:not([hidden])::after{
+ content:"";position:absolute;bottom:0;left:0;width:150px;height:162.5px;
+ background-image:var(--hatch-idle-image);background-repeat:no-repeat;
+ background-size:900px 162.5px;background-position:0 0;
+ animation:hatch-idle-frames 1.8s steps(6,jump-none) infinite
+}
+@keyframes hatch-idle-frames{to{background-position:-750px 0}}
 @keyframes companion-blink{0%,91%,97%,100%{scale:1 1}94%{scale:1 .14}}
 .scene:is([data-mood="thinking"],[data-mood="happy"],[data-mood="cautious"],[data-mood="growth"]) #chibi .eye{
  top:36px;height:16px;border-radius:50%;transform:none
@@ -233,6 +243,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  .scene > :is(#chibi,#artworkStage,#portrait):not([hidden]),
  .scene[data-growing="true"] > :is(#chibi,#artworkStage,#portrait):not([hidden]),
  .scene[data-mood="ready"] #chibi:not([hidden]) .eye,
+ .scene[data-mood="ready"]:not([data-expression-other-model]) #chibi[data-hatch-idle="true"]:not([hidden])::after,
  .quick-pre-cue[data-reaction] #quickPreCueIcon{animation:none;transition:none}
 }
 </style>
@@ -267,7 +278,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <div class="front-character-copy">
   <span class="eyebrow">MY CHARACTER / あなたの相棒</span>
   <h2 id="frontCharacterTitle">自分で描いたキャラクターが主役</h2>
-  <div class="actions"><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button></div>
+  <div class="actions"><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button>
+   <button id="hatchIdleToggle" type="button" aria-pressed="false" aria-describedby="hatchIdleHint hatchIdleStatus" disabled>動くデモを見る</button>
+  </div>
+  <small id="hatchIdleHint">実験用に生成した固定デモ画像。髪や服の色・予測モデルは変わりません。自作イラストには適用しません。</small>
+  <small id="hatchIdleStatus" role="status"></small>
   <p>未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示。</p>
   <p class="sub">髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存。</p>
  </div>
