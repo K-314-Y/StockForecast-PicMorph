@@ -2185,10 +2185,28 @@ function assertFinalHidden(get) {
     assert.doesNotMatch(get(id).textContent,/第[0-9]+日| C/);
   }
 }
-test('pre-choice buddy copy depends only on checkpoint and confirmed self ownership',async()=>{
-  const seen=new Map();
-  for(const [model,responseModel] of [
-    ['self','self'],['demo','demo'],['demo','self'],['self','demo'],['self',undefined],
+test('pre-reveal speaker requires a saved companion and the choice compares with the current AI',async()=>{
+  const savedName='<b>秘密の相棒</b>';
+  const savedStrategy={source:'saved_companion',approach:'trend',risk_percent:35};
+  const prompts=[
+    '最初の分かれ道だね。ここまでの値動きを見て、どう進もう？',
+    '冒険の折り返し。ひと息ついて、次の一歩を選ぼう。',
+    '最後の分かれ道だね。自分のペースで選ぼう。',
+  ];
+  for(const [scenario,model,responseModel,name,strategy] of [
+    ['saved self','self','self',savedName,savedStrategy],
+    ['unsaved self','self','self',null,null],
+    ['demo','demo','demo',null,null],
+    ['demo with saved metadata','demo','demo',savedName,savedStrategy],
+    ['demo response to self request','self','demo',savedName,savedStrategy],
+    ['self response to demo request','demo','self',savedName,savedStrategy],
+    ['missing response model','self',undefined,savedName,savedStrategy],
+    ['missing strategy','self','self',savedName,undefined],
+    ['missing name','self','self',undefined,savedStrategy],
+    ['blank name','self','self','  ',savedStrategy],
+    ['non-string name','self','self',[savedName],savedStrategy],
+    ['invalid strategy source','self','self',savedName,{...savedStrategy,source:'default'}],
+    ['invalid strategy risk','self','self',savedName,{...savedStrategy,risk_percent:0}],
   ])for(const loss of [false,true]) {
     const ui=await mount([{id:'demo',name:'別のAI',owned:true}]),{get,fire,state,calls,storageWrites}=ui;
     get('quickModel').value=model;
@@ -2196,35 +2214,32 @@ test('pre-choice buddy copy depends only on checkpoint and confirmed self owners
     get('companionName').textContent='未保存の名前';
     const practice=state.practice;
     state.practice=async body=>({...await practice(body),model_id:responseModel,
-      companion_name:'<img src=x onerror=alert(1)>秘密の相棒',
+      companion_name:name,companion_strategy:strategy,
       daily_ai_signals:Array(12).fill(loss?'CASH':'LONG'),
       daily_synthetic_prices:Array.from({length:13},(_,i)=>loss?900000-i*1234:100000+i*4567),
       daily_balances:Array.from({length:13},(_,i)=>10000+(loss?-1:1)*i*50),
       final_balance:loss?9400:10600,profit_coins:loss?-600:600,liquidated_at_step:loss?1:null});
     assert.equal(get('quickPreBuddyLine').textContent,'');
     await startPreReveal(ui);
-    const self=model==='self' && responseModel==='self';
-    for(const day of [3,7,11]) {
-      const line=get('quickPreBuddyLine').textContent,key=self+':'+day;
+    const label=scenario==='saved self'?'相棒（定型文）：':'冒険ガイド（定型文）：';
+    for(const [index,prompt] of prompts.entries()) {
+      const line=get('quickPreBuddyLine').textContent;
       assert.ok(line.length<=65,'keep the line compact');
-      assert.ok(line.startsWith(self?'相棒（定型文）：':'冒険ガイド（定型文）：'));
-      if(!self)assert.doesNotMatch(line,/相棒|自作キャラ|自分のAI/);
-      assert.doesNotMatch(line,/LONG|CASH|株を持つ|現金|買う|待つ|上が|下が|利益|損益|残高|正解|的中|[0-9０-９%％]|ChatGPT|LLM|生成|秘密|未保存|<img/);
-      if(seen.has(key))assert.equal(line,seen.get(key),'hidden outcome and identity cannot affect copy');
-      seen.set(key,line);
+      assert.equal(line,label+prompt,scenario);
       assert.equal(get('quickPreBuddyLine').children.length,0);
       assert.equal(get('speech').textContent,'自分の相棒の声');
       assert.equal(get('scene').dataset.mood,'ready');
       assert.equal(get('companionName').textContent,'未保存の名前');
       assertFinalHidden(get);
-      await fire('quickPreBuy');
-      assert.ok(get('quickPreBuddyLine').textContent.startsWith(self?'相棒（定型文）：':'冒険ガイド（定型文）：'));
+      const waits=index===1;
+      await fire(waits?'quickPreWait':'quickPreBuy');
+      assert.equal(get('quickPreBuddyLine').textContent,label+'あなたの選択は、今回使ったAIの判断'+
+        (waits===loss?'と同じだったね。':'とは違ったね。'),scenario);
       await fire('quickPreNext');
     }
     assert.equal(get('quickPreBuddyLine').textContent,'');
     assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
   }
-  assert.equal(new Set([...seen.values()].filter(line=>line.startsWith('相棒'))).size,3);
 });
 
 // Explicit expectations keep AI agreement separate from the price comparison.
@@ -2262,7 +2277,8 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     assert.ok(outcome.includes('値動きとの比較：自分は'+(choice==='buy'?buyVerdict:waitVerdict)+
       '、AIは'+(signal==='LONG'?buyVerdict:waitVerdict)+'。'));
     const agrees=(choice==='buy' && signal==='LONG') || (choice==='wait' && signal==='CASH');
-    assert.ok(get('quickPreBuddyLine').textContent.includes(agrees?'同じ選択だったね。':'違う選択だったね。'));
+    assert.ok(get('quickPreBuddyLine').textContent.includes('今回使ったAIの判断'+
+      (agrees?'と同じだったね。':'とは違ったね。')));
     assert.doesNotMatch(get('quickPreBuddyLine').textContent,/正解|正答|的中|成功|失敗|損益|利益|[0-9%]/);
     assert.ok(outcome.includes('% ／ '+(agrees?'一致':'相違')+'。'));
     assert.equal(outcome.match(/架空価格の方向だけ。実際の損益や予測の上手さを示しません。/g)?.length,1);
@@ -2271,7 +2287,7 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     for(let i=4;i<=12;i++)assert.ok(!outcome.includes(response.daily_synthetic_prices[i].toLocaleString('ja-JP')));
     assertFinalHidden(get);
     await fire('quickPreNext');
-    assert.doesNotMatch(get('quickPreBuddyLine').textContent,/同じ選択|違う選択/);
+    assert.doesNotMatch(get('quickPreBuddyLine').textContent,/今回使ったAIの判断/);
     assert.doesNotMatch(get('quickPreOutcome').textContent,/値動きとの比較|判定なし/);
     await fire('quickPreSkip');
     assert.equal(get('quickPreBuddyLine').textContent,'');
@@ -2445,7 +2461,11 @@ test('skip records only answered checkpoints, including zero answers',async()=>{
 test('challenge and summary clear on edits, retry, failure, pagehide and fresh mount',async()=>{
   for(const finished of [false,true])for(const change of ['model','amount','leverage','edit','retry','submit','failure','pagehide']) {
     const ui=await mount(),{get,fire,state,calls}=ui;
+    const practice=state.practice;
+    state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:'保存した相棒',
+      companion_strategy:{source:'saved_companion',approach:'trend',risk_percent:35}});
     await startPreReveal(ui);await fire('quickPreBuy');
+    assert.match(get('quickPreBuddyLine').textContent,/^相棒（定型文）：.*今回使ったAIの判断/);
     if(finished){await fire('quickPreNext');await fire('quickPreSkip');}
     if(change==='model')await fire('quickModel','change');
     if(change==='amount')await fire('quickAmount','input');
@@ -2464,6 +2484,11 @@ test('challenge and summary clear on edits, retry, failure, pagehide and fresh m
     const before=calls.length;
     for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip'])await fire(id);
     assert.equal(get('quickResult').hidden,true);assert.equal(calls.length,before);
+    if(change==='retry') {
+      state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:null,companion_strategy:null});
+      await startPreReveal(ui);
+      assert.equal(get('quickPreBuddyLine').textContent,'冒険ガイド（定型文）：最初の分かれ道だね。ここまでの値動きを見て、どう進もう？');
+    }
   }
   const fresh=await mount();assert.equal(fresh.get('quickPreSummary').textContent,'');
   assert.equal(fresh.get('quickPreBuddyLine').textContent,'');

@@ -24,12 +24,12 @@ const preBuddyPrompts = [
 function renderPreBuddyLine(agrees) {
   const {value,ordered,index}=preReveal;
   // Authored copy: no prices, signals, profit or model-generated explanations.
-  const owner=ordered.model_id==='self' && value.model_id==='self' ?
+  const speaker=typeof value.companion_name==='string' && value.companion_name.trim() &&
+    validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id) ?
     '相棒（定型文）：' : '冒険ガイド（定型文）：';
-  const line=agrees===undefined ? preBuddyPrompts[index] : agrees ?
-    '同じ選択だったね。値動きも一緒に振り返ろう。' :
-    '違う選択だったね。違いも冒険の手がかりにしよう。';
-  element('quickPreBuddyLine').textContent=owner+line;
+  const line=agrees===undefined ? preBuddyPrompts[index] :
+    'あなたの選択は、今回使ったAIの判断'+(agrees?'と同じだったね。':'とは違ったね。');
+  element('quickPreBuddyLine').textContent=speaker+line;
 }
 function clearPreReveal() {
   practiceEpoch++;
