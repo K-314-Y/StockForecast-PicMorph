@@ -155,6 +155,18 @@ test('the single original scene is the first game panel, outside advanced traini
   assert.match(html,/髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存/);
 });
 
+test('advanced mode starts collapsed and easy practice leaves it collapsed',async()=>{
+  const advanced=htmlNodes().find(node=>node.id==='advancedEntry');
+  assert.equal(advanced.tag,'details');
+  assert.doesNotMatch(advanced.attributes,/\bopen\b/);
+  const {get,fire}=await mount();
+  assert.equal(get('advancedEntry').open,false);
+  for(const id of ['frontCharacter','simpleHome'])assert.equal(get(id).hidden,false);
+  await fire('quickForm','submit');await fire('quickRun');
+  assert.equal(get('quickResult').hidden,false);
+  assert.equal(get('advancedEntry').open,false);
+});
+
 test('both front editing actions precede the short save explanation',()=>{
   const nodes=htmlNodes();
   const front=nodes.filter(node=>node.parents.includes('frontCharacter'));
@@ -2173,6 +2185,48 @@ function assertFinalHidden(get) {
     assert.doesNotMatch(get(id).textContent,/第[0-9]+日| C/);
   }
 }
+test('pre-choice buddy copy depends only on checkpoint and confirmed self ownership',async()=>{
+  const seen=new Map();
+  for(const [model,responseModel] of [
+    ['self','self'],['demo','demo'],['demo','self'],['self','demo'],['self',undefined],
+  ])for(const loss of [false,true]) {
+    const ui=await mount([{id:'demo',name:'別のAI',owned:true}]),{get,fire,state,calls,storageWrites}=ui;
+    get('quickModel').value=model;
+    get('speech').textContent='自分の相棒の声';get('scene').dataset.mood='ready';
+    get('companionName').textContent='未保存の名前';
+    const practice=state.practice;
+    state.practice=async body=>({...await practice(body),model_id:responseModel,
+      companion_name:'<img src=x onerror=alert(1)>秘密の相棒',
+      daily_ai_signals:Array(12).fill(loss?'CASH':'LONG'),
+      daily_synthetic_prices:Array.from({length:13},(_,i)=>loss?900000-i*1234:100000+i*4567),
+      daily_balances:Array.from({length:13},(_,i)=>10000+(loss?-1:1)*i*50),
+      final_balance:loss?9400:10600,profit_coins:loss?-600:600,liquidated_at_step:loss?1:null});
+    assert.equal(get('quickPreBuddyLine').textContent,'');
+    await startPreReveal(ui);
+    const self=model==='self' && responseModel==='self';
+    for(const day of [3,7,11]) {
+      const line=get('quickPreBuddyLine').textContent,key=self+':'+day;
+      assert.ok(line.length<=65,'keep the line compact');
+      assert.ok(line.startsWith(self?'相棒（定型文）：':'冒険ガイド（定型文）：'));
+      if(!self)assert.doesNotMatch(line,/相棒|自作キャラ|自分のAI/);
+      assert.doesNotMatch(line,/LONG|CASH|株を持つ|現金|買う|待つ|上が|下が|利益|損益|残高|正解|的中|[0-9０-９%％]|ChatGPT|LLM|生成|秘密|未保存|<img/);
+      if(seen.has(key))assert.equal(line,seen.get(key),'hidden outcome and identity cannot affect copy');
+      seen.set(key,line);
+      assert.equal(get('quickPreBuddyLine').children.length,0);
+      assert.equal(get('speech').textContent,'自分の相棒の声');
+      assert.equal(get('scene').dataset.mood,'ready');
+      assert.equal(get('companionName').textContent,'未保存の名前');
+      assertFinalHidden(get);
+      await fire('quickPreBuy');
+      assert.ok(get('quickPreBuddyLine').textContent.startsWith(self?'相棒（定型文）：':'冒険ガイド（定型文）：'));
+      await fire('quickPreNext');
+    }
+    assert.equal(get('quickPreBuddyLine').textContent,'');
+    assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
+  }
+  assert.equal(new Set([...seen.values()].filter(line=>line.startsWith('相棒'))).size,3);
+});
+
 // Explicit expectations keep AI agreement separate from the price comparison.
 for(const [direction,price,buyVerdict,waitVerdict] of [
   ['UP',7213,'値動きに合う','値動きに合わない'],
@@ -2196,7 +2250,7 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     await startPreReveal(ui);
     const before=structuredClone(response),requests=structuredClone(calls);
     assertFinalHidden(get);
-    const initial=get('quickPreOutcome').textContent;
+    const initial=get('quickPreOutcome').textContent+get('quickPreBuddyLine').textContent;
     assert.doesNotMatch(initial,/値動きとの比較|値動きに合|判定なし|終値：|%/);
     for(let i=3;i<=12;i++) {
       const formatted=response.daily_synthetic_prices[i].toLocaleString('ja-JP');
@@ -2208,6 +2262,8 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     assert.ok(outcome.includes('値動きとの比較：自分は'+(choice==='buy'?buyVerdict:waitVerdict)+
       '、AIは'+(signal==='LONG'?buyVerdict:waitVerdict)+'。'));
     const agrees=(choice==='buy' && signal==='LONG') || (choice==='wait' && signal==='CASH');
+    assert.ok(get('quickPreBuddyLine').textContent.includes(agrees?'同じ選択だったね。':'違う選択だったね。'));
+    assert.doesNotMatch(get('quickPreBuddyLine').textContent,/正解|正答|的中|成功|失敗|損益|利益|[0-9%]/);
     assert.ok(outcome.includes('% ／ '+(agrees?'一致':'相違')+'。'));
     assert.equal(outcome.match(/架空価格の方向だけ。実際の損益や予測の上手さを示しません。/g)?.length,1);
     assert.doesNotMatch(outcome,/LONG|CASH|正解|正答率|スコア/);
@@ -2215,8 +2271,10 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     for(let i=4;i<=12;i++)assert.ok(!outcome.includes(response.daily_synthetic_prices[i].toLocaleString('ja-JP')));
     assertFinalHidden(get);
     await fire('quickPreNext');
+    assert.doesNotMatch(get('quickPreBuddyLine').textContent,/同じ選択|違う選択/);
     assert.doesNotMatch(get('quickPreOutcome').textContent,/値動きとの比較|判定なし/);
     await fire('quickPreSkip');
+    assert.equal(get('quickPreBuddyLine').textContent,'');
     assert.doesNotMatch(get('quickPreOutcome').textContent+get('quickPreSummary').textContent,/値動きとの比較|判定なし/);
     assert.match(get('quickPreSummary').textContent,new RegExp('AI方針との一致 '+(agrees?1:0)+'/1回答'));
     assert.deepEqual(response,before,'no price, signal or model changes');
@@ -2260,6 +2318,7 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
   assert.equal(normal.get('quickPreOptIn').checked,false);
   assert.equal(normal.get('quickPreReveal').hidden,true);
   assert.equal(normal.get('quickPreSummary').hidden,true);
+  assert.equal(normal.get('quickPreBuddyLine').textContent,'');
   const practice=state.practice;
   let received;
   state.practice=async body=>{
@@ -2270,11 +2329,18 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
   await startPreReveal(ui);
   assert.deepEqual(calls.at(-1),{path:'/api/quick-practice',body:{model_id:'self',amount:1000,leverage:1}});
   const before=structuredClone(received);
+  const histories=[
+    '開始時 7,000 ／ 第1日 7,013 ／ 第2日 7,026',
+    '第4日 7,052 ／ 第5日 7,065 ／ 第6日 7,078',
+    '第8日 7,104 ／ 第9日 7,117 ／ 第10日 7,130',
+  ];
   for(const [index,day] of [3,7,11].entries()) {
     assertFinalHidden(get);
     assert.equal(get('quickPreReveal').hidden,false);
     const snapshot=get('quickPreSnapshot').textContent;
     assert.ok(snapshot.startsWith('判断 '+(index+1)+'/3：第'+day+'日'));
+    assert.equal(snapshot,'判断 '+(index+1)+'/3：第'+day+'日 ／ 過去の架空価格：'+histories[index]);
+    assert.doesNotMatch(snapshot,/第0日/);
     for(let i=0;i<=12;i++) {
       const price=received.daily_synthetic_prices[i].toLocaleString('ja-JP');
       assert.equal(snapshot.includes(price),i>=day-3 && i<day,'price Day '+i);
@@ -2304,6 +2370,7 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
     await fire('quickPreNext');await fire('quickPreNext');
   }
   assert.equal(get('quickPreReveal').hidden,true);
+  assert.equal(get('quickPreBuddyLine').textContent,'');
   assert.equal(get('quickPreSummary').hidden,false);
   assert.match(get('quickPreSummary').textContent,/回答 3\/3回.*一致 2\/3回答/);
   assert.equal(get('quickPreSummary').textContent,
@@ -2319,12 +2386,46 @@ test('optional pre-reveal uses only fixed past windows, records once and shares 
   assert.deepEqual(received,before,'no result or model mutation');
   assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
 });
+test('checkpoint completion and skip preserve normal and 25x financial displays and responses',async()=>{
+  for(const leverage of [1,25]) {
+    const normal=await mount();
+    const response=await normal.state.practice({amount:1000,leverage});
+    if(leverage===25)Object.assign(response,{final_balance:9000,profit_coins:-1000,
+      liquidated_at_step:2,daily_balances:[10000,9500,...Array(11).fill(9000)]});
+    const original=structuredClone(response);
+    normal.state.practice=async()=>response;
+    normal.get('quickLeverage').value=String(leverage);
+    await normal.fire('quickForm','submit');await normal.fire('quickRun');
+    const result=normal.get('quickResult').children.map(node=>node.textContent),days=[];
+    for(let day=0;day<=12;day++) {
+      days.push(['quickReplayDay','quickReplayContext'].map(id=>normal.get(id).textContent));
+      await normal.fire('quickFollowing');
+    }
+    for(const finish of ['complete','skip']) {
+      const ui=await mount(),{get,fire,state,calls,storageWrites}=ui;
+      state.practice=async()=>response;
+      get('quickLeverage').value=String(leverage);
+      await startPreReveal(ui);
+      if(finish==='skip')await fire('quickPreSkip');
+      else for(let index=0;index<3;index++){await fire('quickPreWait');await fire('quickPreNext');}
+      assert.deepEqual(get('quickResult').children.map(node=>node.textContent),result);
+      for(let day=0;day<=12;day++) {
+        assert.deepEqual(['quickReplayDay','quickReplayContext'].map(id=>get(id).textContent),days[day]);
+        await fire('quickFollowing');
+      }
+      assert.deepEqual(response,original);
+      assert.deepEqual(calls,normal.calls);
+      assert.deepEqual(storageWrites,[]);
+    }
+  }
+});
 test('skip records only answered checkpoints, including zero answers',async()=>{
   for(const count of [0,1,2]) {
     const ui=await mount(),{get,fire,calls}=ui;
     await startPreReveal(ui);
     for(let i=0;i<count;i++){await fire('quickPreBuy');await fire('quickPreNext');}
     await fire('quickPreSkip');await fire('quickPreSkip');await fire('quickPreBuy');
+    assert.equal(get('quickPreBuddyLine').textContent,'');
     assert.equal(get('quickResult').hidden,false);
     if(count===0) {
       assert.match(get('quickPreSummary').textContent,/記録なし（未回答は集計しません）/);
@@ -2358,13 +2459,14 @@ test('challenge and summary clear on edits, retry, failure, pagehide and fresh m
       state.practice=async()=>{throw Error('failure');};await fire('quickRun');
     }
     for(const id of ['quickPreReveal','quickPreSummary','quickResult','quickReplay','quickNext'])assert.equal(get(id).hidden,true,change+': '+id);
-    for(const id of ['quickPreSummary','quickPreSnapshot','quickPreOutcome'])assert.equal(get(id).textContent,'');
+    for(const id of ['quickPreBuddyLine','quickPreSummary','quickPreSnapshot','quickPreOutcome'])assert.equal(get(id).textContent,'');
     assert.equal(get('quickPreOptIn').checked,false);
     const before=calls.length;
     for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip'])await fire(id);
     assert.equal(get('quickResult').hidden,true);assert.equal(calls.length,before);
   }
   const fresh=await mount();assert.equal(fresh.get('quickPreSummary').textContent,'');
+  assert.equal(fresh.get('quickPreBuddyLine').textContent,'');
 });
 test('in-flight practices hide previous challenge and reject stale responses after invalidation',async()=>{
   for(const change of ['amount','model','leverage','pagehide']) {
@@ -2374,6 +2476,7 @@ test('in-flight practices hide previous challenge and reject stale responses aft
     state.practice=body=>new Promise(done=>{resolve=async()=>done(await practice(body));});
     await fire('quickForm','submit');get('quickPreOptIn').checked=true;
     const running=fire('quickRun');
+    assert.equal(get('quickPreBuddyLine').textContent,'');
     assertFinalHidden(get);assert.equal(get('quickPreReveal').hidden,true);assert.equal(get('quickPreSummary').hidden,true);
     assert.equal(get('quickPreOptIn').disabled,true);
     if(change==='amount')await fire('quickAmount','input');
@@ -2381,6 +2484,7 @@ test('in-flight practices hide previous challenge and reject stale responses aft
     if(change==='leverage')await fire('quickLeverage','change');
     if(change==='pagehide')ui.pagehide();
     await resolve();await running;
+    assert.equal(get('quickPreBuddyLine').textContent,'');
     assertFinalHidden(get);assert.equal(get('quickPreReveal').hidden,true);
   }
 });
@@ -2405,7 +2509,10 @@ test('pre-reveal markup uses labelled native controls, live regions and wrapping
     assert.equal(find(id).tag,'button');assert.match(find(id).attributes,/type="button"/);
     assert.ok(find(id).parents.includes('quickPreReveal'));
   }
-  for(const id of ['quickPreSnapshot','quickPreOutcome','quickPreSummary'])assert.match(find(id).attributes,/role="status" aria-live="polite"/);
+  for(const id of ['quickPreBuddyLine','quickPreSnapshot','quickPreOutcome','quickPreSummary'])assert.match(find(id).attributes,/role="status" aria-live="polite"/);
+  assert.equal(find('quickPreBuddyLine').tag,'p');
+  assert.ok(find('quickPreBuddyLine').parents.includes('quickPreReveal'));
+  assert.match(find('quickPreBuddyLine').attributes,/class="simple-hint".*aria-atomic="true"/);
   assert.match(html,/#quickPreReveal button\{max-width:100%;white-space:normal\}/);
   assert.match(html,/\.quick-replay \[role="group"\]\{display:flex;flex-wrap:wrap;gap:10px\}/);
 });

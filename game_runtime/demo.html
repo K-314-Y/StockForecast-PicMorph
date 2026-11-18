@@ -249,6 +249,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <section id="quickPreReveal" class="quick-replay" aria-labelledby="quickPreTitle" hidden>
   <h3 id="quickPreTitle">結果を見る前に自分で判断（任意）</h3>
   <p class="simple-hint">第3・7・11日に固定。直前3日分の架空価格だけを見て選びます。AIとの一致は正解や技能を示しません。</p>
+  <p id="quickPreBuddyLine" class="simple-hint" role="status" aria-live="polite" aria-atomic="true"></p>
   <p id="quickPreSnapshot" role="status" aria-live="polite" aria-atomic="true"></p>
   <div role="group" aria-label="結果を見る前の選択">
    <button id="quickPreBuy" type="button" disabled>買う</button>
@@ -340,7 +341,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  </div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
-<details class="advanced-entry" id="advancedEntry" open>
+<details class="advanced-entry" id="advancedEntry">
 <summary>もっと詳しい機能を開く（AI作成・モデルショップ・研究・育成）</summary>
 <section class="panel hero" aria-label="冒険を始める">
 

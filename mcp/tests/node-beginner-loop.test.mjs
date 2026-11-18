@@ -349,7 +349,7 @@ test('retired gear controls and API calls are absent, while artwork remains avai
     assert.ok(html.includes('id="'+id+'"'));
   assert.match(html,/<h1>自分で作った相棒で冒険<\/h1>/);
   assert.match(html,/自分の相棒の冒険記録/);
-  assert.match(html,/<details class="advanced-entry" id="advancedEntry" open>/);
+  assert.match(html,/<details class="advanced-entry" id="advancedEntry">/);
 });
 
 test('zero XP and failed claims never produce false celebrations', async () => {

@@ -16,20 +16,39 @@ function updateScenarioOption() {
 }
 element('quickSameScenario').addEventListener('change',updateScenarioOption);
 const checkpoints = [3,7,11];
+const preBuddyPrompts = [
+  '最初の分かれ道だね。ここまでの値動きを見て、どう進もう？',
+  '冒険の折り返し。ひと息ついて、次の一歩を選ぼう。',
+  '最後の分かれ道だね。自分のペースで選ぼう。',
+];
+function renderPreBuddyLine(agrees) {
+  const {value,ordered,index}=preReveal;
+  // Authored copy: no prices, signals, profit or model-generated explanations.
+  const owner=ordered.model_id==='self' && value.model_id==='self' ?
+    '相棒（定型文）：' : '冒険ガイド（定型文）：';
+  const line=agrees===undefined ? preBuddyPrompts[index] : agrees ?
+    '同じ選択だったね。値動きも一緒に振り返ろう。' :
+    '違う選択だったね。違いも冒険の手がかりにしよう。';
+  element('quickPreBuddyLine').textContent=owner+line;
+}
 function clearPreReveal() {
   practiceEpoch++;
   preReveal=null;
   element('quickPreReveal').hidden=true;
   element('quickPreSummary').hidden=true;
-  for(const id of ['quickPreSnapshot','quickPreOutcome','quickPreSummary'])element(id).textContent='';
+  for(const id of ['quickPreBuddyLine','quickPreSnapshot','quickPreOutcome','quickPreSummary'])element(id).textContent='';
   for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip'])element(id).disabled=true;
   element('quickPreNext').textContent='次へ';
 }
 function renderPreReveal() {
   const {value,index}=preReveal;
   const day=checkpoints[index];
+  renderPreBuddyLine();
   element('quickPreSnapshot').textContent='判断 '+(index+1)+'/3：第'+day+'日 ／ 過去の架空価格：'+
-    value.daily_synthetic_prices.slice(day-3,day).map((price,i)=>'第'+(day-3+i)+'日 '+money(price)).join(' ／ ');
+    value.daily_synthetic_prices.slice(day-3,day).map((price,i)=>{
+      const pastDay=day-3+i;
+      return (pastDay===0?'開始時':'第'+pastDay+'日')+' '+money(price);
+    }).join(' ／ ');
   element('quickPreOutcome').textContent='この日のAI判断・価格変化は、選択してから表示します。';
   for(const id of ['quickPreBuy','quickPreWait','quickPreSkip'])element(id).disabled=false;
   element('quickPreNext').disabled=true;
@@ -42,6 +61,7 @@ function finishPreReveal() {
   const {value,ordered,answers}=preReveal;
   preReveal=null;
   element('quickPreReveal').hidden=true;
+  element('quickPreBuddyLine').textContent='';
   revealResult(value,ordered);
   const record=answers.length===0 ? '記録なし（未回答は集計しません）' :
     '回答 '+answers.length+'/3回 ／ AI方針との一致 '+
@@ -62,6 +82,7 @@ for(const [id,choice] of [['quickPreBuy','buy'],['quickPreWait','wait']]) {
     const day=checkpoints[index],signal=value.daily_ai_signals[day-1];
     const agrees=(choice==='buy')===(signal==='LONG');
     answers.push({day,choice,agrees});
+    renderPreBuddyLine(agrees);
     const change=(value.daily_synthetic_prices[day]/value.daily_synthetic_prices[day-1]-1)*100;
     const price=value.daily_synthetic_prices[day],previous=value.daily_synthetic_prices[day-1];
     const directionVerdict=buy=>price===previous ? '判定なし（価格変化なし）' :
