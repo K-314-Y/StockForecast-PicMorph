@@ -19,3 +19,6 @@ local_state/
 
 # Sites checkout has its own Git history and hosting source repository
 sites/creature-lab-20261029/
+
+# Local parallel Git worktrees (nested under this project)
+/workspaces/
