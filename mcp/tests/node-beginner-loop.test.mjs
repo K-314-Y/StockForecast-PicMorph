@@ -25,7 +25,7 @@ class FakeNode {
   setAttribute(name, value) { this.attributes[name] = value; }
   replaceChildren(...items) { this.children = [...items]; }
   append(child) { this.children.push(child); }
-  async fire(name = 'click') { return this.handlers[name]?.(); }
+  async fire(name = 'click', event) { return this.handlers[name]?.(event); }
 }
 
 function practice(allocations = {mine:100,owl:0,turtle:0}) {
@@ -97,7 +97,7 @@ async function mount({practiceError=false, deferredClaim=null, initialXp=0,
     fetch,
   });
   await new Promise(resolve=>setImmediate(resolve));
-  return {get,calls,fire:(id,type='click')=>get(id).fire(type)};
+  return {get,calls,fire:(id,type='click',event)=>get(id).fire(type,event)};
 }
 
 test('Node practice UI shows 12 days and requires deliberate reward disposal before replay', async () => {
@@ -329,7 +329,9 @@ test('confirmed reward celebrates actual level changes while preserving reward d
     assert.match(get('reward').textContent,/一度だけ/);
     assert.match(get('growthInfo').textContent,new RegExp(claimXp + ' XP'));
     assert.equal(get('scene').dataset.growing,'true');
-    await fire('scene','animationend');
+    await fire('scene','animationend',{animationName:'companion-blink'});
+    assert.equal(get('scene').dataset.growing,'true');
+    await fire('scene','animationend',{animationName:'companion-growth'});
     assert.equal(get('scene').dataset.growing,'false');
     assert.equal(get('growthCelebration').textContent,celebration);
     await fire('claim');
@@ -376,7 +378,6 @@ test('successful claim remains confirmed even if growth refresh fails', async ()
 
 test('level confirmation is accessible and reduced-motion safe', () => {
   assert.match(html,/<p id="growthCelebration" role="status" aria-live="polite" aria-atomic="true">/);
-  assert.match(html,/@media\(prefers-reduced-motion:reduce\)\{\.scene\[data-growing="true"\] :is\(#chibi,#artworkStage,#portrait\)\{animation:none\}/);
   assert.doesNotMatch(script,/localStorage|sessionStorage|innerHTML/);
 });
 

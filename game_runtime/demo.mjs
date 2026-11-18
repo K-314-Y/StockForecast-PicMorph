@@ -84,8 +84,8 @@ async function loadGrowth() {
   return growth;
 }
 
-$('scene').addEventListener('animationend', () => {
-  $('scene').dataset.growing = 'false';
+$('scene').addEventListener('animationend', event => {
+  if (event.animationName === 'companion-growth') $('scene').dataset.growing = 'false';
 });
 
 function chooseDay(index) {

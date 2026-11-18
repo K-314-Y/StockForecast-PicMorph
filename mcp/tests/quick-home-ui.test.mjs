@@ -167,6 +167,24 @@ test('advanced mode starts collapsed and easy practice leaves it collapsed',asyn
   assert.equal(get('advancedEntry').open,false);
 });
 
+test('stage and checkpoint animations target the visible character group or CSS features',()=>{
+  assert.match(html,/<div id="scene" class="scene" data-mood="ready">/);
+  assert.match(html,/\.scene > :is\(#chibi,#artworkStage,#portrait\):not\(\[hidden\]\)\{[^}]*animation:companion-idle/);
+  assert.match(html,/\[data-mood="ready"\] #chibi:not\(\[hidden\]\) \.eye\{animation:companion-blink/);
+  for(const mood of ['thinking','happy','cautious','growth']) {
+    assert.ok(html.includes(`[data-mood="${mood}"] #chibi .mouth{`));
+    assert.ok(html.includes(`[data-mood="${mood}"] .scene-mood [data-for="${mood}"]`));
+  }
+  for(const css of html.matchAll(/([^{}]*artworkStage[^{}]*)\{([^{}]*)\}/g))
+    if(/animation:|transform:/.test(css[2]))assert.doesNotMatch(css[1],/\bimg\b|#artwork(?:Base|Hair|Face|Outfit)/);
+  for(const keyframes of ['companion-idle','companion-blink','companion-growth','checkpoint-hover','checkpoint-hop','checkpoint-settle'])
+    assert.ok(html.includes('@keyframes '+keyframes));
+  const reducedMotion=html.match(/@media\(prefers-reduced-motion:reduce\)\{([\s\S]+?)\n\}/)?.[1];
+  assert.match(reducedMotion,/data-growing="true"/);
+  assert.match(reducedMotion,/#chibi:not\(\[hidden\]\) \.eye/);
+  assert.match(reducedMotion,/#quickPreCueIcon\{animation:none;transition:none\}/);
+});
+
 test('both front editing actions precede the short save explanation',()=>{
   const nodes=htmlNodes();
   const front=nodes.filter(node=>node.parents.includes('frontCharacter'));
@@ -869,7 +887,7 @@ test('result voice follows best/worst clicks without model-name spoofing, reques
     assert.equal(get('quickTacticsDay').textContent,'');
     assert.equal(get('quickTacticsSummary'),undefined);
     assert.doesNotMatch(script+html,/方向に合った|逆方向|summarizeTactics|quickTacticsSummary/);
-    assert.match(html,/<p id="quickTacticsDay" aria-label="今回のAIからひとこと"><\/p>/);
+    assert.match(html,/<p id="quickTacticsDay" aria-label="振り返りメモ"><\/p>/);
     get('quickModel').value=model;
     get('quickAmount').value='2345';
     await fire('quickForm','submit');
@@ -900,14 +918,14 @@ test('voice distinguishes original price direction and flat days independently o
     daily_ai_signals:['LONG','LONG','LONG','CASH','CASH','CASH','LONG','CASH','LONG','CASH','LONG','CASH']});
   await fire('quickForm','submit');await fire('quickRun');
   const expected=[
-    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
-    '株を持つ方針の日に下がっちゃった…。',
+    '方針は「株を持つ」。架空の価格は前日より上がったね。',
+    '方針は「株を持つ」。架空の価格は前日より下がったね。',
     '今日は値動きがなかったね。',
-    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。',
-    '上がった日は現金で待ったんだね。乗り遅れたかも。',
+    '方針は「現金で待機」。架空の価格は前日より下がったね。',
+    '方針は「現金で待機」。架空の価格は前日より上がったね。',
     '今日は値動きがなかったね。',
-    '株を持つ方針の日に上がった！ちょっと嬉しいね。',
-    '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。'];
+    '方針は「株を持つ」。架空の価格は前日より上がったね。',
+    '方針は「現金で待機」。架空の価格は前日より下がったね。'];
   for(const text of expected) {
     await fire('quickFollowing');assert.equal(get('quickTacticsDay').textContent,text);
     assert.equal(get('scene').dataset.mood,'thinking');
@@ -929,7 +947,7 @@ test('all CASH in falling market never describes avoidance as profit or zero wal
       await fire('quickFollowing');
       assert.equal(get('quickTacticsDay').textContent,fee && day===1 ?
         'うわっ、ここが一番残高の減った日だね…。' :
-        '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。');
+        '方針は「現金で待機」。架空の価格は前日より下がったね。');
       assert.equal(get('scene').dataset.mood,fee?'cautious':'thinking');
       assert.equal(get('speech').textContent,get('quickTacticsDay').textContent);
       assert.doesNotMatch(get('quickTacticsDay').textContent,/損失なし|損失ゼロ|無損失|無傷|ダメージなし|残高は減らない|利益が出|儲か/);
@@ -2176,6 +2194,18 @@ async function startPreReveal(ui) {
   ui.get('quickPreOptIn').checked=true;
   await ui.fire('quickRun');
 }
+function assertPreCue(get,reaction,owner='冒険ガイド') {
+  const cue=get('quickPreCue');
+  assert.equal(cue.hidden,!reaction);
+  assert.equal(cue.dataset.reaction,reaction);
+  const [icon,label]={
+    anticipation:['💭','選択を見守り中'],
+    buy:['🌱','「買う」を選んだね'],
+    wait:['🍃','「待つ」を選んだね'],
+  }[reaction]||['',''];
+  assert.equal(get('quickPreCueIcon').textContent,icon);
+  assert.equal(get('quickPreCueText').textContent,reaction ? owner+'：'+label : '');
+}
 function assertFinalHidden(get) {
   for(const id of ['quickResult','quickReplay','quickNext'])assert.equal(get(id).hidden,true,id);
   assert.equal(get('quickResult').children.length,0);
@@ -2212,6 +2242,8 @@ test('pre-reveal speaker requires a saved companion and the choice compares with
     get('quickModel').value=model;
     get('speech').textContent='自分の相棒の声';get('scene').dataset.mood='ready';
     get('companionName').textContent='未保存の名前';
+    showComposite(get);
+    const sourceArt=miniSlots.slice(0,4).map(slot=>get('artwork'+slot));
     const practice=state.practice;
     state.practice=async body=>({...await practice(body),model_id:responseModel,
       companion_name:name,companion_strategy:strategy,
@@ -2220,9 +2252,13 @@ test('pre-reveal speaker requires a saved companion and the choice compares with
       daily_balances:Array.from({length:13},(_,i)=>10000+(loss?-1:1)*i*50),
       final_balance:loss?9400:10600,profit_coins:loss?-600:600,liquidated_at_step:loss?1:null});
     assert.equal(get('quickPreBuddyLine').textContent,'');
+    assertPreCue(get);
     await startPreReveal(ui);
-    const label=scenario==='saved self'?'相棒（定型文）：':'冒険ガイド（定型文）：';
+    const owner=scenario==='saved self'?'相棒':'冒険ガイド';
+    const label=owner+'（定型文）：';
     for(const [index,prompt] of prompts.entries()) {
+      assertPreCue(get,'anticipation',owner);
+      assertMiniCleared(get);
       const line=get('quickPreBuddyLine').textContent;
       assert.ok(line.length<=65,'keep the line compact');
       assert.equal(line,label+prompt,scenario);
@@ -2233,11 +2269,24 @@ test('pre-reveal speaker requires a saved companion and the choice compares with
       assertFinalHidden(get);
       const waits=index===1;
       await fire(waits?'quickPreWait':'quickPreBuy');
+      assertPreCue(get,waits?'wait':'buy',owner);
+      assertMiniCleared(get);
       assert.equal(get('quickPreBuddyLine').textContent,label+'あなたの選択は、今回使ったAIの判断'+
         (waits===loss?'と同じだったね。':'とは違ったね。'),scenario);
       await fire('quickPreNext');
     }
     assert.equal(get('quickPreBuddyLine').textContent,'');
+    assertPreCue(get);
+    for(const [i,source] of sourceArt.entries()) {
+      assert.equal(source.src,'blob:current-'+miniSlots[i]);
+      assert.equal(source.srcAssignments,1);
+    }
+    if(model!=='self'||(responseModel!==undefined&&responseModel!=='self')) {
+      assertMiniCleared(get);
+      assert.equal(get('speech').textContent,'自分の相棒の声');
+      await fire('quickFollowing');
+      assert.equal(get('scene').dataset.mood,'ready');
+    }
     assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
   }
 });
@@ -2265,6 +2314,7 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     await startPreReveal(ui);
     const before=structuredClone(response),requests=structuredClone(calls);
     assertFinalHidden(get);
+    assertPreCue(get,'anticipation');
     const initial=get('quickPreOutcome').textContent+get('quickPreBuddyLine').textContent;
     assert.doesNotMatch(initial,/値動きとの比較|値動きに合|判定なし|終値：|%/);
     for(let i=3;i<=12;i++) {
@@ -2273,6 +2323,7 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
       if(direction!=='FLAT' || i!==3)assert.ok(!get('quickPreSnapshot').textContent.includes(formatted));
     }
     await fire(choice==='buy'?'quickPreBuy':'quickPreWait');
+    assertPreCue(get,choice);
     const outcome=get('quickPreOutcome').textContent;
     assert.ok(outcome.includes('値動きとの比較：自分は'+(choice==='buy'?buyVerdict:waitVerdict)+
       '、AIは'+(signal==='LONG'?buyVerdict:waitVerdict)+'。'));
@@ -2287,9 +2338,11 @@ for(const [direction,price,buyVerdict,waitVerdict] of [
     for(let i=4;i<=12;i++)assert.ok(!outcome.includes(response.daily_synthetic_prices[i].toLocaleString('ja-JP')));
     assertFinalHidden(get);
     await fire('quickPreNext');
+    assertPreCue(get,'anticipation');
     assert.doesNotMatch(get('quickPreBuddyLine').textContent,/今回使ったAIの判断/);
     assert.doesNotMatch(get('quickPreOutcome').textContent,/値動きとの比較|判定なし/);
     await fire('quickPreSkip');
+    assertPreCue(get);
     assert.equal(get('quickPreBuddyLine').textContent,'');
     assert.doesNotMatch(get('quickPreOutcome').textContent+get('quickPreSummary').textContent,/値動きとの比較|判定なし/);
     assert.match(get('quickPreSummary').textContent,new RegExp('AI方針との一致 '+(agrees?1:0)+'/1回答'));
@@ -2323,6 +2376,7 @@ test('default mode and skipping before any answer show no direction verdict',asy
     for(const id of ['quickPreOutcome','quickPreSummary'])
       assert.doesNotMatch(get(id).textContent,/値動きとの比較|値動きに合|判定なし|架空価格の方向だけ/);
     assert.equal(get('quickPreReveal').hidden,true);
+    assertPreCue(get);
     assert.equal(get('quickPreOutcome').textContent,optIn?'この日のAI判断・価格変化は、選択してから表示します。':'');
     assert.equal(calls.length,2);assert.deepEqual(storageWrites,[]);
   }
@@ -2465,6 +2519,7 @@ test('challenge and summary clear on edits, retry, failure, pagehide and fresh m
     state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:'保存した相棒',
       companion_strategy:{source:'saved_companion',approach:'trend',risk_percent:35}});
     await startPreReveal(ui);await fire('quickPreBuy');
+    assertPreCue(get,'buy','相棒');
     assert.match(get('quickPreBuddyLine').textContent,/^相棒（定型文）：.*今回使ったAIの判断/);
     if(finished){await fire('quickPreNext');await fire('quickPreSkip');}
     if(change==='model')await fire('quickModel','change');
@@ -2479,6 +2534,7 @@ test('challenge and summary clear on edits, retry, failure, pagehide and fresh m
       state.practice=async()=>{throw Error('failure');};await fire('quickRun');
     }
     for(const id of ['quickPreReveal','quickPreSummary','quickResult','quickReplay','quickNext'])assert.equal(get(id).hidden,true,change+': '+id);
+    assertPreCue(get);
     for(const id of ['quickPreBuddyLine','quickPreSummary','quickPreSnapshot','quickPreOutcome'])assert.equal(get(id).textContent,'');
     assert.equal(get('quickPreOptIn').checked,false);
     const before=calls.length;
@@ -2487,11 +2543,13 @@ test('challenge and summary clear on edits, retry, failure, pagehide and fresh m
     if(change==='retry') {
       state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:null,companion_strategy:null});
       await startPreReveal(ui);
+      assertPreCue(get,'anticipation');
       assert.equal(get('quickPreBuddyLine').textContent,'冒険ガイド（定型文）：最初の分かれ道だね。ここまでの値動きを見て、どう進もう？');
     }
   }
   const fresh=await mount();assert.equal(fresh.get('quickPreSummary').textContent,'');
   assert.equal(fresh.get('quickPreBuddyLine').textContent,'');
+  assertPreCue(fresh.get);
 });
 test('in-flight practices hide previous challenge and reject stale responses after invalidation',async()=>{
   for(const change of ['amount','model','leverage','pagehide']) {
@@ -2530,6 +2588,10 @@ test('pre-reveal markup uses labelled native controls, live regions and wrapping
   assert.match(option.attributes,/aria-describedby="quickPreHelp"/);
   assert.ok(find('quickPreHelp').parents.includes('quickReview'));
   assert.match(find('quickPreReveal').attributes,/aria-labelledby="quickPreTitle".*hidden/);
+  assert.ok(find('quickPreCue').parents.includes('quickPreReveal'));
+  assert.match(find('quickPreCue').attributes,/\bhidden\b/);
+  assert.doesNotMatch(find('quickPreCue').attributes,/role=|aria-live|tabindex/);
+  assert.match(find('quickPreCueIcon').attributes,/aria-hidden="true"/);
   for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip']) {
     assert.equal(find(id).tag,'button');assert.match(find(id).attributes,/type="button"/);
     assert.ok(find(id).parents.includes('quickPreReveal'));

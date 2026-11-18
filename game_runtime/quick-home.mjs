@@ -21,12 +21,30 @@ const preBuddyPrompts = [
   '冒険の折り返し。ひと息ついて、次の一歩を選ぼう。',
   '最後の分かれ道だね。自分のペースで選ぼう。',
 ];
+const preReactions = {
+  anticipation:['💭','選択を見守り中'],
+  buy:['🌱','「買う」を選んだね'],
+  wait:['🍃','「待つ」を選んだね'],
+};
+function renderPreCue(reaction) {
+  const cue=element('quickPreCue');
+  if(!reaction) {
+    cue.hidden=true;
+    delete cue.dataset.reaction;
+    element('quickPreCueIcon').textContent='';
+    element('quickPreCueText').textContent='';
+    return;
+  }
+  const [icon,text]=preReactions[reaction];
+  cue.dataset.reaction=reaction;
+  element('quickPreCueIcon').textContent=icon;
+  element('quickPreCueText').textContent=(preReveal.hasCompanion?'相棒：':'冒険ガイド：')+text;
+  cue.hidden=false;
+}
 function renderPreBuddyLine(agrees) {
-  const {value,ordered,index}=preReveal;
+  const {hasCompanion,index}=preReveal;
   // Authored copy: no prices, signals, profit or model-generated explanations.
-  const speaker=typeof value.companion_name==='string' && value.companion_name.trim() &&
-    validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id) ?
-    '相棒（定型文）：' : '冒険ガイド（定型文）：';
+  const speaker=hasCompanion?'相棒（定型文）：':'冒険ガイド（定型文）：';
   const line=agrees===undefined ? preBuddyPrompts[index] :
     'あなたの選択は、今回使ったAIの判断'+(agrees?'と同じだったね。':'とは違ったね。');
   element('quickPreBuddyLine').textContent=speaker+line;
@@ -35,6 +53,7 @@ function clearPreReveal() {
   practiceEpoch++;
   preReveal=null;
   element('quickPreReveal').hidden=true;
+  renderPreCue(null);
   element('quickPreSummary').hidden=true;
   for(const id of ['quickPreBuddyLine','quickPreSnapshot','quickPreOutcome','quickPreSummary'])element(id).textContent='';
   for(const id of ['quickPreBuy','quickPreWait','quickPreNext','quickPreSkip'])element(id).disabled=true;
@@ -44,6 +63,7 @@ function renderPreReveal() {
   const {value,index}=preReveal;
   const day=checkpoints[index];
   renderPreBuddyLine();
+  renderPreCue('anticipation');
   element('quickPreSnapshot').textContent='判断 '+(index+1)+'/3：第'+day+'日 ／ 過去の架空価格：'+
     value.daily_synthetic_prices.slice(day-3,day).map((price,i)=>{
       const pastDay=day-3+i;
@@ -61,6 +81,7 @@ function finishPreReveal() {
   const {value,ordered,answers}=preReveal;
   preReveal=null;
   element('quickPreReveal').hidden=true;
+  renderPreCue(null);
   element('quickPreBuddyLine').textContent='';
   revealResult(value,ordered);
   const record=answers.length===0 ? '記録なし（未回答は集計しません）' :
@@ -78,6 +99,7 @@ function finishPreReveal() {
 for(const [id,choice] of [['quickPreBuy','buy'],['quickPreWait','wait']]) {
   element(id).addEventListener('click',()=>{
     if(!preReveal || preReveal.answers.length!==preReveal.index)return;
+    renderPreCue(choice);
     const {value,index,answers}=preReveal;
     const day=checkpoints[index],signal=value.daily_ai_signals[day-1];
     const agrees=(choice==='buy')===(signal==='LONG');
@@ -136,7 +158,6 @@ function renderSceneVoice(text) {
   scene.dataset.mood=mood;
   sceneVoice={previous,text,mood};
 }
-let replayModel = null;
 const approachLabels = {trend:'トレンド',momentum:'勢い',reversion:'平均回帰',volatility:'変動率'};
 function validatedStrategy(value,modelId,responseModelId) {
   if(modelId!=='self' || responseModelId!=='self' || !value || typeof value!=='object' ||
@@ -148,7 +169,7 @@ function validatedStrategy(value,modelId,responseModelId) {
   return Object.freeze({source:'saved_companion',approach:value.approach,risk_percent:value.risk_percent});
 }
 function syncReplayOwner() {
-  element('quickReplayOwner').textContent = !replay ? '' : replayModel !== 'self' ?
+  element('quickReplayOwner').textContent = !replay ? '' : !replayIsSelf ?
     '別のAIの練習結果です。自作キャラの成績ではありません。' :
     element('quickMini').hidden ? '相棒の外見は上の画面で確認できます' :
     '自作キャラと振り返る';
@@ -340,7 +361,7 @@ function renderReflection() {
   element('quickHumanNote').value=saved?.note || '';
   element('quickReflectionError').textContent='';
   element('quickReflectionResult').hidden=!saved;
-  element('quickReflectionEdit').hidden=!saved || replayModel!=='self';
+  element('quickReflectionEdit').hidden=!saved || !replayIsSelf;
   for(const id of ['quickHumanSummary','quickHumanMemo','quickIndependentDecision',
     'quickDecisionComparison','quickReflectionReply','quickReflectionNext'])element(id).textContent='';
   if(!saved)return;
@@ -362,7 +383,7 @@ function renderReflection() {
     'あなたは「'+reasonLabels[saved.reason]+'」を理由に「'+humanChoice+'」を選びました。'+
     '記録されたAIの方針は'+signal+'（'+(signal==='LONG'?'株を持つ':'現金で待機')+'）です。'+
     reflectionPrompts[saved.reason][signal];
-  element('quickReflectionNext').textContent='次の行動（任意）：'+(replayModel==='self' ?
+  element('quickReflectionNext').textContent='次の行動（任意）：'+(replayIsSelf ?
     reflectionNextActions[saved.reason]+' 自分で保存した設定だけが次の練習に反映されます。今回の結果は変わりません。' :
     'このデモAIの判断ルールはここでは編集できません。自分の判断基準を振り返りましょう。');
 }
@@ -413,7 +434,7 @@ function syncMini() {
   // Hide before changing any copy; reveal only the complete current composite.
   element('quickMini').hidden=true;
   // Never borrow the player's artwork for another model's result voice.
-  if(!replay || replayModel!=='self' || element('quickModel').value!=='self' || element('quickReplay').hidden ||
+  if(!replay || !replayIsSelf || element('quickModel').value!=='self' || element('quickReplay').hidden ||
      imageVisible(element('chibi'))) {clearMini();return;}
   let pairs=[];
   if(imageVisible(element('portrait'))) {
@@ -457,10 +478,8 @@ function replayVoice(value,day) {
   const previous=value.daily_synthetic_prices[day-1];
   const price=value.daily_synthetic_prices[day];
   if(price===previous)return '今日は値動きがなかったね。';
-  if(value.daily_ai_signals[day-1]==='LONG')return price>previous ?
-    '株を持つ方針の日に上がった！ちょっと嬉しいね。' : '株を持つ方針の日に下がっちゃった…。';
-  return price<previous ? '下がった日は現金で待ってたんだね。利益とは別だけど、ひと安心。' :
-    '上がった日は現金で待ったんだね。乗り遅れたかも。';
+  const policy=value.daily_ai_signals[day-1]==='LONG'?'株を持つ':'現金で待機';
+  return '方針は「'+policy+'」。架空の価格は前日より'+(price>previous?'上がった':'下がった')+'ね。';
 }
 const highlightButtons = [['quickBestDay','一番増えた日'],['quickWorstDay','一番減った日']];
 function findReplayHighlights(balances,liquidatedAt) {
@@ -479,7 +498,6 @@ function clearReplay() {
   clearSceneVoice();
   replayIsSelf=false;
   replay=null;
-  replayModel=null;
   element('quickCompanionStrategy').hidden=true;
   element('quickCompanionStrategy').textContent='';
   clearMini();
@@ -733,7 +751,7 @@ element('quickGrow').addEventListener('click',()=>{
 });
 element('quickCustomize').addEventListener('click',openEditor);
 element('quickReflectionEdit').addEventListener('click',()=>{
-  if(!replay || replayModel!=='self' || !reflections.has(replayDay))return;
+  if(!replay || !replayIsSelf || !reflections.has(replayDay))return;
   openEditor();
 });
 element('quickArtwork').addEventListener('click',openArtwork);
@@ -751,7 +769,8 @@ function revealResult(value,ordered) {
   const heading=document.createElement('h3');
   heading.textContent='12日間の試算結果';
   const summary=document.createElement('p');
-  const resultModelName=ordered.model_id==='self' &&
+  const isSelf=ordered.model_id==='self' && (value.model_id===undefined || value.model_id==='self');
+  const resultModelName=isSelf &&
     typeof value.companion_name==='string' && value.companion_name.trim() ?
     '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
   summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
@@ -780,9 +799,8 @@ function revealResult(value,ordered) {
       label+'：第'+highlight.day+'日（'+signedMoney(highlight.delta)+' C）' :
       (index===0?'増えた日なし':'減った日なし');
   }
-  replayIsSelf=ordered.model_id==='self';
+  replayIsSelf=isSelf;
   replay={...value,companion_strategy:validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
-  replayModel=ordered.model_id;
   replayDay=0;
   renderReplay();
   lastScenarioToken=value.scenario_token;
@@ -838,7 +856,9 @@ element('quickRun').addEventListener('click',async()=>{
       throw Error('練習結果の形式が不正です');
     if(epoch!==practiceEpoch)return;
     if(beforeReveal) {
-      preReveal={value,ordered,index:0,answers:[]};
+      const hasCompanion=typeof value.companion_name==='string' && value.companion_name.trim()!=='' &&
+        !!validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id);
+      preReveal={value,ordered,hasCompanion,index:0,answers:[]};
       renderPreReveal();
       statusField.textContent=scenarioNote(value.scenario_kind)+'結果を見る前の判断です。残りはまとめて見ることもできます。';
     } else revealResult(value,ordered);

@@ -30,7 +30,7 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .scene{min-height:320px;position:relative;display:flex;align-items:center;justify-content:flex-end;flex-direction:column;overflow:hidden;border-radius:18px;background:radial-gradient(ellipse at 50% 85%,#5977a880,transparent 62%),linear-gradient(145deg,#342e63,#213b59);padding:15px 12px}
 .scene:after{content:"";position:absolute;bottom:23px;width:175px;height:24px;border-radius:50%;background:#0004}
 .speech{position:relative;z-index:2;background:#f0fff7;color:#304155;font-weight:650;font-size:14px;border-radius:15px 15px 15px 4px;padding:10px 14px;max-width:95%;margin-bottom:24px;min-height:46px;text-align:center}
-.chibi{position:relative;width:150px;height:192px;margin-bottom:7px;z-index:1;transform-origin:50% 95%;transition:transform .25s ease}
+.chibi{position:relative;width:150px;height:192px;margin-bottom:7px;z-index:1}
 .chibi{--hair:#8882db;--clothing:#92e1d4}
 .hair-back{position:absolute;left:26px;top:16px;width:100px;height:124px;background:linear-gradient(130deg,var(--hair),#6457ae);border-radius:50% 50% 26% 24%;box-shadow:-16px 11px 0 -5px var(--hair),16px 12px 0 -6px var(--hair)}
 .face{position:absolute;left:39px;top:43px;width:75px;height:78px;background:#ffe2cf;border:3px solid #f4c4b6;border-radius:45% 45% 50% 50%}
@@ -70,11 +70,49 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .look-grid label{display:grid;gap:6px;font-size:13px;font-weight:650}
 .look-grid select{min-width:0;width:100%}
 @media(max-width:520px){.look-grid{grid-template-columns:1fr}}
-.scene[data-mood="happy"] .chibi{transform:translateY(-11px) rotate(6deg)}
-.scene[data-mood="thinking"] .chibi{transform:rotate(-6deg)}
-.scene[data-mood="cautious"] .chibi{transform:translateY(3px) rotate(-4deg)}
-.scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:companion-growth .7s ease-out 1}
-@keyframes companion-growth{50%{transform:translateY(-6px);filter:drop-shadow(0 0 8px #a1f1d1)}100%{transform:none}}
+/* Move only the visible character container. Mood poses stay on the CSS chibi. */
+.scene > :is(#chibi,#artworkStage,#portrait):not([hidden]){
+ transform-origin:50% 95%;animation:companion-idle var(--idle-duration,4.8s) ease-in-out infinite
+}
+.scene[data-mood="thinking"]{--idle-tilt:-3deg;--idle-lift:-2px}
+.scene[data-mood="happy"]{--idle-tilt:2deg;--idle-lift:-5px;--idle-duration:3.6s}
+.scene[data-mood="cautious"]{--idle-tilt:-2deg;--idle-lift:-1px;--idle-duration:5.8s}
+.scene[data-mood="growth"]{--idle-tilt:2deg;--idle-lift:-6px;--idle-duration:3.2s}
+@keyframes companion-idle{
+ 0%,100%{transform:rotate(var(--idle-tilt,0deg))}
+ 50%{transform:translateY(var(--idle-lift,-3px)) rotate(calc(var(--idle-tilt,0deg) + 1deg))}
+}
+.scene[data-growing="true"] > :is(#chibi,#artworkStage,#portrait):not([hidden]){animation:companion-growth .7s ease-out}
+@keyframes companion-growth{50%{transform:translateY(-8px) scale(1.035)}}
+.scene[data-mood="ready"] #chibi:not([hidden]) .eye{animation:companion-blink 5.2s ease-in-out infinite}
+@keyframes companion-blink{0%,91%,97%,100%{scale:1 1}94%{scale:1 .14}}
+.scene:is([data-mood="thinking"],[data-mood="happy"],[data-mood="cautious"],[data-mood="growth"]) #chibi .eye{
+ top:36px;height:16px;border-radius:50%;transform:none
+}
+.scene:is([data-mood="thinking"],[data-mood="happy"],[data-mood="cautious"],[data-mood="growth"]) #chibi .mouth{
+ left:50%;top:55px;width:12px;height:8px;translate:-50% 0;border:0;border-bottom:2px solid #9e6072;border-radius:50%
+}
+.scene[data-mood="thinking"] #chibi .eye.left{height:12px;top:39px}
+.scene[data-mood="thinking"] #chibi .mouth{left:55%;width:7px;height:7px;border:2px solid #9e6072}
+.scene:is([data-mood="happy"],[data-mood="growth"]) #chibi .eye{
+ top:39px;height:8px;border-radius:85% 85% 0 0;border-top:3px solid #3c395e;background:transparent
+}
+.scene:is([data-mood="happy"],[data-mood="growth"]) #chibi .cheek{background:#f59eaa}
+.scene[data-mood="happy"] #chibi .mouth{width:18px;border-bottom-width:3px}
+.scene[data-mood="cautious"] #chibi .eye{height:12px;top:39px;border-radius:60% 70% 45% 45%}
+.scene[data-mood="cautious"] #chibi .eye.left{transform:rotate(18deg)}
+.scene[data-mood="cautious"] #chibi .eye.right{transform:rotate(-18deg)}
+.scene[data-mood="cautious"] #chibi .mouth{top:59px;border-bottom:0;border-top:2px solid #9e6072}
+.scene[data-mood="cautious"] #chibi .cheek{opacity:.55}
+.scene[data-mood="growth"] #chibi .mouth{width:17px;height:12px;border:0;border-radius:20% 20% 60% 60%;background:#a45471}
+.scene-mood{z-index:1;margin-top:3px;color:var(--mint);font-size:12px}
+.scene-mood span{display:none}
+.scene-mood span::before{content:"";display:inline-block;width:.42em;height:.42em;margin-inline-end:.45em;border-radius:50%;background:currentColor;vertical-align:.14em}
+.scene[data-mood="ready"] .scene-mood [data-for="ready"],
+.scene[data-mood="thinking"] .scene-mood [data-for="thinking"],
+.scene[data-mood="happy"] .scene-mood [data-for="happy"],
+.scene[data-mood="cautious"] .scene-mood [data-for="cautious"],
+.scene[data-mood="growth"] .scene-mood [data-for="growth"]{display:inline}
 #growthCelebration{color:var(--mint);font-size:14px;font-weight:700;line-height:1.65;overflow-wrap:anywhere;margin:0}
 #growthCelebration:not(:empty){margin-top:12px;padding:10px 13px;border:1px solid #6cae98;border-left:3px solid var(--mint);border-radius:10px;background:#193b36}
 #growthCelebration:empty{display:none}
@@ -140,7 +178,6 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .arena-metrics{display:flex;gap:12px;flex-wrap:wrap;margin:9px 0}.arena-metrics span{font-size:13px}.arena-days{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.arena-days button{min-width:42px;padding:9px}.arena-days button[aria-pressed=true]{background:var(--mint);color:#12303b}.arena-day-detail{border:1px solid var(--line);border-radius:13px;padding:13px;background:#101d34}.arena-day-detail p{margin:6px 0}.arena-note{font-size:13px;color:#cbdced}.creator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.creator-grid label{display:grid;gap:5px;font-size:13px}.creator-grid input{min-width:0;max-width:100%;font:inherit;border:1px solid #6c809c;border-radius:8px;padding:8px;background:#111c31;color:#fff;min-height:44px}.creator-grid input[type=color]{width:100%}.creator-note{font-size:13px;color:var(--soft)}
 [hidden]{display:none!important}
 @media(max-width:680px){.arena-grid{grid-template-columns:1fr}main{padding:19px 12px 45px}.hero{grid-template-columns:1fr}.scene{min-height:295px}.panel{padding:16px}.statgrid{grid-template-columns:1fr 1fr}.statgrid .stat:last-child{grid-column:1/-1}.steps button{flex:1 1 42px}}
-@media(prefers-reduced-motion:reduce){.scene[data-growing="true"] :is(#chibi,#artworkStage,#portrait){animation:none}.chibi{transition:none!important;transform:none!important}.scene .chibi{filter:none}}
 .lab-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;margin:12px 0}
 .lab-grid label{display:grid;gap:6px;align-content:start;font-size:13px;font-weight:650}
 .lab-grid input{box-sizing:border-box;width:100%;min-width:0;min-height:48px;border:1px solid #748db4;border-radius:9px;background:#101a2f;color:#fff;padding:10px;font:inherit;font-size:max(1rem,1em)}
@@ -178,6 +215,20 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickMini{position:relative;width:80px;max-width:80px;aspect-ratio:150/192;flex-shrink:0}
 #quickMini img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 #quickMiniBase{z-index:0}#quickMiniOutfit{z-index:1}#quickMiniFace{z-index:2}#quickMiniHair{z-index:3}
+.quick-pre-cue{display:flex;align-items:baseline;gap:6px;margin:6px 0;color:var(--mint);font-size:13px}
+#quickPreCueIcon{display:inline-block;flex:none;min-inline-size:1.25em;text-align:center}
+.quick-pre-cue[data-reaction="anticipation"] #quickPreCueIcon{animation:checkpoint-hover 1.8s ease-in-out 2}
+.quick-pre-cue[data-reaction="buy"] #quickPreCueIcon{animation:checkpoint-hop .45s ease-out}
+.quick-pre-cue[data-reaction="wait"] #quickPreCueIcon{animation:checkpoint-settle .55s ease-in-out}
+@keyframes checkpoint-hover{50%{transform:translateY(-2px) rotate(-7deg)}}
+@keyframes checkpoint-hop{45%{transform:translateY(-4px)}}
+@keyframes checkpoint-settle{50%{transform:rotate(-12deg)}}
+@media(prefers-reduced-motion:reduce){
+ .scene > :is(#chibi,#artworkStage,#portrait):not([hidden]),
+ .scene[data-growing="true"] > :is(#chibi,#artworkStage,#portrait):not([hidden]),
+ .scene[data-mood="ready"] #chibi:not([hidden]) .eye,
+ .quick-pre-cue[data-reaction] #quickPreCueIcon{animation:none;transition:none}
+}
 </style>
 </head>
 <body><main>
@@ -199,6 +250,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
   </div>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
+  <div class="scene-mood">
+   <span data-for="ready">準備中</span><span data-for="thinking">考え中</span>
+   <span data-for="happy">うれしい</span><span data-for="cautious">しんぱい</span>
+   <span data-for="growth">成長をお祝い</span>
+  </div>
  </div>
  <div class="front-character-copy">
   <span class="eyebrow">MY CHARACTER / あなたの相棒</span>
@@ -251,6 +307,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <p class="simple-hint">第3・7・11日に固定。直前3日分の架空価格だけを見て選びます。AIとの一致は正解や技能を示しません。</p>
   <p id="quickPreBuddyLine" class="simple-hint" role="status" aria-live="polite" aria-atomic="true"></p>
   <p id="quickPreSnapshot" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="quickPreCue" class="quick-pre-cue" hidden><span id="quickPreCueIcon" aria-hidden="true"></span><span id="quickPreCueText"></span></p>
   <div role="group" aria-label="結果を見る前の選択">
    <button id="quickPreBuy" type="button" disabled>買う</button>
    <button id="quickPreWait" type="button" disabled>待つ</button>
@@ -272,7 +329,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <img id="quickMiniPortrait" alt="" hidden>
    </div>
    <p id="quickReplayOwner" class="simple-hint"></p>
-   <p id="quickTacticsDay" aria-label="今回のAIからひとこと"></p>
+   <p id="quickTacticsDay" aria-label="振り返りメモ"></p>
   </div>
   <nav aria-label="振り返る日を選ぶ">
    <button id="quickPrevious" type="button" aria-controls="quickReplayDay quickReplayContext" disabled>前の日</button>
