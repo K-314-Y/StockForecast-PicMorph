@@ -139,8 +139,11 @@ function clearSceneVoice() {
   if(sceneVoice && element('speech').textContent===sceneVoice.text &&
       element('scene').dataset.mood===sceneVoice.mood) {
     element('speech').textContent=sceneVoice.previous.text;
-    if(sceneVoice.previous.mood===undefined)delete element('scene').dataset.mood;
-    else element('scene').dataset.mood=sceneVoice.previous.mood;
+    const state=element('scene').dataset;
+    if(sceneVoice.previous.mood===undefined)delete state.mood;
+    else state.mood=sceneVoice.previous.mood;
+    if(sceneVoice.previous.expressionOtherModel===undefined)delete state.expressionOtherModel;
+    else state.expressionOtherModel=sceneVoice.previous.expressionOtherModel;
   }
   sceneVoice=null;
 }
@@ -150,11 +153,13 @@ function renderSceneVoice(text) {
   // If another module took over, its current scene becomes the restore point.
   if(sceneVoice && (speech.textContent!==sceneVoice.text || scene.dataset.mood!==sceneVoice.mood))
     sceneVoice=null;
-  const previous=sceneVoice?.previous || {text:speech.textContent,mood:scene.dataset.mood};
+  const previous=sceneVoice?.previous || {text:speech.textContent,mood:scene.dataset.mood,
+    expressionOtherModel:scene.dataset.expressionOtherModel};
   const delta=replayDay===0?0:replay.daily_balances[replayDay]-replay.daily_balances[replayDay-1];
   const mood=replay.liquidated_at_step!==null && replayDay>=replay.liquidated_at_step ?
     'cautious' : replayDay===0?'ready':delta<0?'cautious':delta>0?'happy':'thinking';
   speech.textContent=text;
+  delete scene.dataset.expressionOtherModel;
   scene.dataset.mood=mood;
   sceneVoice={previous,text,mood};
 }

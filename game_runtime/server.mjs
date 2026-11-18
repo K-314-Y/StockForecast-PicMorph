@@ -9,6 +9,7 @@ import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
+import {createArtworkExpressionStore,EXPRESSION_MOODS,MAX_EXPRESSION_REQUEST} from './artwork-expressions.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {createModelShopStore} from './model-shop.mjs';
 import {readFile} from 'node:fs/promises';
@@ -48,6 +49,7 @@ const ARTWORK_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsaf
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
+const EXPRESSIONS_API = '/api/artwork-expressions';
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
@@ -228,6 +230,14 @@ function json(res, status, data) {
   res.end(body);
 }
 
+function artworkImage(res, {mime,bytes}) {
+  res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.length,
+    'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+    'Content-Security-Policy':"default-src 'none'; sandbox",
+    'X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'});
+  return res.end(bytes);
+}
+
 function safeLocal(req, port) {
   const remote = req.socket.remoteAddress;
   const host = req.headers.host;
@@ -269,6 +279,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   modelShopStore = createModelShopStore(),
                                   lookStore = createLookStore(),
                                   artworkStore = createArtworkStore(),
+                                  artworkExpressionStore = createArtworkExpressionStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -314,6 +325,33 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if ([rawPath,path].some(target=>target===EXPRESSIONS_API || target.startsWith(EXPRESSIONS_API+'/'))) {
+      if (rawPath===EXPRESSIONS_API && req.method==='GET') {
+        try {return json(res,200,await artworkExpressionStore.read());}
+        catch {return json(res,503,{error:'表情イラストの保存情報を読み込めません。保存ファイルを確認してください'});}
+      }
+      const imagePath=EXPRESSIONS_API+'/image/';
+      if (req.method==='GET' && rawPath.startsWith(imagePath)) {
+        const mood=rawPath.slice(imagePath.length);
+        if (!EXPRESSION_MOODS.includes(mood)) return json(res,404,{error:'画像が見つかりません'});
+        try {return artworkImage(res,await artworkExpressionStore.image(mood));}
+        catch (error) {
+          return json(res,error?.status===404?404:503,{error:'表情イラストを読み込めません'});
+        }
+      }
+      if (rawPath!==EXPRESSIONS_API || req.method!=='POST') return json(res,404,{error:'見つかりません'});
+      if (inFlight>=2) return json(res,429,{error:'処理が混雑しています'});
+      inFlight++;
+      try {
+        const payload=await getBody(req,MAX_EXPRESSION_REQUEST);
+        return json(res,200,await artworkExpressionStore.save(payload));
+      } catch (error) {
+        const status=error?.status ?? 503;
+        return json(res,status,{error:status>=500?'表情イラストの保存情報を更新できません。保存ファイルを確認してください':error.message});
+      } finally {
+        inFlight--;
+      }
+    }
     if (rawPath.startsWith('/artwork-lab/') || path.startsWith('/artwork-lab/')) {
       const asset = ARTWORK_LAB.get(rawPath);
       if (req.method !== 'GET' || !asset) return json(res, 404, {error: '見つかりません'});
@@ -381,12 +419,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const slot=path.slice('/api/artwork/image/'.length);
       if (!ARTWORK_SLOTS.includes(slot)) return json(res,404,{error:'画像が見つかりません'});
       try {
-        const {mime,bytes}=await artworkStore.image(slot);
-        res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.length,
-          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
-          'Content-Security-Policy':"default-src 'none'; sandbox",
-          'X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'});
-        return res.end(bytes);
+        return artworkImage(res,await artworkStore.image(slot));
       } catch(error) {
         return json(res,error?.status===404?404:503,{error:'イラストを読み込めません'});
       }

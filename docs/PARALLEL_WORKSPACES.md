@@ -5,7 +5,7 @@
 | 作業 | フォルダ（プロジェクト直下から） | ブランチ |
 | --- | --- | --- |
 | 統合・最終テスト | . | main |
-| キャラの表情・動き | workspaces/character-animation/ | sprint78/animated-companion |
+| キャラの表情・動き | workspaces/character-animation/ | sprint79/manual-expression-artwork |
 | 仮想コイン・注文タイミングの試作 | workspaces/forward-paper/ | feature/forward-paper-core-20261118 |
 
 ## 守ること

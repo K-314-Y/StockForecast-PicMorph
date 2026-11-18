@@ -70,7 +70,7 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .look-grid label{display:grid;gap:6px;font-size:13px;font-weight:650}
 .look-grid select{min-width:0;width:100%}
 @media(max-width:520px){.look-grid{grid-template-columns:1fr}}
-/* Move only the visible character container. Mood poses stay on the CSS chibi. */
+/* Move only the visible character container. */
 .scene > :is(#chibi,#artworkStage,#portrait):not([hidden]){
  transform-origin:50% 95%;animation:companion-idle var(--idle-duration,4.8s) ease-in-out infinite
 }
@@ -124,6 +124,12 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #artworkSteps{font-size:15px;line-height:1.55;font-weight:600;color:#edf7fb}
 #artworkPendingNotice[data-pending='true']{font-weight:800;color:#ffdc94;border-left:3px solid #ffdc94;padding-left:10px}
 #artworkBase{z-index:0}#artworkOutfit{z-index:1}#artworkFace{z-index:2}#artworkHair{z-index:3}
+.artwork-expression{display:none}
+.scene[data-mood="happy"]:not([data-expression-other-model]) #artworkStage[data-happy-expression="true"] #artworkExpressionHappy,
+.scene[data-mood="cautious"]:not([data-expression-other-model]) #artworkStage[data-cautious-expression="true"] #artworkExpressionCautious{display:block}
+/* Clip the original layers on this stage while keeping them available to the replay thumbnail. */
+.scene[data-mood="happy"]:not([data-expression-other-model]) #artworkStage[data-happy-expression="true"] img:not(.artwork-expression),
+.scene[data-mood="cautious"]:not([data-expression-other-model]) #artworkStage[data-cautious-expression="true"] img:not(.artwork-expression){clip-path:inset(50%)}
 .artwork-slot{border-top:1px solid var(--line);padding:10px 0}.artwork-slot label{display:block;font-weight:650}
 .artwork-slot input{display:block;width:100%;max-width:100%;margin:8px 0}.artwork-slot .actions{gap:6px}
 .crop-controls{margin:15px 0;padding:12px;border:1px solid #526a83;border-radius:12px}
@@ -248,6 +254,8 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <div id="artworkStage" role="img" aria-label="自分で制作したイラスト" hidden>
    <img id="artworkBase" alt="完成イラスト" hidden>
    <img id="artworkOutfit" alt="" hidden><img id="artworkFace" alt="" hidden><img id="artworkHair" alt="" hidden>
+   <img id="artworkExpressionHappy" class="artwork-expression" alt="">
+   <img id="artworkExpressionCautious" class="artwork-expression" alt="">
   </div>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
   <div class="scene-mood">
@@ -467,6 +475,25 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <label for="artworkFileOutfit">服（outfit・任意）</label><input id="artworkFileOutfit" type="file" accept="image/png,image/webp" aria-describedby="artworkInfoOutfit">
     <small id="artworkInfoOutfit" aria-live="polite">未取得</small><div class="actions"><button id="artworkSaveOutfit" type="button" aria-describedby="artworkInfoOutfit" disabled>SAVE 服</button><button id="artworkClearOutfit" type="button" disabled>CLEAR 保存した服を削除</button></div>
    </div>
+   <details id="artworkExpressions" class="crop-controls">
+    <summary>気分ごとの完成イラスト（任意）</summary>
+    <p class="creator-note">手作業で用意したキャラクター全体の絵を、保存済みの完成イラスト（base）と同じキャンバス寸法・位置で書き出してください。画像の自動生成や顔だけの切り抜きは行いません。気分の表示は演出で、予測の正しさを示すものではありません。</p>
+    <p id="artworkExpressionsHelp">PNG・JPEG・WebP、1枚450 KiBまで。画像はSAVEを押したときだけこのPCに保存されます。</p>
+    <div class="artwork-slot">
+     <label for="expressionFileHappy">うれしい（happy）</label>
+     <input id="expressionFileHappy" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="artworkExpressionsHelp expressionInfoHappy">
+     <small id="expressionInfoHappy" role="status">保存状況を読み込んでいます…</small>
+     <div class="actions"><button id="expressionSaveHappy" type="button" disabled>SAVE うれしい</button><button id="expressionClearHappy" type="button" disabled>CLEAR うれしい</button></div>
+    </div>
+    <div class="artwork-slot">
+     <label for="expressionFileCautious">しんぱい（cautious）</label>
+     <input id="expressionFileCautious" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="artworkExpressionsHelp expressionInfoCautious">
+     <small id="expressionInfoCautious" role="status">保存状況を読み込んでいます…</small>
+     <div class="actions"><button id="expressionSaveCautious" type="button" disabled>SAVE しんぱい</button><button id="expressionClearCautious" type="button" disabled>CLEAR しんぱい</button></div>
+    </div>
+    <button id="reloadExpressions" type="button">表情イラストの保存状況を再取得</button>
+    <p id="expressionStatus" role="status"></p>
+   </details>
    <details id="artworkWorkshop" class="crop-controls">
     <summary>画像工房（ローカル実験）</summary>
     <p>自作、または派生画像を作る許可のあるイラストだけを使ってください。RGBの色のつながりによるローカルの推測であり、AIが髪・顔・服を意味として理解する機能ではありません。工房から画像をサーバーへアップロードしません。</p>
