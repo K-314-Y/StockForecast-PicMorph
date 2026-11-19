@@ -75,6 +75,7 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.match(script,/document\.addEventListener\('visibilitychange'/);
   assert.match(script,/prefers-reduced-motion/);
   assert.match(script,/requestAnimationFrame/);
+  assert.match(script,/if \(reduced\.matches\) \{\s*frame = 0;\s*paint\(\);\s*return;/);
 });
 test('the only game entrypoint is an opt-in link inside the appearance studio',async()=>{
   const game=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');

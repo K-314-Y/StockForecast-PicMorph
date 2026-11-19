@@ -87,7 +87,14 @@ function paint() {
 }
 function nextFrame(time) {
   handle = 0;
-  if (!pack || paused || reduced.matches || document.hidden || pack.frames===1) return;
+  if (!pack || paused || document.hidden || pack.frames===1) return;
+  // A browser's emulated reduced-motion setting may update matches without
+  // dispatching a MediaQueryList change event. Reset on the next frame too.
+  if (reduced.matches) {
+    frame = 0;
+    paint();
+    return;
+  }
   const duration = 1000 / Number($('fps').value);
   if (!lastChange) lastChange=time;
   if (time-lastChange >= duration) {
