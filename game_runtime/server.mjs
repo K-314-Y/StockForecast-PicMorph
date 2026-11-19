@@ -11,6 +11,7 @@ import {createLookStore} from './looks.mjs';
 import {COMPANION_MODEL_VERSION, deriveForwardCompanionModel} from './forward-model.mjs';
 import {FORWARD_AI_ID, MAX_FORWARD_MEDALS, inspectForwardWallet} from './forward-paper.mjs';
 import {MOCK_MARKET_PAPER_MODE} from './forward-market-guard.mjs';
+import {getForwardMockRecordContext} from './forward-mock-lifecycle.mjs';
 import {FORWARD_STARTING_MEDALS, readForwardSnapshot, requireForwardGameWalletMode,
   saveForwardGeneration} from './forward-store.mjs';
 import {createForwardRecordReader} from './forward-records.mjs';
@@ -336,6 +337,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   trainedVersion = resolveTrainedVersion,
                                   chatgptDialogue = null, chatgptClient = null} = {}) {
   const readForwardRecords = createForwardRecordReader(forwardRecords);
+  if (forwardRecords?.fxSource !== undefined) {
+    const context = getForwardMockRecordContext(forwardRecords.source);
+    if (context?.adapter.mode !== MOCK_MARKET_PAPER_MODE || typeof forwardLedgerFile !== 'string' ||
+        !forwardLedgerFile.trim() || resolve(forwardLedgerFile) !== context.walletFile) {
+      throw Error('FX records require the same explicit MOCK_NONLIVE wallet file as the P4 source');
+    }
+    context.adapter.authorize();
+    forwardLedgerFile = context.walletFile;
+  }
   if (chatgptClient !== null) {
     if (chatgptDialogue !== null) throw Error('Use only one ChatGPT injection');
     chatgptDialogue = createChatGPTPlanDialogue({client:chatgptClient});

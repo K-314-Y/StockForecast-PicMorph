@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && node --test ../mcp/tests/game-runtime.test.mjs ../mcp/tests/public-preview.test.mjs ../mcp/tests/forward-paper.test.mjs ../mcp/tests/forward-store.test.mjs ../mcp/tests/forward-market-adapter.test.mjs ../mcp/tests/appearance-model.test.mjs ../mcp/tests/forward-forecast.test.mjs ../mcp/tests/forward-mock-lifecycle.test.mjs ../mcp/tests/forward-market-session.test.mjs ../mcp/tests/forward-game-fx.test.mjs",
+    "test": "npm run typecheck && node --test ../mcp/tests/game-runtime.test.mjs ../mcp/tests/public-preview.test.mjs ../mcp/tests/forward-paper.test.mjs ../mcp/tests/forward-store.test.mjs ../mcp/tests/forward-market-adapter.test.mjs ../mcp/tests/appearance-model.test.mjs ../mcp/tests/forward-forecast.test.mjs ../mcp/tests/forward-mock-lifecycle.test.mjs ../mcp/tests/forward-market-session.test.mjs ../mcp/tests/forward-game-fx.test.mjs ../mcp/tests/forward-view-ui.test.mjs",
     "preview:public": "node public_preview.mjs"
   },
   "devDependencies": {

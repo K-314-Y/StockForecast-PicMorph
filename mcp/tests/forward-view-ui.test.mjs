@@ -178,3 +178,100 @@ test('PENDING shows reservations and unscored results, then keeps Brier, directi
   assert.equal(ui.get('Records').hidden, true);
   assert.equal(ui.get('Records').text, '');
 });
+
+const fxWallet = {...emptyWallet, mock:true, revision:5, unallocated:9600, currentAiId:nextId,
+  generations:[generation('ai_other', version), generation(nextId, version)],
+  wallets:{ai_other:wallet(100), [nextId]:wallet(300)}};
+const fxRecord = {aiId:nextId, model_version:version, sourceMode:'MOCK_NONLIVE', status:'SCORED_MOCK_NONLIVE',
+  symbol:'FAKE', confirmedAt:'2030-01-07T01:00:00.000Z', targetAt:'2030-01-07T01:10:00.000Z',
+  direction:'DOWN', predictedChangePct:-4, open:{status:'OPENED', at:'2030-01-07T01:05:00.000Z'},
+  close:{status:'CLOSED', at:'2030-01-07T01:10:00.000Z'}, realizedPnl:50,
+  score:{actualDirection:'DOWN', brier:.14, directionCorrect:true, absoluteChangeErrorPctPoints:1,
+    scoredAt:'2030-01-07T01:10:00.000Z'}};
+const fx = {rawPnl:50, gamePnl:51, basisPoints:10200, commitment:'a1'.repeat(32)};
+const responseWith = record => ({status:'MOCK_NONLIVE', records:[record]});
+
+test('P9d renders positive and negative audited FX separately from wallet cash and P4 scoring', async () => {
+  const ui = mount({state:fxWallet, records:responseWith({...fxRecord, fx})});
+  await ui.fire('Refresh');
+  const walletText = ui.get('Wallet').text;
+  const statusText = ui.get('RecordsStatus').text;
+  assert.match(walletText, /使えるメダル・架空（MOCK_NONLIVE） 300 枚/);
+  assert.match(statusText, /実市場は未接続.*MOCK_NONLIVE.*採点済み/);
+  assert.match(ui.get('Records').text, /Brier.*0.14.*方向の的中 的中/);
+  const card = ui.get('Records').children.find(node => node.className === 'forward-fx');
+  assert.match(card.text, /ゲーム内為替（架空）.*元の仮想損益 \+50 枚.*FX倍率 1.02 倍.*FX後の仮想損益 \+51 枚/);
+  assert.match(card.text, /ゲーム内表示専用、使える財布の残高には未反映/);
+  assert.ok(!card.text.includes(fx.commitment));
+
+  ui.values[recordsPath] = responseWith({...fxRecord, realizedPnl:-50,
+    fx:{...fx, rawPnl:-50, gamePnl:-49, basisPoints:9800}});
+  await ui.fire('Refresh');
+  assert.match(ui.get('Records').text, /元の仮想損益 -50 枚.*FX倍率 0.98 倍.*FX後の仮想損益 -49 枚/);
+  assert.equal(ui.get('Wallet').text, walletText);
+  assert.equal(ui.get('RecordsStatus').text, statusText);
+  assert.ok(ui.calls.every(call => call.method === 'GET'));
+});
+
+test('P9d permits null FX before and after scoring and leaves legacy records without an FX note', async () => {
+  const pending = {...fxRecord, status:'PENDING', score:null, fx:null};
+  const ui = mount({state:fxWallet, records:responseWith(pending)});
+  await ui.fire('Refresh');
+  assert.match(ui.get('Records').text, /未採点.*まだ監査済みFX決済なし/);
+  assert.doesNotMatch(ui.get('Records').text, /ゲーム内為替（架空）|FX倍率/);
+  ui.values[recordsPath] = responseWith({...fxRecord, fx:null});
+  await ui.fire('Refresh');
+  assert.match(ui.get('Records').text, /Brier.*まだ監査済みFX決済なし/);
+  assert.doesNotMatch(ui.get('Records').text, /FX倍率/);
+
+  ui.values[recordsPath] = responseWith(fxRecord);
+  await ui.fire('Refresh');
+  assert.match(ui.get('Records').text, /Brier/);
+  assert.doesNotMatch(ui.get('Records').text, /FX|ゲーム内為替/);
+});
+
+test('P9d rejects forged FX regardless of whether P4 has valid results', async () => {
+  const ui = mount({state:fxWallet});
+  const changes = [
+    {status:'PENDING', score:null}, {status:'PENDING'}, {score:{...fxRecord.score, brier:3}},
+    {score:{...fxRecord.score, scoredAt:fxRecord.open.at}}, {sourceMode:'LIVE'}, {realizedPnl:49},
+    {close:{status:'QUEUED', at:fxRecord.targetAt}, realizedPnl:null},
+    {close:{status:'CLOSED', at:fxRecord.open.at}},
+    {fx:{...fx, nonce:'private'}}, {fx:{...fx, path:'/tmp/internal'}}, {fx:{...fx, accountId:'other'}},
+    {fx:{...fx, basisPoints:10001}}, {fx:{...fx, basisPoints:'10200'}},
+    {fx:{...fx, commitment:'A1'.repeat(32)}}, {fx:{...fx, commitment:'a'.repeat(63)}},
+    {fx:{...fx, commitment:'<img>'.padEnd(64, 'a')}}, {fx:{...fx, gamePnl:Infinity}},
+    {fx:{rawPnl:50, gamePnl:51, basisPoints:10200}}, {fx:[]}, {fx:undefined},
+  ];
+  for (const change of changes) {
+    ui.values[recordsPath] = responseWith({...fxRecord, fx});
+    await ui.fire('Refresh');
+    assert.match(ui.get('Records').text, /ゲーム内為替/);
+    ui.values[recordsPath] = responseWith({...fxRecord, fx, ...change});
+    await ui.fire('Refresh');
+    assert.match(ui.get('RecordsStatus').text, /読み取れません/);
+    assert.equal(ui.get('Records').hidden, true);
+    assert.equal(ui.get('Records').text, '');
+  }
+});
+
+test('P9d hides the complete record when the selected AI, model or mock wallet does not match', async () => {
+  const ui = mount({state:fxWallet, records:responseWith({...fxRecord, fx})});
+  await ui.fire('Refresh');
+  assert.match(ui.get('Records').text, /ゲーム内為替/);
+  ui.get('AI').value = 'ai_other';
+  ui.fire('AI', 'change');
+  assert.equal(ui.get('Records').text, '');
+  assert.equal(ui.get('Records').hidden, true);
+  assert.match(ui.get('RecordsStatus').text, /選択したAIの模擬運用記録はありません/);
+  ui.get('AI').value = nextId;
+  ui.fire('AI', 'change');
+  assert.match(ui.get('Records').text, /ゲーム内為替/);
+
+  ui.values[walletPath] = {...fxWallet, generations:[generation('ai_other', version), generation(nextId)]};
+  await ui.fire('Refresh');
+  assert.equal(ui.get('Records').hidden, true);
+  ui.values[walletPath] = {...fxWallet, mock:false};
+  await ui.fire('Refresh');
+  assert.equal(ui.get('Records').hidden, true);
+});

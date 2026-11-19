@@ -16,6 +16,8 @@ const tradeSides = {LONG:'買い', SHORT:'売り'};
 const orderText = {NONE:'未記録', QUEUED:'予約中', CANCELLED:'取り消し', OPENED:'取引開始', CLOSED:'決済済み'};
 const approaches = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
 const mockLabel = '架空（MOCK_NONLIVE）';
+const fxFields = ['rawPnl', 'gamePnl', 'basisPoints', 'commitment'];
+const fxRates = [9800, 9900, 10000, 10100, 10200];
 const number = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6});
 const signed = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6, signDisplay:'exceptZero'});
 const japanTime = new Intl.DateTimeFormat('ja-JP', {timeZone:'Asia/Tokyo', dateStyle:'short', timeStyle:'medium'});
@@ -73,13 +75,26 @@ function recordState(value) {
       !validOrder(item.open, 'OPENED') || !validOrder(item.close, 'CLOSED') ||
       (item.close.status !== 'NONE' && item.open.status !== 'OPENED') ||
       (item.close.status === 'CLOSED' ? !Number.isFinite(item.realizedPnl) : item.realizedPnl !== null)) invalid();
-  if (item.status === 'PENDING' && item.score === null) return value;
+  const hasFx = Object.hasOwn(item, 'fx');
+  if (item.status === 'PENDING' && item.score === null) {
+    if (hasFx && item.fx !== null) invalid();
+    return value;
+  }
   const score = item.score;
   if (item.status !== 'SCORED_MOCK_NONLIVE' || item.close.status !== 'CLOSED' ||
       !finite(score?.brier, 0, 2) || !Object.hasOwn(directions, score.actualDirection) ||
       !(score.directionCorrect === null || typeof score.directionCorrect === 'boolean') ||
       !(score.absoluteChangeErrorPctPoints === null || finite(score.absoluteChangeErrorPctPoints, 0)) ||
       !date(score.scoredAt)) invalid();
+  if (hasFx && item.fx !== null) {
+    const {fx} = item;
+    if (!isObject(fx) || Object.keys(fx).length !== fxFields.length ||
+        !fxFields.every(field => Object.hasOwn(fx, field)) ||
+        fx.rawPnl !== item.realizedPnl || !Number.isFinite(fx.gamePnl) ||
+        !fxRates.includes(fx.basisPoints) || !matches(fx.commitment, /^[a-f0-9]{64}$/) ||
+        item.open.at < item.confirmedAt || item.open.at >= item.targetAt ||
+        item.close.at !== item.targetAt || score.scoredAt < item.targetAt) invalid();
+  }
   return value;
 }
 
@@ -110,6 +125,7 @@ function fillFacts(list, entries) {
 }
 
 const medals = value => number.format(value) + ' 枚';
+const signedMedals = value => signed.format(value) + ' 枚';
 const timestamp = value => japanTime.format(Date.parse(value)) + '（日本時間）';
 const directionText = value => directions[value] ?? '方向の指定なし';
 const displayOrder = order => orderText[order.status] + (order.at ? '・' + timestamp(order.at) : '');
@@ -183,8 +199,10 @@ function mountForwardPanel(panel) {
       return;
     }
     const item = records.records[0];
+    const hasFx = Object.hasOwn(item, 'fx');
     if (!wallet?.generations.some(generation =>
-      generation.aiId === selected && generation.model_version === item.model_version) || item.aiId !== selected) {
+      generation.aiId === selected && generation.model_version === item.model_version) || item.aiId !== selected ||
+      (hasFx && !wallet.mock)) {
       recordStatus.textContent = '実市場は未接続です。選択したAIの模擬運用記録はありません。';
       return;
     }
@@ -200,7 +218,7 @@ function mountForwardPanel(panel) {
       ]],
       ['模擬注文とメダル損益', [
         ['取引開始の注文', displayOrder(item.open)], ['決済の注文', displayOrder(item.close)],
-        ['決済したメダル損益', item.realizedPnl === null ? '未記録' : signed.format(item.realizedPnl) + ' 枚'],
+        ['決済したメダル損益', item.realizedPnl === null ? '未記録' : signedMedals(item.realizedPnl)],
       ]],
       ['予測の採点', score ? [
         ['採点時刻', timestamp(score.scoredAt)],
@@ -218,6 +236,28 @@ function mountForwardPanel(panel) {
       list.className = 'forward-facts';
       fillFacts(list, entries);
       recordsDetails.append(heading, list);
+    }
+    if (hasFx && item.fx !== null) {
+      const card = document.createElement('section');
+      card.className = 'forward-fx';
+      const heading = document.createElement('h3');
+      heading.textContent = 'ゲーム内為替（架空）';
+      const list = document.createElement('dl');
+      list.className = 'forward-facts';
+      fillFacts(list, [
+        ['元の仮想損益', signedMedals(item.fx.rawPnl)],
+        ['FX倍率', number.format(item.fx.basisPoints / 10_000) + ' 倍'],
+        ['FX後の仮想損益', signedMedals(item.fx.gamePnl)],
+      ]);
+      const note = document.createElement('small');
+      note.textContent = 'ゲーム内表示専用、使える財布の残高には未反映';
+      card.append(heading, list, note);
+      recordsDetails.append(card);
+    } else if (hasFx) {
+      const note = document.createElement('p');
+      note.className = 'simple-hint';
+      note.textContent = 'まだ監査済みFX決済なし';
+      recordsDetails.append(note);
     }
     recordsDetails.hidden = false;
   }

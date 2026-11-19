@@ -13,6 +13,7 @@ import {deriveForwardCompanionModel} from '../../game_runtime/forward-model.mjs'
 import {openForwardPredictor} from '../../game_runtime/forward-predict.mjs';
 import {createForwardRecordReader} from '../../game_runtime/forward-records.mjs';
 import {openForwardStore, saveForwardGeneration} from '../../game_runtime/forward-store.mjs';
+import {createGameServer} from '../../game_runtime/server.mjs';
 
 const exec = promisify(execFile);
 const minute = 60_000;
@@ -824,4 +825,65 @@ test('P9c record projection is opt-in, score gated, read-only, and restricted to
   const scorePath = join(f.options.directory, id + '.outcome.json');
   await writeFile(scorePath, '{}');
   await assert.rejects(optIn(), {code:'FORWARD_FORECAST_CORRUPT'});
+});
+
+test('P9d binds the local HTTP projection to the authorized P4 source and its explicit wallet', async t => {
+  const f = await setup(t, {anchored:true});
+  const forecastId = await readyForFxSettlement(f);
+  const {walletFile} = f.options;
+  const {recordSource:source} = f.config;
+  const forwardRecords = {forecastId, source, fxSource:f.fx.fxSource};
+  assert.throws(() => createGameServer({forwardRecords}), /same explicit MOCK_NONLIVE wallet/);
+  const other = await setup(t, {accountId:'bob'});
+  assert.throws(() => createGameServer({forwardRecords, forwardLedgerFile:other.options.walletFile}),
+    /same explicit MOCK_NONLIVE wallet/);
+  assert.throws(() => createGameServer({forwardLedgerFile:walletFile, forwardRecords:{...forwardRecords, fxSource:{}}}),
+    /trusted FX source/);
+  const alternate = await openForwardMockLifecycle(f.options);
+  assert.throws(() => createGameServer({forwardLedgerFile:walletFile,
+    forwardRecords:{...forwardRecords, source:alternate.recordSource}}), /this P4 source/);
+  f.state.allowed = false;
+  assert.throws(() => createGameServer({forwardLedgerFile:walletFile, forwardRecords}), /利用許可/);
+  f.state.allowed = true;
+
+  const server = createGameServer({forwardLedgerFile:walletFile, forwardRecords,
+    companionStore:{read:async () => ({created:false, companion:{approach:'trend', risk_percent:35}})}});
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const recordsPath = '/api/companion/forward-records';
+  const walletPath = '/api/companion/forward-ai?view=summary';
+  const api = path => fetch(base + path);
+  const initial = await (await api(walletPath)).json();
+  const walletBefore = await readFile(walletFile);
+  const readsBefore = f.state.reads;
+  const responseBefore = await api(recordsPath);
+  assert.equal(responseBefore.status, 200);
+  const before = await responseBefore.json();
+  assert.equal(before.records[0].fx, null);
+  const {commitment} = await f.fx.settle(forecastId);
+
+  const response = await api(recordsPath);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  const json = await response.text();
+  const after = JSON.parse(json);
+  assert.deepEqual(after, {...before, records:[{...before.records[0],
+    fx:{rawPnl:-50, gamePnl:-51, basisPoints:10200, commitment}}]});
+  assert.doesNotMatch(json, /nonce|accountId|modelHash|forecastSha256|receiptSha256|referenceSha256|\/tmp\//);
+  assert.deepEqual(await (await api(walletPath)).json(), initial);
+  assert.deepEqual(await readFile(walletFile), walletBefore);
+  assert.equal(f.state.reads, readsBefore);
+  assert.equal((await api(recordsPath + '?rate=9800&account=bob')).status, 400);
+  assert.equal((await fetch(base + recordsPath, {headers:{'Sec-Fetch-Site':'cross-site'}})).status, 403);
+  assert.equal((await fetch(base + recordsPath, {method:'POST', body:'{}'})).status, 404);
+
+  const page = await (await api('/game')).text();
+  assert.match(page, /id="forwardPanel"/);
+  assert.match(page, /<script type="module" src="\/forward-view-ui.mjs"><\/script>/);
+  assert.match(await (await api('/forward-view-ui.mjs')).text(), /ゲーム内為替（架空）/);
+
+  await unlink(await auditPath(f, 'settlement'));
+  assert.equal((await api(recordsPath)).status, 503);
+  assert.deepEqual(await readFile(walletFile), walletBefore);
 });
