@@ -8,7 +8,9 @@ import {createChatGPTPlanDialogue, validateDialogueInput, validateDialogueResult
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
-import {deriveAppearanceModel} from './appearance-model.mjs';
+import {APPEARANCE_MODEL_VERSION, deriveAppearanceModel, deriveForwardAppearanceModel} from './appearance-model.mjs';
+import {FORWARD_AI_ID, MAX_FORWARD_MEDALS} from './forward-paper.mjs';
+import {APPEARANCE_STARTING_MEDALS, openForwardStore, saveForwardAppearanceGeneration} from './forward-store.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createGrowthStore} from './growth.mjs';
 import {createModelShopStore} from './model-shop.mjs';
@@ -52,7 +54,6 @@ const MAX_ARTWORK_REQUEST = 750 * 1024;
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
-const APPEARANCE_MODEL_VERSION = /^appearance-v[1-9]\d{0,2}(?:_\d{1,3}){5}$/;
 const SLOTS = ['mine', 'owl', 'turtle'];
 
 function failure(message, status = 503) {
@@ -265,11 +266,26 @@ async function getBody(req, limit = MAX_REQUEST) {
   catch {throw failure('JSONが不正です', 400);}
 }
 
+function forwardAppearanceState(snapshot, created = false) {
+  const {revision = null, ledger} = snapshot ?? {};
+  const generations = ledger?.appearanceGenerations ?? [];
+  return {
+    mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', revision, created,
+    initialMedals:ledger?.initialMedals ?? APPEARANCE_STARTING_MEDALS,
+    unallocated:ledger?.unallocated ?? APPEARANCE_STARTING_MEDALS,
+    currentAiId:generations.at(-1)?.aiId ?? null,
+    generations, wallets:ledger?.wallets ?? {},
+  };
+}
+
+const isRevision = value => Number.isSafeInteger(value) && value >= 0;
+
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
                                   companionStore = createCompanionStore(),
                                   modelShopStore = createModelShopStore(),
                                   lookStore = createLookStore(),
+                                  forwardLedgerFile,
                                   artworkStore = createArtworkStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
@@ -382,6 +398,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         });
       } catch {
         return json(res, 503, {error:'外見からモデル設定を読み取れません'});
+      }
+    }
+    if (req.method === 'GET' && path === '/api/companion/forward-ai') {
+      try {
+        const store = await openForwardStore({filePath:forwardLedgerFile});
+        return json(res, 200, forwardAppearanceState(await store.snapshot()));
+      } catch (error) {
+        if (error.code === 'FORWARD_STORE_UNINITIALIZED') return json(res, 200, forwardAppearanceState());
+        return json(res, 503, {error:'AI財布の台帳を読み取れません'});
       }
     }
     if (req.method === 'GET' && path === '/api/looks') {
@@ -511,7 +536,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/companion/forward-ai','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -524,6 +549,34 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
+      if (path === '/api/companion/forward-ai') {
+        const keys = ['aiId', 'medals', 'expected_revision', 'companion_revision', 'look_revision'];
+        const {aiId, medals, expected_revision, companion_revision, look_revision} = payload;
+        if (Object.keys(payload).length !== keys.length || !keys.every(key => Object.hasOwn(payload, key)) ||
+            typeof aiId !== 'string' || !FORWARD_AI_ID.test(aiId) ||
+            !Number.isSafeInteger(medals) || medals < 1 || medals > MAX_FORWARD_MEDALS ||
+            (expected_revision !== null && !isRevision(expected_revision)) ||
+            !isRevision(companion_revision) || !isRevision(look_revision)) {
+          throw failure('AI ID・配分メダル数・外見と台帳の revision を指定してください', 400);
+        }
+        const companion = await companionStore.read();
+        const look = await lookStore.read();
+        if (!companion.created || !look.created || companion.revision !== companion_revision ||
+            look.revision !== look_revision || companion.revision !== (await companionStore.read()).revision) {
+          throw failure('相棒と外見を保存し、現在の revision を取得してください', 409);
+        }
+        try {
+          const result = await saveForwardAppearanceGeneration({filePath:forwardLedgerFile,
+            aiId, medals, expectedRevision:expected_revision,
+            appearance:deriveForwardAppearanceModel(look.look, companion.companion)});
+          return json(res, result.created ? 201 : 200, forwardAppearanceState(result, result.created));
+        } catch (error) {
+          if (['FORWARD_STORE_REVISION_CONFLICT', 'FORWARD_STORE_ALLOCATION_REJECTED'].includes(error.code)) {
+            throw failure(error.message, 409);
+          }
+          throw failure('台帳への保存を確認できません。再取得してください');
+        }
+      }
       const fields = Object.keys(payload).sort();
       const names = fields.join('|');
       if (path === '/api/quick-practice') {

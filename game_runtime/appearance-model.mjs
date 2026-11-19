@@ -1,9 +1,18 @@
+import {createHash} from 'node:crypto';
 import {APPROACHES, normalizeCompanionColor} from './companion.mjs';
 import {validateLook} from './looks.mjs';
+import {validateLabModel} from './model-lab.mjs';
 
+export const APPEARANCE_MODEL_VERSION = /^appearance-v[1-9]\d{0,2}(?:_\d{1,3}){5}$/;
+const APPEARANCE_RULE_VERSION = 'appearance-v1';
 const HAIR_STYLE_SIGNAL = {bob:'trend', long:'reversion', twintails:'momentum'};
 const ACCESSORY_SIGNAL = {ribbon:'momentum', glasses:'reversion', star:'volatility', none:null};
 const EXPRESSION_RISK_PERCENT = {calm:32, cheerful:50, determined:68};
+
+function versionFor(ruleVersion, {plugin_weights, risk_fraction}) {
+  return ruleVersion + '_' + [...APPROACHES.map(id => plugin_weights[id]),
+    Math.round(risk_fraction * 100)].join('_');
+}
 
 function rgb(value) {
   const hex = normalizeCompanionColor(value);
@@ -46,6 +55,27 @@ export function deriveAppearanceModel(look, colors) {
   const riskPercent = EXPRESSION_RISK_PERCENT[expression] + Math.round(2*brightness - 25);
 
   // Bump the version when the mapping rules change. Identify the rounded settings.
-  const model_version = 'appearance-v1_' + [...shares.map(share => share.weight), riskPercent].join('_');
-  return {model_version, model:{plugin_weights, risk_fraction:riskPercent / 100}};
+  const model = {plugin_weights, risk_fraction:riskPercent / 100};
+  return {model_version:versionFor(APPEARANCE_RULE_VERSION, model), model};
+}
+
+export function deriveForwardAppearanceModel(look, colors) {
+  const {model_version, model} = deriveAppearanceModel(look, colors);
+  // Use engine.Model() defaults for parameters outside the appearance rules.
+  const plugin_strengths = Object.fromEntries(APPROACHES.map(id => [id, 100]));
+  return {model_version, model:{fast_window:3, slow_window:9, ...model, plugin_strengths}};
+}
+
+export function identifyForwardAppearanceModel({model_version, model}) {
+  model = validateLabModel(model);
+  if (typeof model_version !== 'string' || !APPEARANCE_MODEL_VERSION.test(model_version)) {
+    throw new RangeError('外見モデル版が不正です');
+  }
+  const ruleVersion = model_version.split('_')[0];
+  if (model_version !== versionFor(ruleVersion, model) ||
+      model.risk_fraction !== Math.round(model.risk_fraction * 100) / 100) {
+    throw new RangeError('外見モデル版と予測設定が一致しません');
+  }
+  const modelHash = createHash('sha256').update(JSON.stringify({ruleVersion, model})).digest('hex');
+  return {model_version, model, modelHash};
 }

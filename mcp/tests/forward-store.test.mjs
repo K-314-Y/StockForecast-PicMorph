@@ -7,7 +7,8 @@ import {
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {inspectForwardWallet} from '../../game_runtime/forward-paper.mjs';
-import {openForwardStore} from '../../game_runtime/forward-store.mjs';
+import {deriveForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
+import {openForwardStore, saveForwardAppearanceGeneration} from '../../game_runtime/forward-store.mjs';
 import {MARKET_PAPER_MODE, TEST_FIXTURE_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 
 const initial = {
@@ -24,6 +25,8 @@ const order = (id, aiId = 'ai_red', action = 'OPEN_LONG') => ({
 const close = id => ({id, aiId: 'ai_red', symbol: '7203', action: 'CLOSE'});
 const fixture = (observedAt, quotes) => ({observedAt, sourceId: 'TEST_FIXTURE_NOT_LIVE', quotes});
 const wallet = (snapshot, aiId = 'ai_red') => inspectForwardWallet(snapshot.ledger, aiId);
+const appearance = (hair_style = 'bob') => deriveForwardAppearanceModel(
+  {hair_style, expression:'cheerful', accessory:'none'}, {hair_color:'#808080', clothing_color:'#808080'});
 
 async function tempLedger(t) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'forward-store-')));
@@ -339,4 +342,99 @@ test('market store rejects re-ingested trades after restart and checks saved exe
   saved.ledger.journal[0].tradeAt = saved.ledger.journal[0].receivedAt;
   await writeFile(filePath, encodeTestRecord(saved));
   await assert.rejects(openForwardStore({filePath}), {code: 'FORWARD_STORE_CORRUPT'});
+});
+
+test('appends generations to a traded legacy ledger and preserves old trades on further edits', async t => {
+  const {filePath} = await tempLedger(t);
+  let observation = fixture(at('01'), {'7203':100});
+  const store = await openForwardStore({filePath, initial, getObservation:() => observation});
+  await store.queueForwardOrder(order('legacy_position'), at('00'), 0);
+  await store.applyForwardBatch(1);
+  const legacy = await store.queueForwardOrder(order('legacy_pending', 'ai_blue'), at('02'), 2);
+  const add = (aiId, expectedRevision, model = appearance()) => saveForwardAppearanceGeneration({
+    filePath, aiId, appearance:model, medals:100, expectedRevision,
+  });
+  const before = await readFile(filePath);
+  await assert.rejects(add('ai_first', null), {code:'FORWARD_STORE_REVISION_CONFLICT'});
+  assert.deepEqual(await readFile(filePath), before);
+  const first = await add('ai_first', 3);
+  assert.equal(first.ledger.initialMedals, legacy.ledger.initialMedals);
+  assert.equal(first.ledger.unallocated, legacy.ledger.unallocated - 100);
+  for (const aiId of Object.keys(legacy.ledger.wallets)) {
+    assert.deepEqual(first.ledger.wallets[aiId], legacy.ledger.wallets[aiId]);
+  }
+  assert.deepEqual(first.ledger.pending, legacy.ledger.pending);
+  assert.deepEqual(first.ledger.journal, legacy.ledger.journal);
+  assert.equal(first.ledger.lastBatchAt, legacy.ledger.lastBatchAt);
+
+  await store.queueForwardOrder(order('first_position', 'ai_first'), at('02'), 4);
+  observation = fixture(at('03'), {'7203':110});
+  const opened = await store.applyForwardBatch(5);
+  const second = await add('ai_second', 6, appearance('long'));
+  assert.deepEqual(second.ledger.appearanceGenerations[0], first.ledger.appearanceGenerations[0]);
+  assert.deepEqual(second.ledger.wallets.ai_first, opened.ledger.wallets.ai_first);
+  assert.equal(second.ledger.wallets.ai_first.position.modelHash, first.ledger.wallets.ai_first.modelHash);
+  assert.deepEqual(second.ledger.journal, opened.ledger.journal);
+  const reverted = await add('ai_third', 7);
+  assert.equal(reverted.ledger.appearanceGenerations.length, 3);
+  assert.equal(reverted.ledger.wallets.ai_third.modelHash, first.ledger.wallets.ai_first.modelHash);
+  assert.deepEqual(reverted.ledger.wallets.ai_first, opened.ledger.wallets.ai_first);
+  assert.deepEqual(await (await openForwardStore({filePath})).snapshot(), {revision:8, ledger:reverted.ledger});
+
+  const tampered = JSON.parse(await readFile(filePath, 'utf8'));
+  tampered.ledger.appearanceGenerations[1].model.slow_window++;
+  await writeFile(filePath, encodeTestRecord(tampered));
+  await assert.rejects(openForwardStore({filePath}), {code:'FORWARD_STORE_CORRUPT'});
+});
+
+test('racing first allocations create one ledger and the wallet count limit preserves all balances', async t => {
+  const {directory, filePath} = await tempLedger(t);
+  const create = aiId => saveForwardAppearanceGeneration({
+    filePath, aiId, appearance:appearance(), medals:100, expectedRevision:null,
+  });
+  const outcomes = await Promise.allSettled([create('ai_one'), create('ai_two')]);
+  assert.equal(outcomes.filter(x => x.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.find(x => x.status === 'rejected').reason.code, 'FORWARD_STORE_REVISION_CONFLICT');
+  const root = await (await openForwardStore({filePath})).snapshot();
+  assert.equal(root.revision, 0);
+  assert.equal(root.ledger.unallocated, 9900);
+  assert.equal(Object.keys(root.ledger.wallets).length, 1);
+
+  const cappedFile = join(directory, 'capped.json');
+  const capped = await openForwardStore({filePath:cappedFile, initial:{initialMedals:1000,
+    allocations:Array.from({length:50}, (_, i) => ({id:`ai_${i}`, modelHash:'b'.repeat(64), medals:1})),
+  }});
+  const cappedBytes = await readFile(cappedFile);
+  await assert.rejects(saveForwardAppearanceGeneration({filePath:cappedFile, aiId:'ai_over',
+    appearance:appearance(), medals:1, expectedRevision:0,
+  }), {code:'FORWARD_STORE_ALLOCATION_REJECTED', message:/上限/});
+  assert.deepEqual(await readFile(cappedFile), cappedBytes);
+  assert.equal((await capped.snapshot()).ledger.unallocated, 950);
+});
+
+test('fsync failures cannot leave a model without its wallet or debit the same allocation twice', async t => {
+  const {directory, filePath} = await tempLedger(t);
+  const store = await openForwardStore({filePath, initial});
+  const previous = await readFile(filePath);
+  const save = expectedRevision => saveForwardAppearanceGeneration({
+    filePath, aiId:'ai_new', appearance:appearance(), medals:300, expectedRevision,
+  });
+  const tempSync = await failNextSync(t, filePath, false);
+  try {
+    await assert.rejects(save(0), {code:'EIO'});
+  } finally {tempSync.restore();}
+  assert.deepEqual(await readFile(filePath), previous);
+  assert.equal((await store.snapshot()).ledger.appearanceGenerations, undefined);
+  const dirSync = await failNextSync(t, filePath, true);
+  try {
+    await assert.rejects(save(0), {code:'FORWARD_STORE_COMMIT_UNCERTAIN'});
+  } finally {dirSync.restore();}
+  assert.deepEqual(await readdir(directory), ['ledger.json']);
+  const restored = await (await openForwardStore({filePath})).snapshot();
+  assert.equal(restored.revision, 1);
+  assert.equal(restored.ledger.appearanceGenerations[0].aiId, 'ai_new');
+  assert.equal(restored.ledger.wallets.ai_new.cash, 300);
+  assert.equal(restored.ledger.unallocated, 200);
+  await assert.rejects(save(0), {code:'FORWARD_STORE_REVISION_CONFLICT'});
+  assert.deepEqual(await save(1), {...restored, created:false});
 });

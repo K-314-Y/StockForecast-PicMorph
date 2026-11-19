@@ -3,8 +3,10 @@ import {constants} from 'node:fs';
 import {lstat, mkdir, open, realpath, rename, rmdir, unlink} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {identifyForwardAppearanceModel} from './appearance-model.mjs';
 import {
-  FORWARD_PAPER_MODE, applyForwardBatch, createForwardLedger,
+  FORWARD_AI_ID as AI_ID, FORWARD_PAPER_MODE, MAX_FORWARD_MEDALS as MAX_MEDALS, MAX_FORWARD_WALLETS,
+  allocateForwardWallet, applyForwardBatch, createForwardLedger,
   inspectForwardWallet, queueForwardOrder,
 } from './forward-paper.mjs';
 import {
@@ -17,9 +19,7 @@ const DEFAULT_DIRECTORY = join(STATE_DIRECTORY, 'node_game');
 const DEFAULT_FILE = join(DEFAULT_DIRECTORY, 'forward-ledger.json');
 const VERSION = 1;
 const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_MEDALS = 1_000_000_000_000;
 const MAX_BALANCE = Number.MAX_SAFE_INTEGER / 100;
-const AI_ID = /^[a-z][a-z0-9_-]{1,39}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ORDER_ID = /^[a-zA-Z0-9_-]{1,60}$/;
 const operations = new Map();
@@ -122,14 +122,32 @@ function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
   }
 }
 
+function validateAppearanceGenerations(generations, wallets) {
+  requireValid(Array.isArray(generations) && generations.length > 0 &&
+    generations.length <= Object.keys(wallets).length, '外見モデルの世代数');
+  const ids = new Set();
+  let previousSettings;
+  for (const generation of generations) {
+    requireValid(fields(generation, 'aiId', 'model_version', 'model') && matches(generation.aiId, AI_ID) &&
+      Object.hasOwn(wallets, generation.aiId) && !ids.has(generation.aiId), '外見モデルのAI ID');
+    const {model, modelHash} = identifyForwardAppearanceModel(generation);
+    const settings = JSON.stringify(model);
+    requireValid(modelHash === wallets[generation.aiId].modelHash && settings !== previousSettings, '外見モデルの設定');
+    ids.add(generation.aiId);
+    previousSettings = settings;
+  }
+}
+
 function validateLedger(ledger) {
   const market = ledger?.mode === MARKET_PAPER_MODE;
+  const hasGenerations = record(ledger) && Object.hasOwn(ledger, 'appearanceGenerations');
   requireValid(fields(ledger, 'mode', 'initialMedals', 'unallocated', 'wallets', 'pending', 'journal',
-    'lastBatchAt', ...(market ? ['lastTradeAt'] : [])) && (market || ledger.mode === FORWARD_PAPER_MODE) &&
+    'lastBatchAt', ...(market ? ['lastTradeAt'] : []), ...(hasGenerations ? ['appearanceGenerations'] : [])) &&
+    (market || ledger.mode === FORWARD_PAPER_MODE) &&
     integer(ledger.initialMedals, 1, MAX_MEDALS) && integer(ledger.unallocated, 0, MAX_MEDALS) &&
     record(ledger.wallets) && Array.isArray(ledger.pending) && Array.isArray(ledger.journal), '形式');
   const wallets = Object.entries(ledger.wallets);
-  requireValid(wallets.length >= 1 && wallets.length <= 50 && ledger.pending.length <= wallets.length,
+  requireValid(wallets.length >= 1 && wallets.length <= MAX_FORWARD_WALLETS && ledger.pending.length <= wallets.length,
     '財布・予約注文の件数');
   const lastBatch = ledger.lastBatchAt === null ? -Infinity : timestamp(ledger.lastBatchAt);
   if (market) {
@@ -153,6 +171,7 @@ function validateLedger(ledger) {
     allocated += wallet.initial;
   }
   requireValid(allocated === ledger.initialMedals, '開始メダル配分');
+  if (hasGenerations) validateAppearanceGenerations(ledger.appearanceGenerations, ledger.wallets);
   const orderIds = new Set();
   validatePending(ledger.pending, ledger.wallets, orderIds);
   validateJournal(ledger.journal, ledger.wallets, lastBatch, orderIds, ledger.lastTradeAt);
@@ -309,6 +328,48 @@ function uninitialized() {
   return storeError('FORWARD_STORE_UNINITIALIZED', '仮想台帳がありません。初期メダル配分を明示してください');
 }
 
+function revisionConflict() {
+  return storeError('FORWARD_STORE_REVISION_CONFLICT', '仮想台帳の期待 revision が一致しません');
+}
+
+export const APPEARANCE_STARTING_MEDALS = 10_000;
+
+/** Append a frozen model and its funded wallet in one durable commit. */
+export async function saveForwardAppearanceGeneration({
+  filePath = DEFAULT_FILE, aiId, appearance, medals, expectedRevision,
+}) {
+  requireValid(matches(aiId, AI_ID) && integer(medals, 1, MAX_MEDALS), 'AI ID・配分');
+  requireValid(expectedRevision === null || integer(expectedRevision, 0, Number.MAX_SAFE_INTEGER), 'revision');
+  const {model_version, model, modelHash} = identifyForwardAppearanceModel(appearance);
+  filePath = resolve(filePath);
+  if (filePath === DEFAULT_FILE && expectedRevision === null) await prepareDefaultDirectory();
+  return withLedgerLock(filePath, async () => {
+    const current = await readSnapshot(filePath);
+    if ((current?.revision ?? null) !== expectedRevision) throw revisionConflict();
+    const generations = current?.ledger.appearanceGenerations ?? [];
+    const latest = generations.at(-1);
+    if (latest && JSON.stringify(identifyForwardAppearanceModel(latest).model) === JSON.stringify(model)) {
+      // A previous attempt may have reached rename before reporting an fsync error.
+      await syncDirectory(dirname(filePath));
+      return {...current, created: false};
+    }
+    requireValid(!current || current.revision < Number.MAX_SAFE_INTEGER, 'revision の上限');
+    const allocation = {id: aiId, modelHash, medals};
+    let ledger;
+    try {
+      ledger = current ? allocateForwardWallet(current.ledger, allocation) :
+        createForwardLedger({initialMedals: APPEARANCE_STARTING_MEDALS, allocations: [allocation]});
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw storeError('FORWARD_STORE_ALLOCATION_REJECTED', error.message, error);
+    }
+    ledger.appearanceGenerations = [...generations, {aiId, model_version, model}];
+    const next = {revision: current ? current.revision + 1 : 0, ledger};
+    await writeSnapshot(filePath, next);
+    return {...next, created: true};
+  });
+}
+
 /**
  * Virtual ledger for internal server callers on a local filesystem. An optional
  * filePath for tests requires an existing parent. Pass initial ({initialMedals,
@@ -358,9 +419,7 @@ export async function openForwardStore({
   function update(expectedRevision, transition) {
     return withLedgerLock(filePath, async () => {
       const current = await readExisting();
-      if (expectedRevision !== current.revision) {
-        throw storeError('FORWARD_STORE_REVISION_CONFLICT', '仮想台帳の期待 revision が一致しません');
-      }
+      if (expectedRevision !== current.revision) throw revisionConflict();
       requireValid(current.revision < Number.MAX_SAFE_INTEGER, 'revision の上限');
       const ledger = await transition(current.ledger);
       const next = {revision: current.revision + 1, ledger};

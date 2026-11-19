@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import test from 'node:test';
-import {deriveAppearanceModel} from '../../game_runtime/appearance-model.mjs';
+import {deriveAppearanceModel, identifyForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
 import {APPROACHES, createCompanionStore} from '../../game_runtime/companion.mjs';
 import {LOOK_CHOICES, createLookStore} from '../../game_runtime/looks.mjs';
 import {createGameServer, pythonPredict} from '../../game_runtime/server.mjs';
@@ -195,4 +195,106 @@ test('editing the look during opted-in practice invalidates the result and ticke
   assert.equal(result.status, 409);
   assert.match(result.data.error, /外見変更/);
   assert.equal(result.data.training_ticket, undefined);
+});
+
+test('forward AI API funds immutable engine models from saved parts and restores each generation', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'forward-ai-api-'));
+  t.after(() => rm(dir, {recursive:true, force:true}));
+  const forwardLedgerFile = join(dir, 'forward-ledger.json');
+  const unavailable = () => assert.fail('wallet API must work without market or upstream model access');
+  const serve = () => createGameServer({forwardLedgerFile,
+    companionStore:createCompanionStore({file:join(dir, 'companion.json')}),
+    lookStore:createLookStore({file:join(dir, 'looks.json')}),
+    loadSnapshot:unavailable, predict:unavailable, historicalPredict:unavailable,
+  });
+  const path = '/api/companion/forward-ai';
+  let server = serve();
+  const get = () => request(server, path);
+  const post = body => request(server, path, body);
+  const input = {aiId:'ai_first', medals:300, expected_revision:null, companion_revision:1, look_revision:1};
+  const empty = await get();
+  assert.equal(empty.status, 200);
+  assert.equal(empty.data.mode, 'FORWARD_WALLETS_MARKET_UNCONNECTED');
+  assert.equal(empty.data.revision, null);
+  assert.equal(empty.data.unallocated, 10_000);
+  assert.equal((await post(input)).status, 409);
+  assert.deepEqual(await readdir(dir), []);
+  for (const change of [{aiId:['ai_first']}, {aiId:'../wallet'}, {aiId:'__proto__'}, {aiId:'a'.repeat(41)},
+    {medals:0}, {medals:-1}, {medals:1.5}, {medals:'300'}, {medals:1_000_000_000_001},
+    {expected_revision:'0'}, {modelHash:'a'.repeat(64)}, {look:LOOK}, {initialMedals:20_000}]) {
+    assert.equal((await post({...input, ...change})).status, 400);
+  }
+  assert.deepEqual(await readdir(dir), []);
+
+  assert.equal((await request(server, '/api/companion', {expected_revision:0, companion:COMPANION})).status, 200);
+  assert.equal((await request(server, '/api/looks', {expected_revision:0, look:{...LOOK, accessory:'bad'}})).status, 400);
+  assert.equal((await post(input)).status, 409);
+  assert.equal((await request(server, '/api/looks', {expected_revision:0, look:LOOK})).status, 200);
+  assert.equal((await post({...input, look_revision:0})).status, 409);
+  assert.equal((await post({...input, medals:10_001})).status, 409);
+  assert.deepEqual((await get()).data, empty.data);
+
+  const first = await post(input);
+  assert.equal(first.status, 201);
+  assert.equal(first.data.currentAiId, input.aiId);
+  assert.equal(first.data.revision, 0);
+  assert.equal(first.data.unallocated, 9700);
+  const [frozen] = first.data.generations;
+  const preview = (await request(server, PREVIEW)).data;
+  assert.equal(frozen.model_version, preview.model_version);
+  assert.deepEqual(frozen.model.plugin_weights, preview.model.plugin_weights);
+  assert.equal(frozen.model.risk_fraction, preview.model.risk_fraction);
+  assert.deepEqual(first.data.wallets.ai_first, {initial:300, cash:300, position:null, status:'ACTIVE',
+    modelHash:identifyForwardAppearanceModel(frozen).modelHash});
+  const originalBytes = await readFile(forwardLedgerFile);
+  assert.equal((await post(input)).status, 409);
+
+  const cosmetic = {...COMPANION, name:'変更後の名前', hair_color:'#81807f', clothing_color:'#7f8180', approach:'trend'};
+  assert.equal((await request(server, '/api/companion', {expected_revision:1, companion:cosmetic})).status, 200);
+  const next = {...input, expected_revision:0, companion_revision:2, aiId:'ai_next', medals:500};
+  const unchanged = await post(next);
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.data, {...first.data, created:false});
+  assert.deepEqual(await readFile(forwardLedgerFile), originalBytes);
+
+  const changed = {...LOOK, hair_style:'long'};
+  assert.equal((await request(server, '/api/looks', {expected_revision:1, look:changed})).status, 200);
+  assert.equal((await post(next)).status, 409);
+  const updated = {...next, look_revision:2};
+  assert.equal((await post({...updated, aiId:'ai_first'})).status, 409);
+  assert.equal((await post({...updated, medals:9701})).status, 409);
+  assert.deepEqual(await readFile(forwardLedgerFile), originalBytes);
+  const second = await post(updated);
+  assert.equal(second.status, 201);
+  assert.equal(second.data.currentAiId, 'ai_next');
+  assert.equal(second.data.revision, 1);
+  assert.equal(second.data.unallocated, 9200);
+  assert.deepEqual(second.data.generations[0], frozen);
+  assert.deepEqual(second.data.wallets.ai_first, first.data.wallets.ai_first);
+  assert.equal(second.data.wallets.ai_next.cash, 500);
+  assert.notEqual(second.data.wallets.ai_next.modelHash, first.data.wallets.ai_first.modelHash);
+
+  server = serve();
+  assert.deepEqual((await get()).data, {...second.data, created:false});
+  const {model} = (await get()).data.generations[0];
+  const plan = await pythonPredict({base_model:MODEL, models:{mine:model, owl:MODEL, turtle:MODEL}});
+  assert.equal(plan.signals.length, 12);
+  assert.deepEqual(plan.models.mine.plugin_weights, frozen.model.plugin_weights);
+  assert.equal(plan.models.mine.risk_fraction, frozen.model.risk_fraction);
+});
+
+test('forward model hashes use canonical engine settings and the appearance rule version', () => {
+  const {model_version, model} = deriveAppearanceModel(LOOK, COLORS);
+  const full = {...MODEL, ...model};
+  const hash = settings => identifyForwardAppearanceModel(settings).modelHash;
+  const original = hash({model_version, model:full});
+  assert.match(original, /^[a-f0-9]{64}$/);
+  const reverse = obj => Object.fromEntries(Object.entries(obj).reverse());
+  assert.equal(hash({model_version, model:reverse({...full,
+    plugin_weights:reverse(full.plugin_weights), plugin_strengths:reverse(full.plugin_strengths),
+  })}), original);
+  assert.notEqual(hash({model_version:model_version.replace('-v1_', '-v2_'), model:full}), original);
+  assert.notEqual(hash({model_version, model:{...full, slow_window:10}}), original);
+  assert.throws(() => hash({model_version, model:{...full, risk_fraction:.51}}), /一致/);
+  assert.throws(() => hash({model_version, model:{...full, risk_fraction:.501}}), /一致/);
 });

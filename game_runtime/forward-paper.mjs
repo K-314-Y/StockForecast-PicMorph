@@ -10,8 +10,9 @@ import {
 } from './forward-market-guard.mjs';
 
 export const FORWARD_PAPER_MODE = 'FORWARD_PAPER_CORE_UNCONNECTED';
-const MAX_MEDALS = 1_000_000_000_000;
-const AI_ID = /^[a-z][a-z0-9_-]{1,39}$/;
+export const MAX_FORWARD_MEDALS = 1_000_000_000_000;
+export const MAX_FORWARD_WALLETS = 50;
+export const FORWARD_AI_ID = /^[a-z][a-z0-9_-]{1,39}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ORDER_ID = /^[a-zA-Z0-9_-]{1,60}$/;
 const EPS = 1e-8;
@@ -19,7 +20,7 @@ const EPS = 1e-8;
 const fail = message => { throw new RangeError(message); };
 function medals(value, name, allowZero = false) {
   if (!Number.isSafeInteger(value) || value < (allowZero ? 0 : 1) ||
-      value > MAX_MEDALS) fail(name + ' が不正です');
+      value > MAX_FORWARD_MEDALS) fail(name + ' が不正です');
   return value;
 }
 function dateMs(value) {
@@ -55,6 +56,28 @@ function walletEquity(wallet) {
   return equity;
 }
 
+function allocateWallet(ledger, item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item) ||
+      typeof item.id !== 'string' || !FORWARD_AI_ID.test(item.id) ||
+      typeof item.modelHash !== 'string' || !HASH.test(item.modelHash) ||
+      Object.hasOwn(ledger.wallets, item.id)) fail('AIの識別情報が不正です');
+  if (Object.keys(ledger.wallets).length >= MAX_FORWARD_WALLETS) fail('AI財布が上限に達しています');
+  const amount = medals(item.medals, 'AIへの配分');
+  if (amount > ledger.unallocated) fail('配分が未配分メダルを超えています');
+  ledger.unallocated -= amount;
+  ledger.wallets[item.id] = {
+    modelHash: item.modelHash, initial: amount, cash: amount,
+    position: null, status: 'ACTIVE',
+  };
+}
+
+export function allocateForwardWallet(ledger, item) {
+  if (!ledgerMode(ledger?.mode)) fail('仮想取引台帳が不正です');
+  const next = structuredClone(ledger);
+  allocateWallet(next, item);
+  return next;
+}
+
 /**
  * All medals are virtual. Allocation never increases total starting balance.
  * Model versions are frozen identifiers so an edited character starts a new AI.
@@ -63,31 +86,19 @@ export function createForwardLedger({initialMedals, allocations, mode = FORWARD_
   if (!ledgerMode(mode)) fail('仮想取引台帳のモードが不正です');
   medals(initialMedals, '開始メダル');
   if (!Array.isArray(allocations) || allocations.length < 1 ||
-      allocations.length > 50) fail('AIの配分が不正です');
-  const wallets = Object.create(null);
-  let assigned = 0;
-  for (const item of allocations) {
-    if (!item || typeof item !== 'object' || Array.isArray(item) ||
-        !AI_ID.test(item.id) || !HASH.test(item.modelHash) ||
-        Object.hasOwn(wallets, item.id)) fail('AIの識別情報が不正です');
-    const amount = medals(item.medals, 'AIへの配分');
-    assigned += amount;
-    if (assigned > initialMedals) fail('配分が所持メダルを超えています');
-    wallets[item.id] = {
-      modelHash: item.modelHash, initial: amount, cash: amount,
-      position: null, status: 'ACTIVE',
-    };
-  }
-  return {
+      allocations.length > MAX_FORWARD_WALLETS) fail('AIの配分が不正です');
+  const ledger = {
     mode,
     initialMedals,
-    unallocated: initialMedals - assigned,
-    wallets,
+    unallocated: initialMedals,
+    wallets: Object.create(null),
     pending: [],
     journal: [],
     lastBatchAt: null,
     ...(mode === MARKET_PAPER_MODE ? {lastTradeAt: {}} : {}),
   };
+  for (const item of allocations) allocateWallet(ledger, item);
+  return ledger;
 }
 
 /**
