@@ -7,6 +7,7 @@ import {chmod,copyFile,link,mkdir,mkdtemp,readFile,readdir,rename,rm,symlink,wri
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
+import {createCharacterDemoCatalog} from '../../game_runtime/character-demo-catalog.mjs';
 import {createGameServer} from '../../game_runtime/server.mjs';
 
 const API='/api/character-demos';
@@ -128,6 +129,21 @@ test('gallery omits corrupt or linked entries and rechecks the PNG when requeste
   };
 
   assert.equal((await list()).length,1);
+  const ready=join(folder,'character_ready_6frames.png');
+  const readyBytes=await readFile(ready);
+  const changedReady=Buffer.from(readyBytes);
+  changedReady[40]^=1;
+  await writeFile(ready,changedReady);
+  await assertHidden(); // Even an intact body is unavailable when ready is corrupt.
+  await rm(ready);
+  const readyOutside=join(root,'ready.png');
+  await writeFile(readyOutside,readyBytes,{mode:0o600});
+  await symlink(readyOutside,ready);
+  await assertHidden();
+  await rm(ready);
+  await writeFile(ready,readyBytes,{mode:0o600});
+  assert.equal((await call(image)).status,200);
+
   const changed=Buffer.from(original);
   changed[40]^=1;
   await writeFile(part,changed);
@@ -175,4 +191,41 @@ test('gallery omits corrupt or linked entries and rechecks the PNG when requeste
   assert.equal((await list()).length,1);
   await rm(demoPath);
   await assertHidden();
+});
+
+test('catalog shares only the active scan and handles 128 unrelated entries',async t=>{
+  const {catalogRoot,helper,generate}=await fixture(t);
+  const catalog=createCharacterDemoCatalog(catalogRoot);
+  const first=catalog.list();
+  assert.strictEqual(catalog.list(),first);
+  assert.deepEqual(await first,[]);
+  const {generated_id}=await generate();
+  await helper('register',{generated_id});
+  await Promise.all(Array.from({length:128},(_,i)=>mkdir(join(catalogRoot,'unrelated-'+i))));
+  const next=catalog.list();
+  assert.notStrictEqual(next,first);
+  assert.strictEqual(catalog.list(),next);
+  assert.deepEqual((await next).map(item=>item.generated_id),[generated_id]);
+});
+
+test('parallel PNG reads are limited and released for the next request',async t=>{
+  const {call,helper,generate}=await fixture(t);
+  const {generated_id}=await generate();
+  await helper('register',{generated_id});
+  const path=API+'/'+generated_id+'/body.png';
+  const responses=await Promise.all(Array.from({length:12},()=>call(path)));
+  assert.ok(responses.some(response=>response.status===200));
+  assert.ok(responses.some(response=>response.status===429));
+  for(const response of responses) {
+    assert.ok([200,429].includes(response.status));
+    assert.equal(response.headers.get('cache-control'),'no-store');
+    assert.equal(response.headers.get('cross-origin-resource-policy'),'same-origin');
+    assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+    if(response.status===429) {
+      assert.equal(response.headers.get('retry-after'),'1');
+      assert.match(response.headers.get('content-type'),/^application\/json/);
+    }
+    await response.arrayBuffer();
+  }
+  assert.equal((await call(path)).status,200);
 });

@@ -22,6 +22,7 @@ const DEMOS_API = '/api/character-demos';
 const DEMO_PARTS = {base:'body',ready:'ready',happy:'happy',cautious:'cautious'};
 const MAX_DEMO_BYTES = 512 * 1024;
 let galleryRequest;
+let refreshWhenIdle = false;
 let demoLoad;
 let pack = null;
 let epoch = 0;
@@ -71,6 +72,10 @@ function setBusy(value) {
   }
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
+  if(!value && refreshWhenIdle) {
+    refreshWhenIdle=false;
+    void refreshGallery();
+  }
 }
 function checkedOffset(id) {
   const value = Number($(id).value);
@@ -177,6 +182,7 @@ function inspect(images, frames) {
 }
 async function loadPack(isSample) {
   if (busy) return;
+  clearDemoStatus();
   const myEpoch=++epoch;
   const temp={};
   setBusy(true);
@@ -272,6 +278,7 @@ function displayLoaded(next,frames,isSample=false){
 }
 async function loadGeneratedSheets(){
   if(busy)return;
+  clearDemoStatus();
   const myEpoch=++epoch;
   const raw={};const transformed={};
   setBusy(true);
@@ -314,6 +321,9 @@ $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 function demoStatus(message) {
   $('demoStatus').textContent=message;
 }
+function clearDemoStatus() {
+  if(!$('demoList').hidden) demoStatus('');
+}
 
 // The gallery uses only same-origin GETs. Each response is local generated
 // material, and image requests begin only after an explicit selection.
@@ -322,7 +332,9 @@ function fetchDemo(url,signal) {
 }
 
 async function refreshGallery() {
+  if(busy) return;
   galleryRequest?.abort();
+  const list=$('demoList');
   const request=new AbortController();
   galleryRequest=request;
   const timeout=setTimeout(()=>request.abort(),8000);
@@ -330,19 +342,20 @@ async function refreshGallery() {
     const response=await fetchDemo(DEMOS_API,request.signal);
     if(!response.ok) throw Error('Catalog unavailable');
     const entries=await response.json();
-    if(request!==galleryRequest) return;
+    if(request!==galleryRequest || busy) return;
     if(!Array.isArray(entries) || entries.length>32) throw Error('Invalid catalog');
-    const list=$('demoList');
     const cards=document.createDocumentFragment();
+    const seen=new Set();
     for(const item of entries) {
       if(typeof item?.name!=='string' || typeof item.generated_id!=='string' ||
           item.generated_id.length!==35 || !/^cp_[0-9a-f]{32}$/.test(item.generated_id) ||
-          item.engine!=='original-template') continue;
+          item.engine!=='original-template' || seen.has(item.generated_id)) continue;
+      seen.add(item.generated_id);
       const card=document.createElement('li');
       const name=document.createElement('strong');
       name.textContent=item.name;
       const engine=document.createElement('small');
-      engine.textContent='engine='+item.engine;
+      engine.textContent='図形で作ったデモ';
       const button=document.createElement('button');
       button.type='button';
       button.textContent='このキャラで試す';
@@ -356,10 +369,18 @@ async function refreshGallery() {
     list.hidden=!list.children.length;
     demoStatus(list.hidden?'登録されたデモはありません。':'');
   } catch {
-    if(request===galleryRequest) demoStatus('登録デモを確認できません。ZIPやPNGでも試せます。');
+    if(request===galleryRequest && !busy) {
+      list.replaceChildren();
+      list.hidden=true;
+      demoStatus('登録デモを確認できません。ZIPやPNGでも試せます。');
+    }
   } finally {
     clearTimeout(timeout);
-    if(request===galleryRequest) galleryRequest=undefined;
+    if(request===galleryRequest) {
+      galleryRequest=undefined;
+      // Initial discovery can finish during a manual load before any cards exist.
+      if(busy && list.hidden) refreshWhenIdle=true;
+    }
   }
 }
 
@@ -390,6 +411,7 @@ async function loadRegisteredDemo(item,button) {
     displayLoaded(next,6);
     for(const key of Object.keys(temp)) delete temp[key];
     demoStatus('「'+item.name+'」を読み込みました。表情を切り替えて試せます。');
+    status('登録済みキャラの6コマを表示しています。');
   } catch {
     if(myEpoch===epoch) demoStatus('デモを読み込めませんでした。ZIPやPNGでも試せます。');
   } finally {
@@ -405,7 +427,7 @@ async function loadRegisteredDemo(item,button) {
 function finishDemoLoad() {
   if(!demoLoad) return;
   const cancel=$('cancelDemo');
-  if(document.activeElement===cancel) demoLoad.button.focus();
+  if(document.activeElement===cancel && demoLoad.button.isConnected) demoLoad.button.focus();
   demoLoad.controller.abort();
   demoLoad=undefined;
   cancel.hidden=true;
@@ -426,6 +448,7 @@ window.addEventListener('pageshow',event=>{
 // The archive never leaves this browser and no extracted files are saved.
 async function importCharacterZip(file){
   if(!file || busy)return;
+  clearDemoStatus();
   const myEpoch=++epoch;
   const temp={};
   setBusy(true);
@@ -465,7 +488,7 @@ $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
   ++epoch;
   finishDemoLoad();
-  if(!$('demoList').hidden) demoStatus('');
+  clearDemoStatus();
   setBusy(false);
   resetPack();
   for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
@@ -487,6 +510,7 @@ $('frames').addEventListener('change',()=>{
   if (pack || busy) {
     ++epoch;
     if(demoLoad) demoStatus('デモの読み込みを中止しました。');
+    else clearDemoStatus();
     finishDemoLoad();setBusy(false);resetPack();
     status('コマ数が変わりました。画像をもう一度読み込んでください。');
   }
@@ -498,6 +522,7 @@ document.addEventListener('visibilitychange',startClock);
 reduced.addEventListener('change',startClock);
 window.addEventListener('pagehide',()=>{
   galleryRequest?.abort();galleryRequest=undefined;
+  refreshWhenIdle=false;
   finishDemoLoad();
   ++epoch;resetPack();setBusy(false);
 });

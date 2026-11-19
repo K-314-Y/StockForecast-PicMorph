@@ -14,6 +14,7 @@ const PROVENANCE='Drawn from project-authored geometric primitives using Python 
 const ID=/^cp_[0-9a-f]{32}$/;
 const MOODS=['body','ready','happy','cautious'];
 const MAX_ENTRIES=32;
+const MAX_SCANNED=MAX_ENTRIES*5;
 const MAX_JSON=4096;
 const MAX_PNG=512*1024;
 const OWNER=process.geteuid();
@@ -105,49 +106,63 @@ async function readPart(folder,files,part) {
   return buffer;
 }
 
+async function verifyParts(folder,files,selected) {
+  let image;
+  for(const part of MOODS) {
+    const bytes=await readPart(folder,files,part);
+    if(part===selected) image=bytes;
+  }
+  return image;
+}
+
 export function createCharacterDemoCatalog(catalogRoot=DEFAULT_ROOT) {
   const root=resolve(catalogRoot);
-  const withRoot=read=>withDirectory(dirname(root),info=>info.isDirectory(),parent=>
+  const withRoot=read=>withDirectory(dirname(root),info=>info.isDirectory() && info.uid===OWNER,parent=>
     withDirectory(at(parent,basename(root)),validDirectory,read));
   const withEntry=(directory,id,read)=>withDirectory(at(directory,id),validDirectory,read);
+  let pendingList;
+
+  async function readList() {
+    try {
+      return await withRoot(async directory=>{
+        const demos=[];
+        const entries=await opendir(at(directory,'.'));
+        let scanned=0,candidates=0;
+        for await(const entry of entries) {
+          // Allow 128 unrelated entries alongside the generator's 32 IDs.
+          if(++scanned>MAX_SCANNED) break;
+          if(!isId(entry.name)) continue;
+          if(++candidates>MAX_ENTRIES) break;
+          try {
+            const metadata=await withEntry(directory,entry.name,async folder=>{
+              const item=await readEntry(folder,entry.name);
+              await verifyParts(folder,item.files);
+              return item.metadata;
+            });
+            demos.push(metadata);
+          } catch {
+            // An invalid or concurrently removed entry does not hide other demos.
+          }
+        }
+        return demos.sort((a,b)=>a.name.localeCompare(b.name) ||
+          a.generated_id.localeCompare(b.generated_id));
+      });
+    } catch {
+      return [];
+    }
+  }
 
   return {
-    async list() {
-      try {
-        return await withRoot(async directory=>{
-          const demos=[];
-          const entries=await opendir(at(directory,'.'));
-          let scanned=0,candidates=0;
-          for await(const entry of entries) {
-            // The generator caps its store at 32 entries plus one staging directory.
-            if(++scanned>MAX_ENTRIES+1) break;
-            if(!isId(entry.name)) continue;
-            if(++candidates>MAX_ENTRIES) break;
-            try {
-              const metadata=await withEntry(directory,entry.name,async folder=>{
-                const item=await readEntry(folder,entry.name);
-                for(const part of MOODS) await readPart(folder,item.files,part);
-                return item.metadata;
-              });
-              demos.push(metadata);
-              if(demos.length===MAX_ENTRIES) break;
-            } catch {
-              // An invalid or concurrently removed entry does not hide other demos.
-            }
-          }
-          return demos.sort((a,b)=>a.name.localeCompare(b.name) ||
-            a.generated_id.localeCompare(b.generated_id));
-        });
-      } catch {
-        return [];
-      }
+    list() {
+      pendingList ??= readList().finally(()=>{pendingList=undefined;});
+      return pendingList;
     },
     async image(id,part) {
       if(!isId(id) || !MOODS.includes(part)) return null;
       try {
         return await withRoot(directory=>withEntry(directory,id,async folder=>{
           const {files}=await readEntry(folder,id);
-          return readPart(folder,files,part);
+          return verifyParts(folder,files,part);
         }));
       } catch {
         return null;

@@ -308,6 +308,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   }
   if (chatgptDialogue !== null && typeof chatgptDialogue !== 'function') throw Error('Invalid chatgptDialogue injection');
   const characterDemos=createCharacterDemoCatalog(catalogRoot);
+  let demoImagesInFlight=0;
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
@@ -354,7 +355,17 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         if (rawPath===CHARACTER_DEMOS_API) return json(res,200,await characterDemos.list());
         const route=/^\/api\/character-demos\/(cp_[0-9a-f]{32})\/(body|ready|happy|cautious)\.png$/.exec(rawPath);
         if (route) {
-          const bytes=await characterDemos.image(route[1],route[2]);
+          if (demoImagesInFlight>=2) {
+            res.setHeader('Retry-After','1');
+            return json(res,429,{error:'デモ画像を読み込み中です。少し待ってからお試しください。'});
+          }
+          let bytes;
+          demoImagesInFlight++;
+          try {
+            bytes=await characterDemos.image(route[1],route[2]);
+          } finally {
+            demoImagesInFlight--;
+          }
           if (bytes) {
             res.writeHead(200,{'Content-Type':'image/png','Content-Length':bytes.length,
               'Cache-Control':'no-store','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer',

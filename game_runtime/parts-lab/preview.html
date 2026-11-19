@@ -54,7 +54,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .generated-import summary{font-weight:700;cursor:pointer;line-height:1.65;padding:3px}
 .generated-import summary:focus-visible{outline:3px solid #f9dc8b}
 
-@media(max-width:750px){.layout{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:750px){.layout{grid-template-columns:minmax(0,1fr)}.preview-panel{order:-1}}
 @media(max-width:460px){.files,.controls{grid-template-columns:minmax(0,1fr)}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 </style>
@@ -67,7 +67,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて、待機中の動きと表情の切替を試せます。画像はブラウザ内だけで使い、アップロードも保存もしません。</p>
 <div class="layout">
 <section class="panel" aria-labelledby="fileTitle">
-<h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
+<h2 id="fileTitle">自分のPNGを選ぶ（手動）</h2>
 <div class="zip-import" aria-label="ZIP一括読み込み">
 <p><strong>おすすめ：ZIPを1回選ぶだけ</strong></p>
 <p class="hint">前に渡した「ラベンダーキャラ」のZIPを選ぶと、中の <code>body / ready / happy / cautious</code> を自動判別して再生します。展開や4枚の選択は不要です。</p>
@@ -118,10 +118,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p id="status" role="status" aria-live="polite">まだ画像は読み込まれていません。</p>
 <p class="caution">自作または使用・改変の許可がある絵だけを読み込んでください。VRChatアバターや他人のイラストを少し改変しただけでは、利用許可の代わりになりません。</p>
 </section>
-<section class="panel" aria-labelledby="previewTitle">
-<h2 id="previewTitle">2. 動きと表情を確認</h2>
+<section class="panel preview-panel" aria-labelledby="previewTitle">
+<h2 id="previewTitle">登録キャラをすぐ試す・動きと表情を確認</h2>
 <section class="demo-gallery">
-<h3 lang="en">Registered Demo Gallery</h3>
+<h3>登録済みキャラ一覧</h3>
+<p class="hint">このキャラは図形を組み合わせて作った見本です。ここではAI画像生成や保存、株価予測との連動はしません。</p>
 <ul id="demoList" hidden></ul>
 <p id="demoStatus" class="hint" role="status">登録デモを確認しています…</p>
 <button id="cancelDemo" type="button" hidden>読み込みを中止</button>

@@ -105,6 +105,8 @@ test('generated 3-by-2 character sheets are opt-in and converted locally to six 
 
 test('one ZIP file auto-loads body and mood images without uploads',()=>{
   assert.match(html,/id="zipFile" type="file"/);
+  assert.match(html,/class="panel preview-panel" aria-labelledby="previewTitle"/);
+  assert.match(html,/@media\(max-width:750px\)\{[^}]*\}\.preview-panel\{order:-1\}/);
   assert.match(html,/ZIPを1回選ぶだけ/);
   assert.match(script,/extractCharacterZip\(file\)/);
   assert.match(script,/displayLoaded\(next,6\)/);
