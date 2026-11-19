@@ -144,7 +144,7 @@ test('the single original scene is the first game panel, outside advanced traini
     if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
   }
   const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
-  assert.deepEqual(buttons.map(node=>node.id),['quickCustomize','quickArtwork','hatchIdleToggle']);
+  assert.deepEqual(buttons.map(node=>node.id),['quickArtwork','quickCustomize','hatchIdleToggle']);
   for(const button of buttons)assert.match(button.attributes,/type="button"/);
   for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
     assert.ok(get(id).parents.includes('simpleHome'),id);
@@ -153,6 +153,37 @@ test('the single original scene is the first game panel, outside advanced traini
     assert.ok(get(id).parents.includes('advancedEntry'),id);
   assert.match(html,/未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示/);
   assert.match(html,/髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存/);
+});
+
+test('advanced entry groups appearance and prediction in separate disclosures and forms',()=>{
+  const nodes=htmlNodes();
+  const get=id=>nodes.find(node=>node.id===id);
+  for(const [studio,contents] of [
+    ['appearanceStudio',['appearanceBasicsForm','lookControls','artworkControls','artworkWorkshop','skinControls']],
+    ['predictionStudio',['companionControls','companionForm','brainControls']],
+  ]) {
+    assert.equal(get(studio).tag,'details');
+    assert.equal(get(studio).parents.at(-1),'advancedEntry');
+    assert.match(get(studio).attributes,/name="creator-studio"/);
+    assert.doesNotMatch(get(studio).attributes,/\bopen\b/);
+    for(const id of contents) {
+      assert.deepEqual(get(id).parents.filter(parent=>parent?.endsWith('Studio')),[studio],id);
+    }
+  }
+  for(const [form,fields,save] of [
+    ['appearanceBasicsForm',['creatorName','creatorHair','creatorClothing'],'saveAppearanceBasics'],
+    ['companionForm',['creatorApproach','creatorRisk'],'saveCompanion'],
+  ]) {
+    assert.equal(get(form).tag,'form');
+    assert.doesNotMatch(get(form).attributes,/\bnovalidate\b/);
+    const controls=nodes.filter(node=>node.parents.includes(form) && /^creator(?:Name|Hair|Clothing|Approach|Risk)$/.test(node.id));
+    assert.deepEqual(controls.map(node=>node.id),fields);
+    assert.ok(get(save).parents.includes(form));
+    assert.match(get(save).attributes,/type="submit"/);
+  }
+  assert.ok(get('companionReturn').parents.includes('companionForm'));
+  for(const id of ['play','quickForm','modelLabSection','modelShopSection'])
+    assert.ok(!get(id).parents.some(parent=>parent?.endsWith('Studio')),id);
 });
 
 test('advanced mode starts collapsed and easy practice leaves it collapsed',async()=>{
@@ -191,11 +222,14 @@ test('both front editing actions precede the short save explanation',()=>{
   const heading=front.find(node=>node.id==='frontCharacterTitle');
   const paragraphs=front.filter(node=>node.tag==='p'&&node.offset>heading.offset);
   assert.equal(paragraphs.length,2);
-  for(const id of ['quickCustomize','quickArtwork']) {
+  for(const [id,studio] of [['quickCustomize','predictionStudio'],['quickArtwork','appearanceStudio']]) {
     assert.equal(nodes.filter(node=>node.id===id).length,1,id);
     const button=front.find(node=>node.id===id);
     assert.equal(button.tag,'button');
     assert.match(button.attributes,/type="button"/);
+    assert.ok(button.attributes.includes('aria-controls="'+studio+'"'));
+    assert.ok(front.some(node=>node.id===id+'Help'));
+    assert.ok(button.attributes.includes('aria-describedby="'+id+'Help"'));
     assert.ok(button.offset>heading.offset);
     assert.ok(button.offset<paragraphs[0].offset,id+' must be before explanatory copy');
   }
@@ -206,16 +240,23 @@ test('both front editing actions precede the short save explanation',()=>{
 test('front actions reuse editor and artwork navigation, focus without saves or mutations',async()=>{
   const {get,fire,calls,storageWrites,scrolls,document}=await mount();
   const before=calls.slice();
-  for(const [button,target,opened] of [
-    ['quickCustomize','companionEditorTitle',['advancedEntry','companionControls']],
-    ['quickArtwork','artworkTitle',['advancedEntry','artworkControls','artworkWorkshop']],
+  for(const [button,target,studio,closed,children] of [
+    ['quickCustomize','companionEditorTitle','predictionStudio','appearanceStudio',['companionControls']],
+    ['quickArtwork','appearanceStudioTitle','appearanceStudio','predictionStudio',['lookControls','artworkControls']],
+    ['switchToPrediction','companionEditorTitle','predictionStudio','appearanceStudio',['companionControls']],
+    ['switchToAppearance','appearanceStudioTitle','appearanceStudio','predictionStudio',['lookControls','artworkControls']],
   ]) {
+    const opened=['advancedEntry',studio,...children];
     for(const id of opened)get(id).open=false;
+    get(closed).open=true;
     await fire(button);
     for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(get(closed).open,false);
+    assert.equal(get('artworkWorkshop').open,false);
     assert.equal(document.activeElement,get(target));
     assert.equal(get(target).focusOptions.preventScroll,true);
-    assert.equal(scrolls.at(-1),get(target==='artworkTitle'?'artworkControls':target));
+    assert.equal(get(target).getAttribute('tabindex'),null);
+    assert.equal(scrolls.at(-1),get(studio));
     assert.deepEqual(calls,before);
     assert.deepEqual(storageWrites,[]);
   }
@@ -285,15 +326,14 @@ test('shop and editor navigation opens details, scrolls and focuses the destinat
   await fire('quickCustomize');
   assert.equal(get('advancedEntry').open,true);
   assert.equal(get('companionControls').open,true);
-  assert.equal(scrolls.at(-1),get('companionEditorTitle'));
+  assert.equal(scrolls.at(-1),get('predictionStudio'));
   assert.equal(document.activeElement,get('companionEditorTitle'));
-  assert.equal(get('companionEditorTitle').attributes.tabindex,'-1');
 });
 
-test('artwork shortcut expands the workshop and returns to practice without requests or form changes',async()=>{
+test('artwork shortcut opens only the top-level artwork tools and returns without requests or form changes',async()=>{
   const {get,fire,calls,scrolls,document}=await mount();
-  assert.match(html,/<button id="quickArtwork" type="button"[^>]*>キャラの見た目を作る<\/button>/);
-  assert.match(html,/id="quickCustomize"[^>]*>自分のAIを作る・編集する/);
+  assert.match(html,/<button id="quickArtwork" type="button"[^>]*>外見からキャラを作る<\/button>/);
+  assert.match(html,/id="quickCustomize"[^>]*>株価予測のAIを作る/);
   get('quickAmount').value='2345';
   get('quickLeverage').value='3';
   get('artworkBase').src='blob:unsaved-selection';
@@ -301,12 +341,13 @@ test('artwork shortcut expands the workshop and returns to practice without requ
   await fire('quickForm','submit');
   const priorCalls=calls.length;
   for(let attempt=0;attempt<2;attempt++) {
-    for(const id of ['advancedEntry','artworkControls','artworkWorkshop'])get(id).open=false;
+    const opened=['advancedEntry','appearanceStudio','lookControls','artworkControls'];
+    for(const id of opened)get(id).open=false;
     await fire('quickArtwork');
-    for(const id of ['advancedEntry','artworkControls','artworkWorkshop'])assert.equal(get(id).open,true);
-    assert.equal(scrolls.at(-1),get('artworkControls'));
-    assert.equal(document.activeElement,get('artworkTitle'));
-    assert.equal(get('artworkTitle').attributes.tabindex,undefined); // summary keeps its native Tab stop.
+    for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(get('artworkWorkshop').open,false);
+    assert.equal(scrolls.at(-1),get('appearanceStudio'));
+    assert.equal(document.activeElement,get('appearanceStudioTitle'));
     await fire('artworkReturn');
     assert.equal(scrolls.at(-1),get('simpleHome'));
     assert.equal(document.activeElement,get('quickModel'));
@@ -1519,9 +1560,10 @@ test('only self reflection can open existing editor, with focus and no mutation 
         assert.equal(get('advancedEntry').open,true);
         assert.equal(get('companionControls').open,true);
         assert.equal(document.activeElement,get('companionEditorTitle'));
-        assert.equal(get('companionEditorTitle').getAttribute('tabindex'),'-1');
+        assert.equal(get('predictionStudio').open,true);
+        assert.equal(get('companionEditorTitle').getAttribute('tabindex'),null);
         assert.equal(get('companionEditorTitle').focusOptions.preventScroll,true);
-        assert.equal(scrolls.at(-1),get('companionEditorTitle'));
+        assert.equal(scrolls.at(-1),get('predictionStudio'));
       } else {
         assert.equal(get('advancedEntry').open,false);
         assert.match(get('quickReflectionNext').textContent,/デモAIの判断ルールはここでは編集できません/);

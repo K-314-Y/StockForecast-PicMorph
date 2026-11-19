@@ -7,6 +7,7 @@
 | 統合・最終テスト | . | main |
 | キャラの表情・動き | workspaces/character-animation/ | sprint79/manual-expression-artwork |
 | HatchPet待機アニメーションの統合・表示調整 | workspaces/hatchpet-integration/ | sprint80/hatchpet-idle-integration |
+| 外見と株価予測AIの作成画面を分離 | workspaces/create-flow/ | sprint81/separate-appearance-and-model |
 | 仮想コイン・注文タイミングの試作 | workspaces/forward-paper/ | feature/forward-paper-core-20261118 |
 
 ## 守ること

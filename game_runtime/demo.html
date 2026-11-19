@@ -17,6 +17,23 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .front-character .scene{min-height:360px}
 .front-character #artworkStage{width:min(220px,100%);height:auto;aspect-ratio:150/192}
 .front-character .actions button{max-inline-size:100%;white-space:normal}
+.appearance-palette{--studio-accent:#fac4de;--studio-ink:#321c35;--studio-surface:#33223d}
+.prediction-palette{--studio-accent:#a9dbff;--studio-ink:#122c44;--studio-surface:#1b324c}
+.studio-launchers{display:grid;gap:10px;margin:12px 0}
+.studio-launch{display:grid;gap:6px;padding:9px;border:1px solid var(--studio-accent);border-radius:14px;background:var(--studio-surface)}
+.studio-launch button,.studio button.primary{background:var(--studio-accent);color:var(--studio-ink)}
+.studio-launch button{text-align:start;white-space:normal}
+.studio-launch small{padding-inline:7px}
+.studio{margin:12px 0;border:1px solid var(--studio-accent);border-radius:16px;background:var(--studio-surface);overflow-wrap:anywhere}
+.studio>summary{padding:14px clamp(10px,3vw,22px);color:var(--studio-accent);cursor:pointer;font-weight:750;font-size:18px}
+.studio[open]>summary{border-bottom:1px solid var(--studio-accent)}
+.studio-body{padding:0 clamp(10px,3vw,22px) 14px}
+.studio .appearance-controls,.studio form.studio-basics{padding:12px;border:1px solid var(--line);border-radius:12px;background:#172139}
+.studio .actions button{max-inline-size:100%;white-space:normal}
+.studio .creator-grid label{display:grid;min-inline-size:0}
+.studio .creator-grid :is(select,input){width:100%;min-inline-size:0;font-size:1rem;min-height:48px}
+#appearanceBasicsForm .creator-grid>label:first-child{grid-column:1/-1}
+@media(max-width:520px){#companionForm .creator-grid{grid-template-columns:minmax(0,1fr)}}
 #hatchIdleToggle[aria-pressed="true"]{background:var(--mint);color:#12303b}
 @media(max-width:680px){
  .front-character{grid-template-columns:minmax(0,1fr);gap:14px}
@@ -278,7 +295,17 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <div class="front-character-copy">
   <span class="eyebrow">MY CHARACTER / あなたの相棒</span>
   <h2 id="frontCharacterTitle">自分で描いたキャラクターが主役</h2>
-  <div class="actions"><button id="quickCustomize" type="button" aria-controls="advancedEntry">自分のAIを作る・編集する</button><button id="quickArtwork" type="button" aria-controls="advancedEntry artworkControls artworkWorkshop">キャラの見た目を作る</button>
+  <div class="studio-launchers">
+   <div class="studio-launch appearance-palette">
+    <button id="quickArtwork" type="button" aria-controls="appearanceStudio" aria-describedby="quickArtworkHelp">外見からキャラを作る</button>
+    <small id="quickArtworkHelp">名前や髪・服の色を決めたり、自分の絵を使ったりできます。</small>
+   </div>
+   <div class="studio-launch prediction-palette">
+    <button id="quickCustomize" type="button" aria-controls="predictionStudio" aria-describedby="quickCustomizeHelp">株価予測のAIを作る</button>
+    <small id="quickCustomizeHelp">どの値動きに注目し、上がると判断したときに練習用コインをどれだけ使うか決めます。</small>
+   </div>
+  </div>
+  <div class="actions">
    <button id="hatchIdleToggle" type="button" aria-pressed="false" aria-describedby="hatchIdleHint hatchIdleStatus" disabled>動くデモを見る</button>
   </div>
   <small id="hatchIdleHint">実験用に生成した固定デモ画像。髪や服の色・予測モデルは変わりません。自作イラストには適用しません。</small>
@@ -410,7 +437,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <button id="quickChatGPTAsk" type="button" aria-describedby="quickChatGPTPrivacy">ChatGPTに考えを聞く</button>
     <p id="quickChatGPTReply" role="status" aria-live="polite" aria-atomic="true"></p>
    </div>
-   <button id="quickReflectionEdit" type="button" aria-controls="advancedEntry companionControls" hidden>判断ルールを見直す</button>
+   <button id="quickReflectionEdit" type="button" aria-controls="predictionStudio companionControls" hidden>判断ルールを見直す</button>
   </details>
  </section>
  <div id="quickNext" hidden>
@@ -422,51 +449,34 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
 <details class="advanced-entry" id="advancedEntry">
-<summary>もっと詳しい機能を開く（AI作成・モデルショップ・研究・育成）</summary>
-<section class="panel hero" aria-label="冒険を始める">
-
- <div>
-  <span class="eyebrow">STEP 01 / 練習</span><h2>冒険をスタート</h2>
-  <p>予測モデルの判断で仮想コインを動かします。実際の取引や今日の株価予測ではありません。</p>
-  <p class="notice">架空相場・12日間・仮想コイン・換金不可</p>
-  <label for="adventureMode">冒険の作戦</label>
-  <select id="adventureMode" aria-describedby="adventureNote">
-   <option value="solo" selected>ひとりで挑戦（自分の相棒100%）</option>
-   <option value="team">フクロウと挑戦（自分の相棒50%・フクロウ50%）</option>
-  </select>
-  <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
-  <small id="adventureNote">チームは同じ架空資産に対する2キャラの配分です。銘柄分散や実際の投資ではありません。ひとりでも冒険記録を残せます。チームは任意です。各課題のXPは一度だけで、受取は練習後の「XPを受け取る」ボタンだけ。相棒が未作成でも標準AIで使えます。</small>
-  <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
-  <p id="brainStatus" class="brain-note">予測：標準モデル mine（未作成）。保存すると自分で設計した判断ルールで練習します。DRAFTの予測ルールは未適用。</p>
-  <details class="appearance-controls" id="companionControls" open>
-   <summary id="companionEditorTitle" class="simple-target">私の相棒を作る</summary>
-   <p class="creator-note">名前・外見・重視する判断・資金の使い方を自分で決めよう。操作中は一時プレビュー。保存した設定だけが次の練習に反映されます。</p>
-   <form id="companionForm">
-    <div class="creator-grid">
-     <label for="creatorName">名前（1〜16文字）<input id="creatorName" value="私の相棒" required></label>
-     <label for="creatorApproach">重視する判断<select id="creatorApproach"><option value="trend">トレンド：長めの流れ</option><option value="momentum">勢い：直近の値動き</option><option value="reversion">反転：平均への戻り</option><option value="volatility">変動：値動きの大きさ</option></select></label>
-     <label for="creatorHair">髪色<input id="creatorHair" type="color" value="#8882db"></label>
-     <label for="creatorClothing">服色<input id="creatorClothing" type="color" value="#92e1d4"></label>
-     <label for="creatorRisk">上昇判断時に使う資金（%）<input id="creatorRisk" type="number" min="5" max="100" step="5" value="35" required></label>
+<summary>もっと詳しい機能を開く（外見・AI作成・モデルショップ・研究・育成）</summary>
+<details class="studio appearance-palette" id="appearanceStudio" name="creator-studio">
+ <summary id="appearanceStudioTitle" class="simple-target">外見スタジオ</summary>
+ <div class="studio-body">
+  <div class="actions"><button id="switchToPrediction" type="button" aria-controls="predictionStudio">予測スタジオへ</button></div>
+  <form id="appearanceBasicsForm" class="studio-basics" aria-labelledby="appearanceBasicsTitle">
+   <h3 id="appearanceBasicsTitle">名前・髪色・服色</h3>
+   <p class="creator-note">上のキャラクターに変更が表示されます。気に入ったら外見を保存しましょう。</p>
+   <div class="creator-grid">
+    <label for="creatorName">名前（1〜16文字）<input id="creatorName" value="私の相棒" pattern="(?=[\s\S]*\S)[^\u0000-\u001f\u007f-\u009f]{1,16}" title="空白だけの名前は使えません。" required></label>
+    <label for="creatorHair">髪色<input id="creatorHair" type="color" value="#8882db"></label>
+    <label for="creatorClothing">服色<input id="creatorClothing" type="color" value="#92e1d4"></label>
+   </div>
+   <div class="actions"><button id="saveAppearanceBasics" type="submit" class="primary" disabled>名前と色を保存（SAVE）</button><button id="reloadAppearanceBasics" type="button">外見と予測を再取得</button></div>
+   <p id="appearanceBasicsStatus" role="status">名前と色を読み込んでいます…</p>
+  </form>
+  <details class="appearance-controls" id="lookControls" open>
+   <summary>✂️ 自分で髪型・表情・飾りを組み立てる</summary>
+   <p class="creator-note">ゲーム内の2Dパーツがすぐ切り替わります。保存するまで仮の見た目です。予測方法・XP・コインは変わりません。</p>
+   <form id="lookForm">
+    <div class="look-grid">
+     <label for="lookHair">髪型<select id="lookHair"><option value="bob">ボブ</option><option value="long">ロング</option><option value="twintails">ツインテール</option></select></label>
+     <label for="lookExpression">表情<select id="lookExpression"><option value="cheerful">にっこり</option><option value="calm">おっとり</option><option value="determined">きりっと</option></select></label>
+     <label for="lookAccessory">飾り<select id="lookAccessory"><option value="ribbon">リボン</option><option value="glasses">眼鏡</option><option value="star">星</option><option value="none">飾りなし</option></select></label>
     </div>
-    <p id="creatorPreview" class="creator-note" aria-live="polite"></p>
-    <div class="actions"><button id="saveCompanion" type="submit" class="primary" disabled>この相棒を保存する</button><button id="reloadCompanion" type="button">保存済みを再取得</button><button id="companionReturn" type="button">AI・試算額の選択に戻る</button></div>
+    <div class="actions"><button id="saveLook" type="submit" class="primary" disabled>この見た目を保存する</button><button id="reloadLook" type="button">保存済みの見た目に戻す</button></div>
+    <p id="lookStatus" role="status" aria-live="polite">外見パーツを読み込んでいます…</p>
    </form>
-   <details class="appearance-controls" id="lookControls" open>
-    <summary>✂️ 自分で髪型・表情・飾りを組み立てる</summary>
-    <p class="creator-note">ゲーム内の2Dパーツがすぐ切り替わります。保存するまで仮の見た目です。予測方法・XP・コインは変わりません。</p>
-    <form id="lookForm">
-     <div class="look-grid">
-      <label for="lookHair">髪型<select id="lookHair"><option value="bob">ボブ</option><option value="long">ロング</option><option value="twintails">ツインテール</option></select></label>
-      <label for="lookExpression">表情<select id="lookExpression"><option value="cheerful">にっこり</option><option value="calm">おっとり</option><option value="determined">きりっと</option></select></label>
-      <label for="lookAccessory">飾り<select id="lookAccessory"><option value="ribbon">リボン</option><option value="glasses">眼鏡</option><option value="star">星</option><option value="none">飾りなし</option></select></label>
-     </div>
-     <div class="actions"><button id="saveLook" type="submit" class="primary" disabled>この見た目を保存する</button><button id="reloadLook" type="button">保存済みの見た目に戻す</button></div>
-     <p id="lookStatus" role="status" aria-live="polite">外見パーツを読み込んでいます…</p>
-    </form>
-   </details>
-   <p id="companionStatus" role="status" aria-live="polite">相棒を読み込んでいます…</p>
-   <p class="creator-note">予測はゲーム練習専用です。V6の学習済みOfficialは書き換えません。実際の注文や自動売買は行いません。</p>
   </details>
   <details id="artworkControls" class="appearance-controls" open>
    <summary id="artworkTitle" class="simple-target">私のイラストを重ねる</summary>
@@ -542,22 +552,59 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </details>
   <details id="skinControls" class="appearance-controls">
    <summary>🎨 保存したキャラの外見を選ぶ</summary>
-   <p>ゲーム画面に外見だけ表示。画像のDRAFT設定は予測に使いません。判断ルールは上の相棒フォームで保存します。選択はページを閉じると解除されます。</p>
+   <p>ゲーム画面に外見だけ表示。画像のDRAFT設定は予測に使いません。判断ルールは予測スタジオで設定できます。選択はページを閉じると解除されます。</p>
    <button id="loadSkins" type="button">保存キャラの一覧を読み込む</button>
    <label for="skinSelect">表示するキャラ</label>
    <select id="skinSelect" aria-label="外見を選ぶ"><option value="">カスタムchibi（自分の外見）</option></select>
    <p id="skinStatus" role="status" aria-live="polite">保存済みキャラを確認する場合は一覧を読み込んでください。</p>
    <a href="http://127.0.0.1:8884/create">① キャラ制作・② 架空学習・③ 練習版保存（制作画面へ）</a>
   </details>
+ </div>
+</details>
+<details class="studio prediction-palette" id="predictionStudio" name="creator-studio">
+ <summary id="predictionStudioTitle" class="simple-target">予測スタジオ</summary>
+ <div class="studio-body">
+  <div class="actions"><button id="switchToAppearance" type="button" aria-controls="appearanceStudio">外見スタジオへ</button></div>
+  <details class="appearance-controls" id="companionControls" open>
+   <summary id="companionEditorTitle" class="simple-target">株価予測の判断ルール</summary>
+   <p class="creator-note">AIがどんな値動きに注目するかを選びます。自分で保存した設定だけが次の練習に反映されます。</p>
+   <form id="companionForm" aria-labelledby="companionEditorTitle">
+    <div class="creator-grid">
+     <label for="creatorApproach">重視する判断<select id="creatorApproach" required><option value="trend">トレンド：長めの流れ</option><option value="momentum">勢い：直近の値動き</option><option value="reversion">反転：平均への戻り</option><option value="volatility">変動：値動きの大きさ</option></select></label>
+     <label for="creatorRisk">上昇判断時に使う資金（%）<input id="creatorRisk" type="number" min="5" max="100" step="5" value="35" required></label>
+    </div>
+    <p id="creatorPreview" class="creator-note" aria-live="polite"></p>
+    <div class="actions"><button id="saveCompanion" type="submit" class="primary" disabled>判断ルールを保存する</button><button id="reloadCompanion" type="button">外見と予測を再取得</button><button id="companionReturn" type="button">AI・試算額の選択に戻る</button></div>
+   </form>
+   <p id="companionStatus" role="status" aria-live="polite">判断ルールを読み込んでいます…</p>
+   <p class="creator-note">予測はゲーム練習専用です。V6の学習済みOfficialは書き換えません。実際の注文や自動売買は行いません。</p>
+  </details>
   <details id="brainControls" class="appearance-controls brain-controls">
    <summary>🧠 練習に使う予測モデルを選ぶ</summary>
-   <p>キャラ制作画面で練習版を保存し「このモデルでゲームへ進む」を押すと、ここで自動的に選択されます。学習済み練習版は固定の架空40点で作られたモデルです。選択中は上の「私の相棒」の判断ルールより優先して適用します。外見は変わりません。実際の株価に対する精度は未検証で、対戦には使えません。</p>
+   <p>キャラ制作画面で練習版を保存し「このモデルでゲームへ進む」を押すと、ここで自動的に選択されます。学習済み練習版は固定の架空40点で作られたモデルです。選択中は上の「株価予測の判断ルール」より優先して適用します。外見は変わりません。実際の株価に対する精度は未検証で、対戦には使えません。</p>
    <button id="loadBrains" type="button">保存した練習版を確認する</button>
    <label for="brainSelect">練習版を使わない場合は保存した相棒の判断ルールを使用</label>
    <select id="brainSelect" aria-label="練習で使う予測モデル"><option value="">標準モデル mine</option></select>
    <p id="brainNotice" role="status" aria-live="polite">まだ標準モデルを使用します。</p>
    <button id="resetBrain" type="button" hidden>学習版を使わずに進む（標準・自作相棒へ戻す）</button>
   </details>
+ </div>
+</details>
+<section class="panel hero" aria-label="冒険を始める">
+
+ <div>
+  <span class="eyebrow">STEP 01 / 練習</span><h2>冒険をスタート</h2>
+  <p>予測モデルの判断で仮想コインを動かします。実際の取引や今日の株価予測ではありません。</p>
+  <p class="notice">架空相場・12日間・仮想コイン・換金不可</p>
+  <label for="adventureMode">冒険の作戦</label>
+  <select id="adventureMode" aria-describedby="adventureNote">
+   <option value="solo" selected>ひとりで挑戦（自分の相棒100%）</option>
+   <option value="team">フクロウと挑戦（自分の相棒50%・フクロウ50%）</option>
+  </select>
+  <div class="actions"><button id="play" type="button" class="primary">▶ 練習スタート</button></div>
+  <small id="adventureNote">チームは同じ架空資産に対する2キャラの配分です。銘柄分散や実際の投資ではありません。ひとりでも冒険記録を残せます。チームは任意です。各課題のXPは一度だけで、受取は練習後の「XPを受け取る」ボタンだけ。相棒が未作成でも標準AIで使えます。</small>
+  <p id="status" role="status" aria-live="polite">準備完了。練習を始められます。</p>
+  <p id="brainStatus" class="brain-note">予測：標準モデル mine（未作成）。保存すると自分で設計した判断ルールで練習します。DRAFTの予測ルールは未適用。</p>
   <small>未受取のXPがある間は再挑戦を停止します。受け取るか、明示的に辞退してください。</small>
  </div>
 </section>

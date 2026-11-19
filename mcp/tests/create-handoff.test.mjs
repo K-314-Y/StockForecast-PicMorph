@@ -105,6 +105,7 @@ test('valid creator link preselects trained brain and appearance without startin
     [{id:version,source_draft_id:draft,source_name:'星読み'}]);
   assert.equal(get('brainSelect').value,version);
   assert.equal(get('skinSelect').value,draft);
+  assert.equal(get('predictionStudio').open,true);
   assert.equal(get('portrait').src,'/api/appearance/image/'+draft);
   assert.equal(get('brainControls').open,true);
   assert.equal(get('skinControls').open,true);
@@ -113,6 +114,14 @@ test('valid creator link preselects trained brain and appearance without startin
   assert.match(get('brainNotice').textContent,/引き継ぎました/);
   assert.equal(requests.filter(x=>x==='/api/practice').length,0);
   assert.equal(requests.filter(x=>x==='/api/training/complete').length,0);
+});
+
+test('appearance-only creator link opens the appearance studio without loading a model',async()=>{
+  const {get,requests}=await mountHandoff('?draft_id='+draft,[]);
+  assert.equal(get('appearanceStudio').open,true);
+  assert.equal(get('skinControls').open,true);
+  assert.equal(get('skinSelect').value,draft);
+  assert.equal(requests.includes('/api/trained/versions'),false);
 });
 
 test('missing or mismatched version blocks play until explicit fallback',async()=>{

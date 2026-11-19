@@ -11,6 +11,7 @@ let savedCompanion = null;
 let savedLook = null;
 let lookSaving = false;
 const lookIds = ['lookHair','lookExpression','lookAccessory'];
+let companionLoading = true;
 let companionSaving = false;
 let handoffPending = false;
 let handoffInvalid = false;
@@ -30,7 +31,8 @@ const expressionSelections = new Map();
 let savedExpressions = null;
 let expressionBusy = false;
 const approachLabels = {trend:'トレンド', momentum:'勢い', reversion:'反転', volatility:'変動'};
-const creatorIds = ['creatorName','creatorHair','creatorClothing','creatorApproach','creatorRisk'];
+const appearanceBasicIds = ['creatorName','creatorHair','creatorClothing'];
+const predictionIds = ['creatorApproach','creatorRisk'];
 const resultName = () => result?.brain?.kind === 'trained_practice_only' ?
   '学習済み練習版' : result?.companion_name || '標準モデル';
 
@@ -43,7 +45,7 @@ async function call(path, body) {
   let value;
   try { value = await response.json(); }
   catch { throw Error('サーバーの応答を読み込めません'); }
-  if (!response.ok) throw Error(value.error || 'ゲームサーバーに接続できません');
+  if (!response.ok) throw Object.assign(Error(value.error || 'ゲームサーバーに接続できません'), {status:response.status});
   return value;
 }
 
@@ -62,9 +64,10 @@ function refreshButtons() {
   for (const id of lookIds) $(id).disabled = busy || lookSaving;
   $('play').disabled = busy || companionSaving || ticket !== null || handoffPending || handoffInvalid;
   $('adventureMode').disabled = $('play').disabled;
-  $('saveCompanion').disabled = busy || companionSaving || savedCompanion === null;
-  $('reloadCompanion').disabled = busy || companionSaving;
-  for (const id of creatorIds) $(id).disabled = busy || companionSaving;
+  const companionEditingDisabled = busy || companionSaving || companionLoading;
+  $('saveAppearanceBasics').disabled = $('saveCompanion').disabled = companionEditingDisabled || savedCompanion === null;
+  $('reloadAppearanceBasics').disabled = $('reloadCompanion').disabled = companionEditingDisabled;
+  for (const id of [...appearanceBasicIds,...predictionIds]) $(id).disabled = companionEditingDisabled;
   $('claim').disabled = busy || ticket === null || growthRevision === null;
   $('discard').hidden = ticket === null;
   $('discard').disabled = busy;
@@ -504,8 +507,8 @@ function showNextBrain() {
   const select = $('brainSelect');
   const selected = select.value;
   if (!selected) {
-    if (savedCompanion) displayCompanion(savedCompanion);
-    else $('brainStatus').textContent = '予測：標準モデル mine（未作成）。外見の変更は予測に影響しません。';
+    if (savedCompanion) showSavedCompanionRules(savedCompanion);
+    else $('brainStatus').textContent = '予測：標準モデル mine（未作成）。';
   } else {
     $('brainStatus').textContent = '次回の予測：保存した学習済み練習版 ' +
       selected + '。保存した相棒の判断ルールより優先。架空40点での学習のみ、実相場精度は未検証。外見と独立。';
@@ -612,13 +615,15 @@ loadLook().catch(error=>{
   refreshButtons();
 });
 
-function creatorValue() {
+function appearanceBasicsValue() {
   return {name:$('creatorName').value, hair_color:$('creatorHair').value,
-    clothing_color:$('creatorClothing').value, approach:$('creatorApproach').value,
-    risk_percent:Number($('creatorRisk').value)};
+    clothing_color:$('creatorClothing').value};
+}
+function predictionValue() {
+  return {approach:$('creatorApproach').value, risk_percent:Number($('creatorRisk').value)};
 }
 function previewCompanion() {
-  const value = creatorValue();
+  const value = {...appearanceBasicsValue(), ...predictionValue()};
   $('companionName').textContent = value.name || '私の相棒';
   // Only canonical colors reach CSS; names are always plain text.
   const hair = /^#[a-f0-9]{6}$/i.test(value.hair_color) ? value.hair_color : '#8882db';
@@ -629,54 +634,94 @@ function previewCompanion() {
   $('creatorPreview').textContent = '一時プレビュー：' + (approachLabels[value.approach] || '未選択') +
     'を重視 / 上昇判断時の資金使用率 ' + value.risk_percent + '%。残りは現金で待機。';
 }
-function displayCompanion(value) {
+function displayCompanion(value, preserve = '') {
   savedCompanion = value;
   const c = value.companion;
-  $('creatorName').value = c.name;
-  $('creatorHair').value = c.hair_color;
-  $('creatorClothing').value = c.clothing_color;
-  $('creatorApproach').value = c.approach;
-  $('creatorRisk').value = String(c.risk_percent);
+  if (preserve !== 'appearance') {
+    $('creatorName').value = c.name;
+    $('creatorHair').value = c.hair_color;
+    $('creatorClothing').value = c.clothing_color;
+  }
+  if (preserve !== 'prediction') {
+    $('creatorApproach').value = c.approach;
+    $('creatorRisk').value = String(c.risk_percent);
+  }
   previewCompanion();
+  showNextBrain();
+}
+function showSavedCompanionRules(value) {
+  const c = value.companion;
   $('brainStatus').textContent = value.created ?
     '保存済み：' + c.name + ' / ' + approachLabels[c.approach] + 'を重視 / 資金使用率 ' + c.risk_percent +
     '% / revision ' + value.revision + '。次の練習に反映。色とDRAFT画像は外見だけ。' :
-    '未作成：予測は標準モデルmine。フォームを保存すると自分のルールで練習します。';
-  if ($('brainSelect').value) showNextBrain();
+    '未作成：予測は標準モデルmine。判断ルールを保存すると自分のルールで練習します。';
+}
+function companionLoadError(error) {
+  const message = '相棒を読み込めません。再取得してください。 ' + error.message;
+  $('appearanceBasicsStatus').textContent = message;
+  $('companionStatus').textContent = message;
 }
 async function loadCompanion() {
   displayCompanion(await call('/api/companion'));
-  $('companionStatus').textContent = savedCompanion.created ? '保存済みの相棒を復元しました。' : 'まだ未作成です。自分で設定して保存しよう。';
-  refreshButtons();
+  const {approach,risk_percent} = savedCompanion.companion;
+  $('appearanceBasicsStatus').textContent = savedCompanion.created ? '保存済みの名前と色を表示しています。' :
+    '初めて外見を保存すると、初期設定（' + approachLabels[approach] + '・資金使用率' + risk_percent + '%）で相棒が作成されます。';
+  $('companionStatus').textContent = savedCompanion.created ? '保存済みの判断ルールを表示しています。' : 'まだ未作成です。自分で設定して保存しよう。';
 }
-for (const id of creatorIds) $(id).addEventListener('input', () => {
+for (const id of appearanceBasicIds) $(id).addEventListener('input', () => {
   $('skinSelect').value = '';
   defaultSkin('カスタムchibiの一時プレビューです。');
   previewCompanion();
-  $('companionStatus').textContent = '未保存のプレビューです。予測ルールは保存するまで変わりません。';
+  $('appearanceBasicsStatus').textContent = '名前と色はまだ保存されていません。';
 });
-$('companionForm').addEventListener('submit', async event => {
+for (const id of predictionIds) $(id).addEventListener('input', () => {
+  previewCompanion();
+  $('companionStatus').textContent = '判断ルールはまだ保存されていません。';
+});
+async function saveCompanionGroup(event, group) {
   event.preventDefault();
-  if (busy || companionSaving || !savedCompanion) return;
+  if (busy || companionSaving || companionLoading || !savedCompanion) return;
+  const appearance = group === 'appearance';
+  const status = $(appearance ? 'appearanceBasicsStatus' : 'companionStatus');
+  const edits = appearance ? appearanceBasicsValue() : predictionValue();
+  const payload = {expected_revision:savedCompanion.revision, companion:{...savedCompanion.companion, ...edits}};
   companionSaving = true; refreshButtons();
   try {
-    const value = await call('/api/companion', {expected_revision:savedCompanion.revision, companion:creatorValue()});
-    displayCompanion(value);
-    $('skinSelect').value = ''; defaultSkin('自分で作った相棒を表示しています。');
-    $('companionStatus').textContent = value.companion.name + 'を保存しました！次の練習はこの判断ルールで冒険します。';
+    const value = await call('/api/companion', payload);
+    displayCompanion(value, appearance ? 'prediction' : 'appearance');
+    status.textContent = appearance ? '名前と色を保存しました。' : '判断ルールを保存しました。次の練習に反映されます。';
   } catch (error) {
-    $('companionStatus').textContent = '保存できません: ' + error.message + '。再取得すると編集内容を保存済み設定に戻せます。';
-  } finally {companionSaving = false; refreshButtons();}
-});
-$('reloadCompanion').addEventListener('click', async () => {
-  if (busy || companionSaving) return;
+    status.textContent = error.status === 409 ?
+      '保存できません。別の画面で相棒が更新されています。この画面の「再取得」で保存済みの値を確認してから保存してください。もう片方の編集中の値は残します。' :
+      '保存できません。 ' + error.message;
+  } finally {
+    companionSaving = false;
+    refreshButtons();
+  }
+}
+$('appearanceBasicsForm').addEventListener('submit', event => saveCompanionGroup(event, 'appearance'));
+$('companionForm').addEventListener('submit', event => saveCompanionGroup(event, 'prediction'));
+async function reloadCompanionGroup(group) {
+  if (busy || companionSaving || companionLoading) return;
+  const appearance = group === 'appearance';
+  const status = $(appearance ? 'appearanceBasicsStatus' : 'companionStatus');
   companionSaving = true; refreshButtons();
-  try {await loadCompanion();}
-  catch (error) {$('companionStatus').textContent = '相棒を読み込めません: ' + error.message;}
-  finally {companionSaving = false; refreshButtons();}
-});
-loadCompanion().catch(error => {
-  $('companionStatus').textContent = '相棒を読み込めません: ' + error.message + '。再取得してください。';
+  try {
+    // Both groups share one revision, but reloading only resets the selected form.
+    // Keep the other group's unsubmitted edits intact.
+    const record = await call('/api/companion');
+    displayCompanion(record, appearance ? 'prediction' : 'appearance');
+    status.textContent = appearance ?
+      '保存済みの名前と色を再取得しました。予測ルールの下書きはそのままです。' :
+      '保存済みの予測ルールを再取得しました。名前と色の下書きはそのままです。';
+  } catch (error) {
+    status.textContent = '保存済み設定を再取得できません: ' + error.message;
+  } finally {companionSaving = false; refreshButtons();}
+}
+$('reloadAppearanceBasics').addEventListener('click', () => reloadCompanionGroup('appearance'));
+$('reloadCompanion').addEventListener('click', () => reloadCompanionGroup('prediction'));
+loadCompanion().catch(companionLoadError).finally(() => {
+  companionLoading = false;
   refreshButtons();
 });
 
@@ -1099,6 +1144,7 @@ async function applyCreateHandoff() {
   const versionId = query.get('trained_version_id');
   const draftId = query.get('draft_id');
   if (!versionId && !draftId) return;
+  $(versionId ? 'predictionStudio' : 'appearanceStudio').open = true;
   $('brainControls').open = true;
   $('skinControls').open = true;
   if (versionId) {

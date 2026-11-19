@@ -647,7 +647,7 @@ function resetReview() {
 function scrollAndFocus(sectionId,focusId) {
   element(sectionId).scrollIntoView?.({block:'start'});
   const target=element(focusId);
-  if(focusId==='modelShopTitle'||focusId==='companionEditorTitle')
+  if(focusId==='modelShopTitle')
     target.setAttribute('tabindex','-1');
   target.focus?.({preventScroll:true});
 }
@@ -657,14 +657,23 @@ function openShop() {
 }
 function openEditor() {
   element('advancedEntry').open=true;
+  element('appearanceStudio').open=false;
+  element('predictionStudio').open=true;
   element('companionControls').open=true;
-  scrollAndFocus('companionEditorTitle','companionEditorTitle');
+  scrollAndFocus('predictionStudio','companionEditorTitle');
 }
 function openArtwork() {
   element('advancedEntry').open=true;
+  element('predictionStudio').open=false;
+  element('appearanceStudio').open=true;
+  element('lookControls').open=true;
   element('artworkControls').open=true;
-  element('artworkWorkshop').open=true;
-  scrollAndFocus('artworkControls','artworkTitle');
+  scrollAndFocus('appearanceStudio','appearanceStudioTitle');
+}
+if(typeof HTMLDetailsElement!=='undefined' && !('name' in HTMLDetailsElement.prototype)) {
+  const appearance=element('appearanceStudio'),prediction=element('predictionStudio');
+  appearance.addEventListener('toggle',()=>{if(appearance.open)prediction.open=false;});
+  prediction.addEventListener('toggle',()=>{if(prediction.open)appearance.open=false;});
 }
 async function returnHome() {
   scrollAndFocus('simpleHome','quickModel');
@@ -755,6 +764,8 @@ element('quickGrow').addEventListener('click',()=>{
   scrollAndFocus('play','play');
 });
 element('quickCustomize').addEventListener('click',openEditor);
+element('switchToPrediction').addEventListener('click',openEditor);
+element('switchToAppearance').addEventListener('click',openArtwork);
 element('quickReflectionEdit').addEventListener('click',()=>{
   if(!replay || !replayIsSelf || !reflections.has(replayDay))return;
   openEditor();

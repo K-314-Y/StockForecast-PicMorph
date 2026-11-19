@@ -245,7 +245,7 @@ test('custom preview, save, reload and restored appearance take priority over th
   assert.equal(get('hatchIdleToggle').attributes['aria-pressed'],'false');
   assert.equal(get('chibi').dataset.hatchIdle,undefined);
   assert.match(get('chibi').attributes.style,/--clothing:#ff6677/);
-  await click('companionForm','submit');
+  await click('appearanceBasicsForm','submit');
   await click('reloadCompanion');
   assert.equal(writes[0].body.companion.clothing_color,'#ff6677');
   assert.equal(get('hatchIdleToggle').disabled,true);
