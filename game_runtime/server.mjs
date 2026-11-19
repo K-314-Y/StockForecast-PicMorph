@@ -562,15 +562,27 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const companion = await companionStore.read();
         const look = await lookStore.read();
         if (!companion.created || !look.created || companion.revision !== companion_revision ||
-            look.revision !== look_revision || companion.revision !== (await companionStore.read()).revision) {
+            look.revision !== look_revision) {
           throw failure('相棒と外見を保存し、現在の revision を取得してください', 409);
         }
         try {
           const result = await saveForwardAppearanceGeneration({filePath:forwardLedgerFile,
             aiId, medals, expectedRevision:expected_revision,
-            appearance:deriveForwardAppearanceModel(look.look, companion.companion)});
+            appearance:deriveForwardAppearanceModel(look.look, companion.companion),
+            beforeCommit:async () => {
+              // The ledger lock covers its own write. The appearance stores can still
+              // change between these reads and the ledger rename.
+              const currentCompanion = await companionStore.read();
+              const currentLook = await lookStore.read();
+              if (!currentCompanion.created || !currentLook.created ||
+                  currentCompanion.revision !== companion_revision || currentLook.revision !== look_revision) {
+                throw failure('相棒または外見が更新されました。現在の revision を取得してください', 409);
+              }
+            },
+          });
           return json(res, result.created ? 201 : 200, forwardAppearanceState(result, result.created));
         } catch (error) {
+          if (error.status === 409) throw error;
           if (['FORWARD_STORE_REVISION_CONFLICT', 'FORWARD_STORE_ALLOCATION_REJECTED'].includes(error.code)) {
             throw failure(error.message, 409);
           }

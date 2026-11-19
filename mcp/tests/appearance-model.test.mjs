@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import test from 'node:test';
 import {deriveAppearanceModel, identifyForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
 import {APPROACHES, createCompanionStore} from '../../game_runtime/companion.mjs';
+import {openForwardStore} from '../../game_runtime/forward-store.mjs';
 import {LOOK_CHOICES, createLookStore} from '../../game_runtime/looks.mjs';
 import {createGameServer, pythonPredict} from '../../game_runtime/server.mjs';
 
@@ -13,6 +14,7 @@ const LOOK = Object.freeze({hair_style:'bob', expression:'cheerful', accessory:'
 const COLORS = Object.freeze({hair_color:'#808080', clothing_color:'#808080'});
 const COMPANION = {name:'相棒', ...COLORS, approach:'reversion', risk_percent:75};
 const PREVIEW = '/api/companion/appearance-model';
+const FORWARD_AI = '/api/companion/forward-ai';
 const ALLOCATIONS = {mine:100, owl:0, turtle:0};
 const MODEL = {fast_window:3, slow_window:9, risk_fraction:.35,
   plugin_weights:{trend:100, momentum:0, reversion:0, volatility:0},
@@ -197,6 +199,73 @@ test('editing the look during opted-in practice invalidates the result and ticke
   assert.equal(result.data.training_ticket, undefined);
 });
 
+test('forward AI GET reports an absent ledger when its parent directory is missing', async t => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'forward-ai-missing-')));
+  t.after(() => rm(dir, {recursive:true, force:true}));
+  const parent = join(dir, 'missing');
+  const forwardLedgerFile = join(parent, 'nested', 'ledger.json');
+  const result = await request(createGameServer({forwardLedgerFile}), FORWARD_AI);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data, {mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', revision:null, created:false,
+    initialMedals:10_000, unallocated:10_000, currentAiId:null, generations:[], wallets:{}});
+  await assert.rejects(openForwardStore({filePath:forwardLedgerFile}), {code:'FORWARD_STORE_UNINITIALIZED'});
+  await assert.rejects(lstat(parent), {code:'ENOENT'});
+  assert.deepEqual(await readdir(dir), []);
+});
+
+test('forward AI GET reports invalid paths and corrupt ledgers as errors', async t => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'forward-ai-invalid-')));
+  t.after(() => rm(dir, {recursive:true, force:true}));
+  const corrupt = join(dir, 'ledger.json');
+  const actual = join(dir, 'actual');
+  const alias = join(dir, 'alias');
+  const dangling = join(dir, 'dangling');
+  await writeFile(corrupt, '{"broken":');
+  await mkdir(actual);
+  await symlink(actual, alias);
+  await symlink(join(dir, 'missing'), dangling);
+  for (const forwardLedgerFile of [corrupt, join(corrupt, 'ledger.json'),
+    join(alias, 'missing', 'ledger.json'), join(dangling, 'nested', 'ledger.json')]) {
+    const result = await request(createGameServer({forwardLedgerFile}), FORWARD_AI);
+    assert.equal(result.status, 503, forwardLedgerFile);
+    assert.equal(result.data.wallets, undefined);
+  }
+  assert.equal(await readFile(corrupt, 'utf8'), '{"broken":');
+  assert.deepEqual(await readdir(actual), []);
+});
+
+for (const edited of ['look', 'companion']) {
+  test(`forward AI POST rejects ${edited} edits during registration`, async t => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'forward-ai-edit-')));
+    t.after(() => rm(dir, {recursive:true, force:true}));
+    const companionStore = createCompanionStore({file:join(dir, 'companion.json')});
+    const lookStore = createLookStore({file:join(dir, 'looks.json')});
+    await companionStore.save({expected_revision:0, companion:COMPANION});
+    await lookStore.save({expected_revision:0, look:LOOK});
+    let companionReads = 0;
+    const server = createGameServer({forwardLedgerFile:join(dir, 'ledger.json'), lookStore,
+      companionStore:{...companionStore, async read() {
+        if (++companionReads === 2) {
+          if (edited === 'look') {
+            await lookStore.save({expected_revision:1, look:{...LOOK, hair_style:'long'}});
+          } else {
+            await companionStore.save({expected_revision:1, companion:{...COMPANION, hair_color:'#ff0000'}});
+          }
+        }
+        return companionStore.read();
+      }},
+    });
+    const input = {aiId:'ai_first', medals:300, expected_revision:null, companion_revision:1, look_revision:1};
+    const stale = await request(server, FORWARD_AI, input);
+    assert.equal(stale.status, 409);
+    assert.deepEqual((await readdir(dir)).sort(), ['companion.json', 'looks.json']);
+    const retry = await request(server, FORWARD_AI, {...input, [`${edited}_revision`]:2});
+    assert.equal(retry.status, 201);
+    assert.equal(retry.data.generations[0].model_version, (await request(server, PREVIEW)).data.model_version);
+    assert.equal(retry.data.unallocated, 9700);
+  });
+}
+
 test('forward AI API funds immutable engine models from saved parts and restores each generation', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'forward-ai-api-'));
   t.after(() => rm(dir, {recursive:true, force:true}));
@@ -207,10 +276,9 @@ test('forward AI API funds immutable engine models from saved parts and restores
     lookStore:createLookStore({file:join(dir, 'looks.json')}),
     loadSnapshot:unavailable, predict:unavailable, historicalPredict:unavailable,
   });
-  const path = '/api/companion/forward-ai';
   let server = serve();
-  const get = () => request(server, path);
-  const post = body => request(server, path, body);
+  const get = () => request(server, FORWARD_AI);
+  const post = body => request(server, FORWARD_AI, body);
   const input = {aiId:'ai_first', medals:300, expected_revision:null, companion_revision:1, look_revision:1};
   const empty = await get();
   assert.equal(empty.status, 200);
@@ -221,7 +289,7 @@ test('forward AI API funds immutable engine models from saved parts and restores
   assert.deepEqual(await readdir(dir), []);
   for (const change of [{aiId:['ai_first']}, {aiId:'../wallet'}, {aiId:'__proto__'}, {aiId:'a'.repeat(41)},
     {medals:0}, {medals:-1}, {medals:1.5}, {medals:'300'}, {medals:1_000_000_000_001},
-    {expected_revision:'0'}, {modelHash:'a'.repeat(64)}, {look:LOOK}, {initialMedals:20_000}]) {
+    {expected_revision:'0'}, {model:MODEL}, {modelHash:'a'.repeat(64)}, {look:LOOK}, {initialMedals:20_000}]) {
     assert.equal((await post({...input, ...change})).status, 400);
   }
   assert.deepEqual(await readdir(dir), []);

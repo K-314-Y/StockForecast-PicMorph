@@ -239,7 +239,7 @@ async function syncDirectory(directory) {
   }
 }
 
-async function writeSnapshot(filePath, {revision, ledger}) {
+async function writeSnapshot(filePath, {revision, ledger}, beforeCommit) {
   validateLedger(ledger);
   const content = encode(revision, ledger);
   if (Buffer.byteLength(content) > MAX_BYTES) {
@@ -256,6 +256,7 @@ async function writeSnapshot(filePath, {revision, ledger}) {
     } finally {
       await handle.close();
     }
+    if (beforeCommit) await beforeCommit();
     await rename(temporary, filePath);
     renamed = true;
     await syncDirectory(directory);
@@ -270,15 +271,29 @@ async function writeSnapshot(filePath, {revision, ledger}) {
   }
 }
 
-function withLedgerLock(filePath, operation) {
+async function checkLedgerDirectory(directory, allowMissingParent) {
+  let candidate = directory;
+  for (;;) {
+    let info;
+    try {
+      info = await lstat(candidate);
+    } catch (error) {
+      const parent = dirname(candidate);
+      if (!allowMissingParent || error.code !== 'ENOENT' || parent === candidate) throw error;
+      candidate = parent;
+      continue;
+    }
+    // A missing descendant of a symlink is an invalid path, too.
+    requireValid(info.isDirectory() && await realpath(candidate) === candidate, '保存先ディレクトリ種別');
+    if (candidate !== directory) throw uninitialized();
+    return;
+  }
+}
+
+function withLedgerLock(filePath, operation, {allowMissingParent = false} = {}) {
   const lockPath = filePath + '.lock';
   const running = (operations.get(filePath) ?? Promise.resolve()).then(async () => {
-    const directory = dirname(filePath);
-    const canonical = await realpath(directory).catch(error => {
-      if (filePath === DEFAULT_FILE && error.code === 'ENOENT') throw uninitialized();
-      throw error;
-    });
-    requireValid(canonical === directory, '保存先ディレクトリ種別');
+    await checkLedgerDirectory(dirname(filePath), allowMissingParent);
     try {
       await mkdir(lockPath, {mode: 0o700});
     } catch (error) {
@@ -334,9 +349,11 @@ function revisionConflict() {
 
 export const APPEARANCE_STARTING_MEDALS = 10_000;
 
-/** Append a frozen model and its funded wallet in one durable commit. */
+/** Append a frozen model and its funded wallet in one durable commit.
+ * beforeCommit may recheck external revisions under the ledger lock.
+ */
 export async function saveForwardAppearanceGeneration({
-  filePath = DEFAULT_FILE, aiId, appearance, medals, expectedRevision,
+  filePath = DEFAULT_FILE, aiId, appearance, medals, expectedRevision, beforeCommit,
 }) {
   requireValid(matches(aiId, AI_ID) && integer(medals, 1, MAX_MEDALS), 'AI ID・配分');
   requireValid(expectedRevision === null || integer(expectedRevision, 0, Number.MAX_SAFE_INTEGER), 'revision');
@@ -351,6 +368,7 @@ export async function saveForwardAppearanceGeneration({
     if (latest && JSON.stringify(identifyForwardAppearanceModel(latest).model) === JSON.stringify(model)) {
       // A previous attempt may have reached rename before reporting an fsync error.
       await syncDirectory(dirname(filePath));
+      if (beforeCommit) await beforeCommit();
       return {...current, created: false};
     }
     requireValid(!current || current.revision < Number.MAX_SAFE_INTEGER, 'revision の上限');
@@ -365,14 +383,14 @@ export async function saveForwardAppearanceGeneration({
     }
     ledger.appearanceGenerations = [...generations, {aiId, model_version, model}];
     const next = {revision: current ? current.revision + 1 : 0, ledger};
-    await writeSnapshot(filePath, next);
+    await writeSnapshot(filePath, next, beforeCommit);
     return {...next, created: true};
   });
 }
 
 /**
  * Virtual ledger for internal server callers on a local filesystem. An optional
- * filePath for tests requires an existing parent. Pass initial ({initialMedals,
+ * filePath for tests requires an existing parent for writes. Pass initial ({initialMedals,
  * allocations}) only to create a ledger. Snapshots include a revision, starting at 0.
  *
  * receivedAt is assigned by the caller's trusted server clock. getObservation()
@@ -414,7 +432,7 @@ export async function openForwardStore({
       initial.allocations.every(item => fields(item, 'id', 'modelHash', 'medals') &&
         matches(item.id, AI_ID) && matches(item.modelHash, HASH)), '初期メダル配分');
     await writeSnapshot(filePath, {revision: 0, ledger: createForwardLedger(initial)});
-  });
+  }, {allowMissingParent: initial === undefined});
 
   function update(expectedRevision, transition) {
     return withLedgerLock(filePath, async () => {
