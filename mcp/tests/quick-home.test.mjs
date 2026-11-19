@@ -4,7 +4,8 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
-import {validateCompanion} from '../../game_runtime/companion.mjs';
+import {createCompanionStore,validateCompanion} from '../../game_runtime/companion.mjs';
+import {createLookStore} from '../../game_runtime/looks.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 import {runSyntheticGame} from '../../game_runtime/practice.mjs';
 import {settleLeveragedPractice} from '../../game_runtime/leverage-practice.mjs';
@@ -284,6 +285,28 @@ function directRequest(server,url,{method='GET',body,remote='127.0.0.1'}={}) {
     server.emit('request',req,res);
   });
 }
+test('QuickHome uses saved judgment rules after cosmetic changes, with no legacy opt-in',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'quick-appearance-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const companionStore=createCompanionStore({file:join(dir,'companion.json')});
+  const lookStore=createLookStore({file:join(dir,'look.json')});
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),companionStore,lookStore});
+  const post=(url,body)=>directRequest(server,url,{method:'POST',body});
+  const profile={name:'相棒',hair_color:'#0000ff',clothing_color:'#0000ff',approach:'reversion',risk_percent:100};
+  const body={model_id:'self',amount:1000,scenario_token:'v1_0000000000000009'};
+  await companionStore.save({expected_revision:0,companion:profile});
+  const before=await post('/api/quick-practice',body);
+  assert.equal(before.status,200,JSON.stringify(before.data));
+  await lookStore.save({expected_revision:0,look:{hair_style:'long',expression:'determined',accessory:'star'}});
+  await companionStore.save({expected_revision:1,companion:{...profile,hair_color:'#ff0000'}});
+  const after=await post('/api/quick-practice',body);
+  assert.deepEqual(after,before);
+  assert.equal(after.data.daily_ai_signals.length,12);
+  assert.equal(after.data.companion_strategy.approach,'reversion');
+  assert.equal((await post('/api/quick-practice',
+    {...body,appearance_model_version:'appearance-v1_42_23_23_12_50'})).status,400);
+});
+
 test('audit74: malformed request target returns 400 and health survives without sockets',async()=>{
   const server=createGameServer();
   for(const url of ['//[',undefined,'','http://localhost/health','//localhost/health','/\\evil','/health#x','/bad%xx']) {

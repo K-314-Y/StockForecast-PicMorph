@@ -360,6 +360,10 @@ test('artwork shortcut opens only the top-level artwork tools and returns withou
   assert.equal(get('quickReview').hidden,false);
 });
 
+test('QuickHome keeps appearance-derived models out of its practice UI',()=>{
+  assert.doesNotMatch(html,/quickAppearanceModel|保存したパーツから作ったAI/);
+});
+
 test('both return buttons refresh owned AI choices and preserve the current selection',async()=>{
   const owned={id:'demo_one',name:'<img src=x onerror=alert(1)>',owned:true};
   const locked={id:'demo_two',name:'次のAI',owned:false};

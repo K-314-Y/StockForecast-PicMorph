@@ -287,6 +287,14 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  .scene:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after,
  .quick-pre-cue[data-reaction] #quickPreCueIcon{animation:none;transition:none}
 }
+#forwardPanel{overflow-wrap:anywhere}
+#forwardPanel>*{margin-inline:0}
+#forwardPanel :is(input,select,button){min-width:0;max-width:100%}
+.forward-facts{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 12px;margin:10px 0}
+.forward-facts dt{color:var(--soft)}
+.forward-facts dd{margin:0}
+#forwardPanel fieldset{padding:0;border:0;min-width:0}
+@media(max-width:480px){.forward-facts{grid-template-columns:minmax(0,1fr);gap:2px}.forward-facts dd{margin-bottom:8px}}
 </style>
 </head>
 <body><main>
@@ -475,6 +483,37 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  </div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
 </section>
+<details class="advanced-entry simple-home" id="forwardPanel">
+ <summary>保存したAI・模擬運用記録</summary>
+ <section class="panel">
+  <h2>先行模擬取引の仮想メダル</h2>
+  <p class="simple-hint">12日間の練習コインやショップコインとは別の財布です。</p>
+  <p id="forwardWalletStatus" role="status" aria-live="polite"></p>
+  <p id="forwardUnallocated" hidden></p>
+  <div class="simple-fields">
+   <label for="forwardAI">保存したAI</label>
+   <select id="forwardAI" disabled><option value="">未選択</option></select>
+  </div>
+  <dl id="forwardWallet" class="forward-facts" aria-live="polite" hidden></dl>
+  <button id="forwardRefresh" type="button">再取得</button>
+  <form id="forwardSaveForm" action="/api/companion/forward-ai?view=summary" method="post" autocomplete="off">
+   <p id="forwardSaveHelp" class="simple-hint">保存済みの判断ルールを専用の運用モデルに固定し、メダルを配分します。外見はキャラクター表示に使います。</p>
+   <p id="forwardModel" class="simple-hint" hidden></p>
+   <fieldset id="forwardSaveFields" class="simple-fields" disabled>
+    <legend>新しいAIを保存</legend>
+    <label for="forwardMedals">新しいAIに渡す仮想メダル</label>
+    <input id="forwardMedals" name="medals" type="number" inputmode="numeric" min="1" step="1" required aria-describedby="forwardSaveHelp">
+    <button id="forwardSave" class="primary" type="submit">AIを保存して配分</button>
+   </fieldset>
+   <p id="forwardSaveStatus" role="status" aria-live="polite"></p>
+  </form>
+ </section>
+ <section class="panel">
+  <h2>先出し予測・模擬注文・採点</h2>
+  <p id="forwardRecordsStatus" role="status" aria-live="polite"></p>
+  <div id="forwardRecords" hidden></div>
+ </section>
+</details>
 <details class="advanced-entry" id="advancedEntry">
 <summary>もっと詳しい機能を開く（外見・AI作成・モデルショップ・研究・育成）</summary>
 <details class="studio appearance-palette" id="appearanceStudio" name="creator-studio">
@@ -774,4 +813,4 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 <p>JavaScriptゲームエンジン実験版です。予測の頭脳は標準モデルmine、保存した相棒の判断ルール、学習済み練習版から使用対象を選択できます。学習済み練習版を選んだ時は相棒フォームの判断ルールは適用されず、外見・色・DRAFT画像は予測に影響しません。V6のOfficialには一切影響しません。架空12ステップの練習結果だけを扱い、実相場の予測能力を証明しません。練習中の仮想投資コインは保存されません。モデルショップの使用権とコイン残高は別管理で保存されます。XPは練習実績として1回だけ別保存されます。Node側の保存データはPythonゲームとは別です。</p>
 </details>
 </details>
-</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script><script type="module" src="/model-shop-ui.mjs"></script><script type="module" src="/quick-home.mjs"></script></body></html>
+</main><script type="module" src="/demo.mjs"></script><script type="module" src="/crop-editor.mjs"></script><script type="module" src="/arena-ui.mjs"></script><script type="module" src="/model-lab-ui.mjs"></script><script type="module" src="/model-shop-ui.mjs"></script><script type="module" src="/quick-home.mjs"></script><script type="module" src="/forward-view-ui.mjs"></script></body></html>

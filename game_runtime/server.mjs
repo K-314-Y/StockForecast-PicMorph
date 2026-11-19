@@ -8,6 +8,11 @@ import {createChatGPTPlanDialogue, validateDialogueInput, validateDialogueResult
 import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
+import {COMPANION_MODEL_VERSION, deriveForwardCompanionModel} from './forward-model.mjs';
+import {FORWARD_AI_ID, MAX_FORWARD_MEDALS, inspectForwardWallet} from './forward-paper.mjs';
+import {MOCK_MARKET_PAPER_MODE} from './forward-market-guard.mjs';
+import {FORWARD_STARTING_MEDALS, readForwardSnapshot, saveForwardGeneration} from './forward-store.mjs';
+import {createForwardRecordReader} from './forward-records.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createArtworkExpressionStore,EXPRESSION_MOODS,MAX_EXPRESSION_REQUEST} from './artwork-expressions.mjs';
 import {createGrowthStore} from './growth.mjs';
@@ -40,6 +45,7 @@ const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
 const QUICK_HOME_JS = new URL('./quick-home.mjs', import.meta.url);
+const FORWARD_VIEW_JS = new URL('./forward-view-ui.mjs', import.meta.url);
 const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
 // Fixed read-only assets only: never resolve a request path on the filesystem.
 const ARTWORK_LAB = new Map([
@@ -281,11 +287,39 @@ async function getBody(req, limit = MAX_REQUEST) {
   catch {throw failure('JSONが不正です', 400);}
 }
 
+function forwardWalletState(snapshot, created = false) {
+  const {revision = null, ledger} = snapshot ?? {};
+  const generations = ledger?.appearanceGenerations ?? [];
+  return {
+    mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', revision, created,
+    initialMedals:ledger?.initialMedals ?? FORWARD_STARTING_MEDALS,
+    unallocated:ledger?.unallocated ?? FORWARD_STARTING_MEDALS,
+    currentAiId:generations.at(-1)?.aiId ?? null,
+    generations, wallets:ledger?.wallets ?? {},
+  };
+}
+
+function forwardWalletSummary(snapshot, created = false) {
+  const state = forwardWalletState(snapshot, created);
+  const ledger = snapshot?.ledger;
+  return {...state, mock:ledger?.mode === MOCK_MARKET_PAPER_MODE,
+    generations:state.generations.map(({aiId, model_version}) => ({aiId, model_version})),
+    wallets:Object.fromEntries(Object.keys(state.wallets).map(aiId => {
+      const {cash, equity, status, position} = inspectForwardWallet(ledger, aiId);
+      return [aiId, {cash, equity, status, position:position ?
+        {symbol:position.symbol, direction:position.direction} : null}];
+    })),
+  };
+}
+
+const isRevision = value => Number.isSafeInteger(value) && value >= 0;
+
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
                                   companionStore = createCompanionStore(),
                                   modelShopStore = createModelShopStore(),
                                   lookStore = createLookStore(),
+                                  forwardLedgerFile, forwardRecords,
                                   artworkStore = createArtworkStore(),
                                   artworkExpressionStore = createArtworkExpressionStore(),
                                   appearanceCatalog = readAppearanceCatalog,
@@ -293,6 +327,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   trainedVersions = readTrainingVersions,
                                   trainedVersion = resolveTrainedVersion,
                                   chatgptDialogue = null, chatgptClient = null} = {}) {
+  const readForwardRecords = createForwardRecordReader(forwardRecords);
   if (chatgptClient !== null) {
     if (chatgptDialogue !== null) throw Error('Use only one ChatGPT injection');
     chatgptDialogue = createChatGPTPlanDialogue({client:chatgptClient});
@@ -379,6 +414,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         inFlight--;
       }
     }
+    const forwardSummary = req.url === '/api/companion/forward-ai?view=summary';
     if (rawPath.startsWith('/artwork-lab/') || path.startsWith('/artwork-lab/')) {
       const asset = ARTWORK_LAB.get(rawPath);
       if (req.method !== 'GET' || !asset) return json(res, 404, {error: '見つかりません'});
@@ -433,6 +469,33 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     if (req.method === 'GET' && path === '/api/companion') {
       try {return json(res, 200, await companionStore.read());}
       catch {return json(res, 503, {error:'相棒の保存情報を読み取れません'});}
+    }
+    if (req.method === 'GET' && path === '/api/companion/forward-model') {
+      try {
+        const saved = await companionStore.read();
+        const {approach, risk_percent} = saved.companion;
+        return json(res, 200, {created:saved.created, approach, risk_percent,
+          model_version:saved.created ? deriveForwardCompanionModel(saved.companion).model_version : null,
+        });
+      } catch {
+        return json(res, 503, {error:'保存済みの判断ルールを読み取れません'});
+      }
+    }
+    if (req.method === 'GET' && path === '/api/companion/forward-ai') {
+      const present = forwardSummary ? forwardWalletSummary : forwardWalletState;
+      try {
+        return json(res, 200, present(await readForwardSnapshot(forwardLedgerFile)));
+      } catch (error) {
+        if (error.code === 'FORWARD_STORE_UNINITIALIZED') return json(res, 200, present());
+        return json(res, 503, {error:'AI財布の台帳を読み取れません'});
+      }
+    }
+    if (req.method === 'GET' && path === '/api/companion/forward-records') {
+      if (req.url !== path || req.headers['content-length'] || req.headers['transfer-encoding']) {
+        return json(res, 400, {error:'記録の取得に入力は不要です'});
+      }
+      try {return json(res, 200, await readForwardRecords());}
+      catch {return json(res, 503, {error:'保存された模擬記録を確認できません'});}
     }
     if (req.method === 'GET' && path === '/api/looks') {
       try {return json(res,200,await lookStore.read());}
@@ -533,11 +596,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
     }
 
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
-      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs' || path === '/forward-view-ui.mjs')) {
+      const script = path.endsWith('.mjs');
       let body;
       try {
-        body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
+        body = await readFile(path === '/forward-view-ui.mjs' ? FORWARD_VIEW_JS : path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
         path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
       } catch (error) {
         console.error('Creature Lab static asset read failed', error);
@@ -556,7 +619,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/companion/forward-ai','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -569,7 +632,43 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
-      const names = Object.keys(payload).sort().join('|');
+      if (path === '/api/companion/forward-ai') {
+        const {aiId, medals, expected_revision, model_version} = payload;
+        if (Object.keys(payload).sort().join('|') !== 'aiId|expected_revision|medals|model_version' ||
+            typeof aiId !== 'string' || !FORWARD_AI_ID.test(aiId) ||
+            !Number.isSafeInteger(medals) || medals < 1 || medals > MAX_FORWARD_MEDALS ||
+            (expected_revision !== null && !isRevision(expected_revision)) ||
+            typeof model_version !== 'string' || !COMPANION_MODEL_VERSION.test(model_version)) {
+          throw failure('AI ID・配分メダル数・台帳の revision・保存済み判断ルールのモデル版を指定してください', 400);
+        }
+        async function currentGeneration() {
+          const saved = await companionStore.read();
+          const generation = saved.created ? deriveForwardCompanionModel(saved.companion) : null;
+          if (generation?.model_version !== model_version) {
+            throw failure('予測スタジオの保存済み判断ルールを確認し、再取得してください', 409);
+          }
+          return generation;
+        }
+        const generation = await currentGeneration();
+        try {
+          const result = await saveForwardGeneration({filePath:forwardLedgerFile,
+            aiId, medals, expectedRevision:expected_revision, generation,
+            // The ledger lock serializes wallet commits. Recheck the source model
+            // before rename. Cosmetic edits preserve the same model version.
+            beforeCommit:currentGeneration,
+          });
+          const present = forwardSummary ? forwardWalletSummary : forwardWalletState;
+          return json(res, result.created ? 201 : 200, present(result, result.created));
+        } catch (error) {
+          if (error.status === 409) throw error;
+          if (['FORWARD_STORE_REVISION_CONFLICT', 'FORWARD_STORE_ALLOCATION_REJECTED'].includes(error.code)) {
+            throw failure(error.message, 409);
+          }
+          throw failure('台帳への保存を確認できません。再取得してください');
+        }
+      }
+      const fields = Object.keys(payload).sort();
+      const names = fields.join('|');
       if (path === '/api/quick-practice') {
         if (!['amount|leverage|model_id','amount|model_id',
               'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names) ||
