@@ -342,7 +342,7 @@ async function checkLedgerDirectory(directory, allowMissingParent) {
 }
 
 /** Read one validated atomic snapshot without creating a ledger or taking a write lock. */
-export async function readForwardSnapshot(filePath) {
+export async function readForwardSnapshot(filePath = DEFAULT_FILE) {
   filePath = resolve(filePath);
   await checkLedgerDirectory(dirname(filePath), true);
   const current = await readSnapshot(filePath);
@@ -525,7 +525,8 @@ export async function openForwardStore({
   }
 
   return {
-    snapshot: () => withLedgerLock(filePath, readExisting),
+    snapshot: ({readOnly = false} = {}) => readOnly ?
+      readForwardSnapshot(filePath) : withLedgerLock(filePath, readExisting),
     queueForwardOrder: (order, receivedAt, expectedRevision) => update(expectedRevision, ledger => {
       requireValid(ledger.mode === FORWARD_PAPER_MODE, '予約注文の受付経路');
       return queueForwardOrder(ledger, order, receivedAt);

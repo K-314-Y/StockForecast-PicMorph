@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash, createHmac} from 'node:crypto';
-import {mkdir, mkdtemp, readFile, rm, unlink, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {deriveForwardAppearanceModel, identifyForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
@@ -10,6 +10,7 @@ import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adap
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
 import {openForwardStore, saveForwardAppearanceGeneration} from '../../game_runtime/forward-store.mjs';
+import {createGameServer} from '../../game_runtime/server.mjs';
 
 const minute = 60_000;
 const issue = Date.parse('2030-01-07T01:00:00.000Z');
@@ -75,6 +76,98 @@ async function setup(t) {
 }
 
 const idOf = saved => saved.receipt.forecastId;
+
+const recordsPath = '/api/companion/forward-records';
+async function serveRecords(t, options) {
+  const server = createGameServer(options);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  return (path = recordsPath, init) => fetch(base + path, init);
+}
+
+test('P5 records are unconnected by default and only accept a local GET with no input', async t => {
+  const root = await mkdtemp('/tmp/forward-records-default-');
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const request = await serveRecords(t, {forwardLedgerFile:join(root, 'missing', 'ledger.json')});
+  const response = await request();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await response.json(), {status:'unconnected', records:[]});
+  assert.equal((await request(recordsPath + '?forecastId=anything')).status, 400);
+  assert.equal((await request(recordsPath, {method:'POST'})).status, 404);
+  assert.equal((await request(recordsPath, {headers:{Origin:'http://example.test'}})).status, 403);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test('P5 GET shows reserved, settled pending and verified scored P4 records without write locks', async t => {
+  const {lifecycle, batch, options, state, root} = await setup(t);
+  const forecastId = idOf(await lifecycle.freeze({...input, probabilities:{UP:.1, FLAT:.2, DOWN:.7},
+    predictedChangePct:-4}));
+  const request = await serveRecords(t, {forwardLedgerFile:options.walletFile,
+    forwardRecords:{forecastId, source:lifecycle.recordSource}});
+  const result = async () => {
+    const response = await request();
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.status, 'MOCK_NONLIVE');
+    assert.equal(data.records.length, 1);
+    const serialized = JSON.stringify(data);
+    for (const secret of ['modelHash','provenance','forecastSha256','evidence','proof','fast_window','/tmp/']) {
+      assert.ok(!serialized.includes(secret), secret);
+    }
+    return data.records[0];
+  };
+  assert.equal((await result()).open.status, 'NONE');
+  const reserved = await lifecycle.reserveOpen(forecastId);
+  assert.equal(reserved.ledger.pending[0].modelHash, undefined);
+  const pending = await result();
+  assert.equal(pending.status, 'PENDING');
+  assert.deepEqual(pending.open, {status:'QUEUED', at:iso(issue)});
+  assert.equal(pending.score, null);
+  assert.equal(pending.realizedPnl, null);
+  await batch(entry, scenarioTrade(entry, 90));
+  await lifecycle.reserveClose(forecastId);
+  assert.equal((await result()).close.status, 'QUEUED');
+  const settled = await batch(target, scenarioTrade(target, 95));
+  const unscored = await result();
+  assert.equal(unscored.status, 'PENDING');
+  assert.equal(unscored.close.status, 'CLOSED');
+  assert.equal(unscored.score, null);
+  assert.ok(unscored.realizedPnl < 0);
+  assert.deepEqual(await lifecycle.snapshot(), settled);
+  assert.ok(!(await readdir(options.directory)).some(name => name.endsWith('.outcome.json')));
+
+  await lifecycle.score(forecastId);
+  const path = join(options.directory, forecastId + '.outcome.json');
+  const outcome = await readFile(path);
+  const wallet = await readFile(options.walletFile);
+  await mkdir(options.walletFile + '.lock');
+  await mkdir(join(options.directory, forecastId + '.lock'));
+  const before = (await readdir(root, {recursive:true})).sort();
+  const scored = await result();
+  assert.equal(scored.status, 'SCORED_MOCK_NONLIVE');
+  assert.equal(scored.score.directionCorrect, true);
+  assert.equal(scored.score.absoluteChangeErrorPctPoints, 1);
+  assert.ok(Math.abs(scored.score.brier - .14) < 1e-12);
+  assert.equal(scored.realizedPnl, unscored.realizedPnl);
+  assert.equal(state.reads, 2);
+  assert.deepEqual(await readFile(path), outcome);
+  assert.deepEqual(await readFile(options.walletFile), wallet);
+  assert.deepEqual((await readdir(root, {recursive:true})).sort(), before);
+  const summary = await (await request('/api/companion/forward-ai?view=summary')).json();
+  assert.equal(summary.mock, true);
+  const {cash} = settled.ledger.wallets[input.aiId];
+  assert.deepEqual(summary.wallets[input.aiId], {
+    status:'ACTIVE', cash, equity:cash, position:null,
+  });
+  assert.deepEqual(summary.generations, [{aiId:input.aiId, model_version}]);
+
+  await writeFile(path, '{}');
+  const broken = await request();
+  assert.equal(broken.status, 503);
+  assert.deepEqual(await broken.json(), {error:'保存された模擬記録を確認できません'});
+});
 
 async function enter({lifecycle, batch}, fields = {}, entryPrice = 102) {
   const id = idOf(await lifecycle.freeze({...input, ...fields}));

@@ -199,7 +199,8 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
     }
   }
 
-  async function read(id) {
+  async function read(id, {readOnly = false} = {}) {
+    if (!isHash(id)) throw new RangeError('Invalid forecast ID');
     const [saved, issued, confirmed, scored] = await Promise.all([
       readRecord(pathFor(id, 'forecast'), 'forecast'),
       readRecord(pathFor(id, 'receipt'), 'receipt'),
@@ -234,14 +235,15 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
       throw corrupt(error);
     }
     if (outcome && readMockEvidence) {
-      const evidence = await readMockEvidence(forecast, receipt);
+      const evidence = await readMockEvidence(forecast, receipt, {readOnly});
       checkMockEvidence(forecast, evidence, outcome.scoredAt);
       if (canonical(evidence.observation) !== canonical(outcome.observation)) {
         throw storeError('FORWARD_FORECAST_EVIDENCE_MISMATCH', 'Saved mock score does not match the signed ledger fill');
       }
     }
-    // A prior write might have reached link before reporting a sync failure.
-    await syncDirectory(directory);
+    // Operational callers also confirm durability after a possible sync failure.
+    // The test display reads the saved files without performing a sync or taking a lock.
+    if (!readOnly) await syncDirectory(directory);
     return {forecast, receipt, outcome};
   }
 
@@ -281,7 +283,8 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
       });
     },
 
-    read: forecastId => withLock(forecastId, () => read(forecastId)),
+    read: (forecastId, {readOnly = false} = {}) => readOnly ?
+      read(forecastId, {readOnly:true}) : withLock(forecastId, () => read(forecastId)),
 
     scoreMock: forecastId => withLock(forecastId, async () => {
       const saved = await read(forecastId);

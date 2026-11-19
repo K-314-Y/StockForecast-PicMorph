@@ -7,7 +7,7 @@ import {forecastDirection} from './forward-score.mjs';
 import {openForwardStore} from './forward-store.mjs';
 
 // A full 256-bit ID fits the paper ledger's 60-character order ID limit.
-const orderId = (forecastId, action) => `p4_${action}_${Buffer.from(forecastId, 'hex').toString('base64url')}`;
+export const mockForecastOrderId = (forecastId, action) => `p4_${action}_${Buffer.from(forecastId, 'hex').toString('base64url')}`;
 const orderRoute = {UP:'OPEN_LONG', DOWN:'OPEN_SHORT'};
 
 function requireModel(ledger, forecast) {
@@ -44,7 +44,7 @@ export async function openForwardMockLifecycle({
   const paper = await openForwardStore({filePath:walletFile, marketAdapter});
 
   function forecastFill(ledger, forecast, receipt, action, notBefore) {
-    const event = ledger.journal.find(item => item.orderId === orderId(forecast.forecastId, action));
+    const event = ledger.journal.find(item => item.orderId === mockForecastOrderId(forecast.forecastId, action));
     if (!event || event.kind === 'CANCELLED') return null;
     const opening = action === 'open';
     const target = utcTime(forecast.targetAt);
@@ -60,8 +60,8 @@ export async function openForwardMockLifecycle({
     return event;
   }
 
-  async function readMockEvidence(forecast, receipt) {
-    const {ledger} = await paper.snapshot();
+  async function readMockEvidence(forecast, receipt, {readOnly = false} = {}) {
+    const {ledger} = await paper.snapshot({readOnly});
     requireModel(ledger, forecast);
     const opened = forecastFill(ledger, forecast, receipt, 'open', receipt.confirmedAt);
     if (!opened) return null;
@@ -96,6 +96,27 @@ export async function openForwardMockLifecycle({
     freeze: forecasts.freeze,
     read: forecasts.read,
     snapshot: paper.snapshot,
+    recordSource: Object.freeze({
+      read: forecastId => forecasts.read(forecastId, {readOnly:true}),
+      async snapshot({forecast, receipt}) {
+        const saved = await paper.snapshot({readOnly:true});
+        const {ledger} = saved;
+        requireModel(ledger, forecast);
+        const opened = forecastFill(ledger, forecast, receipt, 'open', receipt.confirmedAt);
+        const closed = forecastFill(ledger, forecast, receipt, 'close', opened?.observedAt);
+        if (closed && (closed.mockForecast.reference.raw !== opened?.mockForecast.reference.raw ||
+          closed.mockForecast.reference.proof !== opened?.mockForecast.reference.proof)) {
+          throw new RangeError('MOCK_NONLIVE opening and settlement refer to different signed scenarios');
+        }
+        for (const event of [opened, closed]) {
+          if (event) requireReference(adapter.mockForecastTrades(event).reference, forecast);
+        }
+        const pending = ledger.pending.find(order => ['open', 'close'].some(action =>
+          order.id === mockForecastOrderId(forecast.forecastId, action)));
+        if (pending) requireReference(adapter.mockReference(pending.mockForecast.reference, forecast.symbol), forecast);
+        return saved;
+      },
+    }),
     async reserveOpen(forecastId) {
       const {forecast, receipt} = await load(forecastId);
       const {ledger, revision} = await paper.snapshot();
@@ -104,7 +125,7 @@ export async function openForwardMockLifecycle({
       if (!action) return {action:'NO_TRADE'};
       requireReference(adapter.mockReference(reference, forecast.symbol), forecast);
       const {aiId, symbol, targetAt} = forecast;
-      const id = orderId(forecastId, 'open');
+      const id = mockForecastOrderId(forecastId, 'open');
       const binding = {forecastSha256:receipt.forecastSha256, targetAt, reference};
       const next = await paper.reserveMockForecastOrder({id, aiId, symbol, action, margin, leverage},
         binding, {notBefore:receipt.confirmedAt, expectedRevision:revision});
@@ -126,7 +147,7 @@ export async function openForwardMockLifecycle({
       }
       const {reference} = adapter.mockForecastTrades(opened);
       requireReference(reference, forecast);
-      const id = orderId(forecastId, 'close');
+      const id = mockForecastOrderId(forecastId, 'close');
       const next = await paper.reserveMockForecastOrder({id, aiId, symbol, action:'CLOSE'}, opened.mockForecast,
         {notBefore:opened.observedAt, expectedRevision:revision});
       return {action:'CLOSE', orderId:id, ...next};
