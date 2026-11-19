@@ -364,8 +364,9 @@ run `node mcp/companion-stdio.mjs --read-only`.
    picker at `/parts-lab/preview.html`. The browser loads the body and all
    three expressions from that one selection.
 3. Optionally call `register_demo_character` with the same ID to write a
-   local `demo.json` catalog entry. Browser auto-linking is unsupported.
-   Use the ZIP picker to display a registered demo.
+   local `demo.json` catalog entry. Open or refresh the Parts Lab and select
+   the character in **Registered Demo Gallery** to preview its four layers.
+   Registration does not set the permanent game avatar.
 
 Generation uses Linux Python 3 with Pillow (`python3 -c 'import PIL'`).
 `engine=original-template` draws the artwork from project-authored
@@ -388,3 +389,9 @@ Storage is capped at 32 entries, with a 512 KiB limit per image, a 3 MiB
 limit per ZIP, and a 4 KiB limit per metadata file. To free space, remove
 the selected generated directory locally. The tools operate independently
 of saved artwork, companion, XP, and market data.
+
+Parts Lab discovers registered demos through same-origin, loopback-only GETs.
+The server verifies all four PNGs before listing a demo and verifies each
+requested PNG again before serving it. The browser receives only catalog
+metadata until a selection. Previewing or clearing a demo does not write
+files or change game state.

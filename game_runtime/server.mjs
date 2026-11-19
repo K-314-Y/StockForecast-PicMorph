@@ -20,6 +20,7 @@ import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket} from './historical-market.mjs';
+import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -295,6 +296,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   lookStore = createLookStore(),
                                   artworkStore = createArtworkStore(),
                                   artworkExpressionStore = createArtworkExpressionStore(),
+                                  catalogRoot,
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -305,6 +307,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     chatgptDialogue = createChatGPTPlanDialogue({client:chatgptClient});
   }
   if (chatgptDialogue !== null && typeof chatgptDialogue !== 'function') throw Error('Invalid chatgptDialogue injection');
+  const characterDemos=createCharacterDemoCatalog(catalogRoot);
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
@@ -340,6 +343,29 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if ([rawPath,path].some(target=>target===CHARACTER_DEMOS_API || target.startsWith(CHARACTER_DEMOS_API+'/'))) {
+      const origin=req.headers.origin;
+      if (origin!==undefined && origin!==`http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      res.setHeader('X-Content-Type-Options','nosniff');
+      if (req.method==='GET' && rawPath===path) {
+        if (rawPath===CHARACTER_DEMOS_API) return json(res,200,await characterDemos.list());
+        const route=/^\/api\/character-demos\/(cp_[0-9a-f]{32})\/(body|ready|happy|cautious)\.png$/.exec(rawPath);
+        if (route) {
+          const bytes=await characterDemos.image(route[1],route[2]);
+          if (bytes) {
+            res.writeHead(200,{'Content-Type':'image/png','Content-Length':bytes.length,
+              'Cache-Control':'no-store','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer',
+              'Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'; sandbox",
+            });
+            return res.end(bytes);
+          }
+        }
+      }
+      return json(res,404,{error:'見つかりません'});
+    }
     if (req.method === 'GET' && HATCH_ASSETS.has(rawPath)) {
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
         return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});

@@ -18,6 +18,11 @@ const sampleUrls = Object.freeze({
 });
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_FRAME_SIDE = 1024;
+const DEMOS_API = '/api/character-demos';
+const DEMO_PARTS = {base:'body',ready:'ready',happy:'happy',cautious:'cautious'};
+const MAX_DEMO_BYTES = 512 * 1024;
+let galleryRequest;
+let demoLoad;
 let pack = null;
 let epoch = 0;
 let busy = false;
@@ -61,6 +66,9 @@ function setBusy(value) {
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
+  for (const button of $('demoList').querySelectorAll('button')) {
+    button.setAttribute('aria-disabled',String(value));
+  }
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
 }
@@ -303,6 +311,117 @@ async function loadGeneratedSheets(){
 }
 $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 
+function demoStatus(message) {
+  $('demoStatus').textContent=message;
+}
+
+// The gallery uses only same-origin GETs. Each response is local generated
+// material, and image requests begin only after an explicit selection.
+function fetchDemo(url,signal) {
+  return fetch(url,{mode:'same-origin',method:'GET',cache:'no-store',redirect:'error',signal});
+}
+
+async function refreshGallery() {
+  galleryRequest?.abort();
+  const request=new AbortController();
+  galleryRequest=request;
+  const timeout=setTimeout(()=>request.abort(),8000);
+  try {
+    const response=await fetchDemo(DEMOS_API,request.signal);
+    if(!response.ok) throw Error('Catalog unavailable');
+    const entries=await response.json();
+    if(request!==galleryRequest) return;
+    if(!Array.isArray(entries) || entries.length>32) throw Error('Invalid catalog');
+    const list=$('demoList');
+    const cards=document.createDocumentFragment();
+    for(const item of entries) {
+      if(typeof item?.name!=='string' || typeof item.generated_id!=='string' ||
+          item.generated_id.length!==35 || !/^cp_[0-9a-f]{32}$/.test(item.generated_id) ||
+          item.engine!=='original-template') continue;
+      const card=document.createElement('li');
+      const name=document.createElement('strong');
+      name.textContent=item.name;
+      const engine=document.createElement('small');
+      engine.textContent='engine='+item.engine;
+      const button=document.createElement('button');
+      button.type='button';
+      button.textContent='このキャラで試す';
+      button.setAttribute('aria-label',button.textContent+' · '+item.name);
+      button.setAttribute('aria-disabled',String(busy));
+      button.addEventListener('click',()=>void loadRegisteredDemo(item,button));
+      card.append(name,engine,button);
+      cards.append(card);
+    }
+    list.replaceChildren(cards);
+    list.hidden=!list.children.length;
+    demoStatus(list.hidden?'登録されたデモはありません。':'');
+  } catch {
+    if(request===galleryRequest) demoStatus('登録デモを確認できません。ZIPやPNGでも試せます。');
+  } finally {
+    clearTimeout(timeout);
+    if(request===galleryRequest) galleryRequest=undefined;
+  }
+}
+
+async function loadRegisteredDemo(item,button) {
+  if(busy) return;
+  const myEpoch=++epoch;
+  const controller=new AbortController();
+  demoLoad={controller,button};
+  const timeout=setTimeout(()=>controller.abort(),8000);
+  const temp={};
+  setBusy(true);
+  $('cancelDemo').hidden=false;
+  demoStatus('「'+item.name+'」のパーツを読み込んでいます…');
+  try {
+    for(const [key,part] of Object.entries(DEMO_PARTS)) {
+      const response=await fetchDemo(DEMOS_API+'/'+item.generated_id+'/'+part+'.png',controller.signal);
+      if(!response.ok) throw Error('Part unavailable');
+      const blob=await response.blob();
+      if(blob.type!=='image/png' || !blob.size || blob.size>MAX_DEMO_BYTES) throw Error('Invalid atlas');
+      if(myEpoch!==epoch) return;
+      temp[key]=await decodeFile(blob,part);
+      if(myEpoch!==epoch) return;
+      if(controller.signal.aborted || temp[key].width!==1152 || temp[key].height!==208) {
+        throw Error('Invalid atlas');
+      }
+    }
+    const next=inspect({...temp},6);
+    displayLoaded(next,6);
+    for(const key of Object.keys(temp)) delete temp[key];
+    demoStatus('「'+item.name+'」を読み込みました。表情を切り替えて試せます。');
+  } catch {
+    if(myEpoch===epoch) demoStatus('デモを読み込めませんでした。ZIPやPNGでも試せます。');
+  } finally {
+    clearTimeout(timeout);
+    release({images:temp});
+    if(myEpoch===epoch) {
+      finishDemoLoad();
+      setBusy(false);
+    }
+  }
+}
+
+function finishDemoLoad() {
+  if(!demoLoad) return;
+  const cancel=$('cancelDemo');
+  if(document.activeElement===cancel) demoLoad.button.focus();
+  demoLoad.controller.abort();
+  demoLoad=undefined;
+  cancel.hidden=true;
+}
+
+$('cancelDemo').addEventListener('click',()=>{
+  ++epoch;
+  finishDemoLoad();
+  setBusy(false);
+  demoStatus('デモの読み込みを中止しました。');
+});
+void refreshGallery();
+window.addEventListener('pageshow',event=>{
+  if(event.persisted) void refreshGallery();
+});
+
 // Users select ONE archive; file change automatically loads the four atlases.
 // The archive never leaves this browser and no extracted files are saved.
 async function importCharacterZip(file){
@@ -345,6 +464,8 @@ $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
   ++epoch;
+  finishDemoLoad();
+  if(!$('demoList').hidden) demoStatus('');
   setBusy(false);
   resetPack();
   for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
@@ -364,7 +485,9 @@ $('fps').addEventListener('change',startClock);
 for (const id of ['faceX','faceY']) $(id).addEventListener('input',paint);
 $('frames').addEventListener('change',()=>{
   if (pack || busy) {
-    ++epoch;setBusy(false);resetPack();
+    ++epoch;
+    if(demoLoad) demoStatus('デモの読み込みを中止しました。');
+    finishDemoLoad();setBusy(false);resetPack();
     status('コマ数が変わりました。画像をもう一度読み込んでください。');
   }
 });
@@ -374,5 +497,7 @@ for (const [,input] of keys) $(input).addEventListener('change',()=>{
 document.addEventListener('visibilitychange',startClock);
 reduced.addEventListener('change',startClock);
 window.addEventListener('pagehide',()=>{
+  galleryRequest?.abort();galleryRequest=undefined;
+  finishDemoLoad();
   ++epoch;resetPack();setBusy(false);
 });

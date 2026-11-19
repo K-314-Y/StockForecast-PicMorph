@@ -26,7 +26,7 @@ select,input[type=number]{min-width:0;width:100%;padding:9px;font-size:16px;colo
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
 button{font:inherit;min-height:43px;padding:9px 13px;border:1px solid #7295ad;border-radius:10px;background:#344962;color:white;cursor:pointer}
 button.primary{background:#b9f4db;color:#153e36;border-color:#b9f4db;font-weight:700}
-button:disabled{opacity:.55;cursor:not-allowed}
+button:disabled,button[aria-disabled=true]{opacity:.55;cursor:not-allowed}
 button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #f9dc8b;outline-offset:2px}
 #status{min-height:42px;padding:9px 11px;background:#102437;border-radius:8px;overflow-wrap:anywhere}
 #stage{min-height:365px;display:grid;place-items:center;border:1px solid #59768b;border-radius:13px;overflow:hidden;background:radial-gradient(circle at 45% 68%,#58618e,transparent 64%),linear-gradient(145deg,#322d5f,#204057)}
@@ -36,6 +36,13 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 #stage[data-has-preview=true] #stagePlaceholder{display:none}
 @keyframes gentle-bob{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-4px) rotate(.4deg)}}
 #stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite}
+.demo-gallery{margin:0 0 14px;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
+.demo-gallery h3{font-size:16px;margin:0 0 8px}
+.demo-gallery p{margin:8px 0}
+.demo-gallery ul{margin:0;padding-inline-start:20px}
+.demo-gallery li{overflow-wrap:anywhere;margin-block:8px 12px}
+.demo-gallery li button{display:block;margin-block-start:5px}
+.demo-gallery small{display:block}
 .metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
 .caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
 .generated-import{margin:16px 0;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
@@ -113,9 +120,15 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 </section>
 <section class="panel" aria-labelledby="previewTitle">
 <h2 id="previewTitle">2. 動きと表情を確認</h2>
+<section class="demo-gallery">
+<h3 lang="en">Registered Demo Gallery</h3>
+<ul id="demoList" hidden></ul>
+<p id="demoStatus" class="hint" role="status">登録デモを確認しています…</p>
+<button id="cancelDemo" type="button" hidden>読み込みを中止</button>
+</section>
 <div id="stage" data-has-preview="false">
 <canvas id="previewCanvas" role="img" aria-label="選んだPNGパーツを合成したキャラクター" width="192" height="208"></canvas>
-<p id="stagePlaceholder">まず「デモ素材で試す」または自分のPNGを選んでください。</p>
+<p id="stagePlaceholder">登録デモ、デモ素材、または自分のPNGを選んでください。</p>
 </div>
 <div class="controls">
 <label for="mood">表示する表情

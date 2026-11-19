@@ -31,8 +31,9 @@ private local Creature Lab Node game. It has no real-trading capability.
    and a seed. Describe the results as original procedural template artwork
    (`engine=original-template`). Call `package_character_parts` with the
    generated ID and give the user the local ZIP path to select in Parts Lab.
-   `register_demo_character` only records local catalog metadata. Opening a
-   demo in the browser requires the ZIP picker.
+   For one-click preview, call `register_demo_character`, then open or refresh
+   Parts Lab and select the character in Registered Demo Gallery. This local
+   preview does not change the permanent game avatar.
    Existing artwork uploads and manual crop actions belong in the local web
    game. Image data must not be sent to arbitrary destinations.
 6. Never expose private images publicly, automate account approvals, modify

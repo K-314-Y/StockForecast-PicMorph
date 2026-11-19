@@ -375,11 +375,11 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
     'パーツラボのZIP入力で '+path+'/character_parts.zip を選ぶと、体と3表情を読み込めます。'));
   registerTool('register_demo_character',{
     title:'Creature Lab: 生成キャラをローカルのデモ用に記録',
-    description:'生成済みの generated_id をローカルのデモ用メタデータに記録する。ブラウザとの自動連携は未実装。',
+    description:'生成済みの generated_id をローカルのデモ用メタデータに記録する。登録後はパーツラボの Registered Demo Gallery から試せる。',
     inputSchema:generatedIdSchema,
     annotations:{...localWrite,idempotentHint:true},
   },(input,extra)=>characterParts('register',input,extra?.signal,path=>
-    'ローカルのデモ用メタデータを '+path+'/demo.json に記録しました。ブラウザで使うにはパーツラボでZIPを選んでください。'));
+    'ローカルのデモ用メタデータを '+path+'/demo.json に記録しました。パーツラボを開くか再読み込みし、Registered Demo Gallery で「このキャラで試す」を選んでください。'));
   return server;
 }
 

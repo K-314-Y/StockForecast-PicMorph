@@ -55,7 +55,7 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   for (const id of [
     'partBase','partReady','partHappy','partCautious','partOutfit','partHair',
     'loadOwn','loadSample','clear','frames','fps','mood','pause',
-    'previewCanvas','stage','status','faceX','faceY','frameInfo',
+    'previewCanvas','stage','status','faceX','faceY','frameInfo','demoList','demoStatus','cancelDemo',
   ]) {
     assert.match(html,new RegExp('id="'+id+'"'),id);
   }
@@ -67,7 +67,12 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.doesNotMatch(html,/<form\b/);
   assert.doesNotMatch(html,/<script(?![^>]*src)/);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
-  assert.doesNotMatch(script,/['"]\/api\//);
+  // Gallery fetches only its local catalog and four fixed PNG roles, all via GET.
+  assert.deepEqual(script.match(/['"]\/api\/[^'"]+['"]/g),["'/api/character-demos'"]);
+  assert.match(script,/fetch\(url,\{mode:'same-origin',method:'GET',cache:'no-store',redirect:'error',signal\}\)/);
+  assert.match(script,/fetchDemo\(DEMOS_API,request\.signal\)/);
+  assert.match(script,/fetchDemo\(DEMOS_API\+'\/'\+item\.generated_id\+'\/'\+part\+'\.png'/);
+  assert.doesNotMatch(script,/\b(?:POST|PUT|PATCH|DELETE)\b|innerHTML|document\.cookie/);
   assert.doesNotMatch(script,/\bXMLHttpRequest\b|sendBeacon\b/);
   assert.match(script,/createImageBitmap\(file\)/);
   assert.match(script,/bitmap\.close\(\)/);
