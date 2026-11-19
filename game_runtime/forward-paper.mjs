@@ -37,7 +37,7 @@ function walletOf(state, id) {
   }
   return state.wallets[id];
 }
-function positionPnl(position, marketPrice) {
+export function positionPnl(position, marketPrice) {
   const pnl = (position.direction === 'LONG' ? 1 : -1) *
     position.units * (marketPrice - position.entryPrice);
   if (!Number.isFinite(pnl) || Math.abs(pnl) > Number.MAX_SAFE_INTEGER / 100) {

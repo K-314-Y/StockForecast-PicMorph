@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {resolve} from 'node:path';
 import {openForwardForecastStore} from './forward-forecast-store.mjs';
 import {getForwardMarketAdapter, mockReferenceSha256} from './forward-market-adapter.mjs';
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
@@ -9,6 +10,10 @@ import {openForwardStore} from './forward-store.mjs';
 // A full 256-bit ID fits the paper ledger's 60-character order ID limit.
 export const mockForecastOrderId = (forecastId, action) => `p4_${action}_${Buffer.from(forecastId, 'hex').toString('base64url')}`;
 const orderRoute = {UP:'OPEN_LONG', DOWN:'OPEN_SHORT'};
+const recordContexts = new WeakMap();
+
+// Authenticate the read-only source and keep its server configuration tied to it.
+export const getForwardMockRecordContext = source => recordContexts.get(source);
 
 function requireModel(ledger, forecast) {
   const generation = ledger.appearanceGenerations?.find(item => item.aiId === forecast.aiId);
@@ -96,7 +101,7 @@ export async function openForwardMockLifecycle({
     return saved;
   }
 
-  return {
+  const lifecycle = {
     freeze: forecasts.freeze,
     read: forecasts.read,
     snapshot: paper.snapshot,
@@ -160,4 +165,7 @@ export async function openForwardMockLifecycle({
       return {action:'CLOSE', orderId:id, ...next};
     },
   };
+  recordContexts.set(lifecycle.recordSource, Object.freeze({walletFile:resolve(walletFile), directory:resolve(directory),
+    adapter, reference:Object.freeze(reference)}));
+  return lifecycle;
 }
