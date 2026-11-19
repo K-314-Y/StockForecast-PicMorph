@@ -58,6 +58,7 @@ const ARTWORK_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsaf
 const PARTS_LAB = new Map([
   ['/parts-lab/preview.html', new URL('./parts-lab/preview.html', import.meta.url)],
   ['/parts-lab/preview.js', new URL('./parts-lab/preview.js', import.meta.url)],
+  ['/parts-lab/zip-import.mjs', new URL('./parts-lab/zip-import.mjs', import.meta.url)],
 ]);
 const PARTS_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';

@@ -60,6 +60,7 @@ function setBusy(value) {
   $('loadOwn').disabled = value;
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
+  $('zipFile').disabled = value;
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
 }
@@ -302,6 +303,44 @@ async function loadGeneratedSheets(){
 }
 $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 
+// Users select ONE archive; file change automatically loads the four atlases.
+// The archive never leaves this browser and no extracted files are saved.
+async function importCharacterZip(file){
+  if(!file || busy)return;
+  const myEpoch=++epoch;
+  const temp={};
+  setBusy(true);
+  status('ZIPから体と表情4種類を自動で読み込んでいます…');
+  try{
+    const {extractCharacterZip}=await import('/parts-lab/zip-import.mjs');
+    if(myEpoch!==epoch)return;
+    const files=await extractCharacterZip(file);
+    if(myEpoch!==epoch)return;
+    for(const kind of ['base','ready','happy','cautious']){
+      const name=kind==='base'?'body':kind;
+      if(files[name])temp[kind]=await decodeFile(files[name],name);
+      if(myEpoch!==epoch)return;
+    }
+    const next=inspect({...temp},6);
+    if(myEpoch!==epoch)return;
+    displayLoaded(next,6);
+    for(const key of Object.keys(temp))delete temp[key];
+    status('ZIPのキャラを自動で再生しています。体＋表情を読み込みました。表情を変えて確認してください。');
+  }catch(error){
+    if(myEpoch===epoch)status(error.message||'ZIPを読み込めませんでした。',true);
+  }finally{
+    release({images:temp});
+    if(myEpoch===epoch){
+      $('zipFile').value='';
+      setBusy(false);
+    }
+  }
+}
+$('zipFile').addEventListener('change',()=>{
+  const file=$('zipFile').files?.[0];
+  if(file)void importCharacterZip(file);
+});
+
 $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
@@ -309,6 +348,7 @@ $('clear').addEventListener('click',()=>{
   setBusy(false);
   resetPack();
   for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
+  $('zipFile').value='';
   status('プレビューを解除しました。画像データは保存していません。');
 });
 $('pause').addEventListener('click',()=>{

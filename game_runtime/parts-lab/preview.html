@@ -39,6 +39,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
 .caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
 .generated-import{margin:16px 0;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
+.zip-import{margin:14px 0;padding:14px;border-radius:12px;border:1px solid #7ab89f;background:#173c41}
+.zip-import p{margin:0 0 8px}
+.zip-import strong{color:#c8ffe3}
+.zip-import label{margin-bottom:8px}
+
 .generated-import summary{font-weight:700;cursor:pointer;line-height:1.65;padding:3px}
 .generated-import summary:focus-visible{outline:3px solid #f9dc8b}
 
@@ -56,6 +61,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <div class="layout">
 <section class="panel" aria-labelledby="fileTitle">
 <h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
+<div class="zip-import" aria-label="ZIP一括読み込み">
+<p><strong>おすすめ：ZIPを1回選ぶだけ</strong></p>
+<p class="hint">前に渡した「ラベンダーキャラ」のZIPを選ぶと、中の <code>body / ready / happy / cautious</code> を自動判別して再生します。展開や4枚の選択は不要です。</p>
+<label for="zipFile">ZIPファイルを選ぶと自動再生
+<input id="zipFile" type="file" accept=".zip,application/zip,application/x-zip-compressed"></label>
+<small>ブラウザ内で展開します。サーバーへのアップロード・保存なし。</small>
+</div>
+
 <p class="hint">顔が描かれていない「体」を用意してください。完成イラストをそのまま体に使うと目・口が二重になります。必須は体と通常の顔、ほかは任意です。</p>
 <div class="controls">
 <label for="frames">1枚あたりの動作コマ数

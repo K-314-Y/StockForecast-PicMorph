@@ -7,6 +7,7 @@ const pagePath = new URL('../../game_runtime/parts-lab/preview.html',import.meta
 const scriptPath = new URL('../../game_runtime/parts-lab/preview.js',import.meta.url);
 const html = await readFile(pagePath,'utf8');
 const script = await readFile(scriptPath,'utf8');
+const zipImporter = await readFile(new URL('../../game_runtime/parts-lab/zip-import.mjs',import.meta.url),'utf8');
 
 test('local PNG parts lab has independently accessible, fixed-path, safe read-only pages',async()=>{
   const server=createGameServer();
@@ -19,6 +20,7 @@ test('local PNG parts lab has independently accessible, fixed-path, safe read-on
     for (const [path,mime,data] of [
       ['/parts-lab/preview.html','text/html; charset=utf-8',Buffer.from(html)],
       ['/parts-lab/preview.js','text/javascript; charset=utf-8',Buffer.from(script)],
+      ['/parts-lab/zip-import.mjs','text/javascript; charset=utf-8',Buffer.from(zipImporter)],
     ]) {
       const res=await fetch(root+path);
       assert.equal(res.status,200,path);
@@ -42,7 +44,7 @@ test('local PNG parts lab has independently accessible, fixed-path, safe read-on
     for (const bad of [
       '/parts-lab/', '/parts-lab/nope.js','/parts-lab/../../local_state/secrets',
       '/parts-lab/%70review.html', '/parts-lab/%2e%2e%2flocal_state%2fsecret',
-      '/parts-lab/preview.html%2f..%2fprivate','/parts-lab/preview.js/extra',
+      '/parts-lab/preview.html%2f..%2fprivate','/parts-lab/preview.js/extra', '/parts-lab/zip-import.mjs/extra',
     ]) {
       const res=await fetch(root+bad,{redirect:'manual'});
       assert.notEqual(res.status,200,bad);
@@ -94,6 +96,18 @@ test('generated 3-by-2 character sheets are opt-in and converted locally to six 
   assert.match(script,/\+\+epoch;resetPack\(\);setBusy\(false\)/);
   assert.doesNotMatch(script,/\bFileReader\b|localStorage|indexedDB|sendBeacon\(/);
   assert.doesNotMatch(html,/<form\b/);
+});
+
+test('one ZIP file auto-loads body and mood images without uploads',()=>{
+  assert.match(html,/id="zipFile" type="file"/);
+  assert.match(html,/ZIPを1回選ぶだけ/);
+  assert.match(script,/extractCharacterZip\(file\)/);
+  assert.match(script,/displayLoaded\(next,6\)/);
+  assert.match(script,/zipFile'\)\.addEventListener\('change'/);
+  assert.match(zipImporter,/DecompressionStream\('deflate-raw'\)/);
+  assert.match(zipImporter,/crc32\(out\)!==item\.checksum/);
+  assert.match(zipImporter,/MAX_ZIP_BYTES=12\*1024\*1024/);
+  assert.doesNotMatch(zipImporter,/localStorage|indexedDB|sendBeacon/);
 });
 
 test('the only game entrypoint is an opt-in link inside the appearance studio',async()=>{
