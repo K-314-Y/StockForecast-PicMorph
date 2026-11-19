@@ -14,6 +14,7 @@ const allowed=[
 ].sort();
 const forbidden=[
   'save_my_companion','save_my_look','view_my_artwork_image','preview_my_companion',
+  'generate_character_parts','package_character_parts','register_demo_character',
 ];
 
 function listen(server){
@@ -95,12 +96,12 @@ test('read-only bridge exposes exactly six metadata tools, never images/writes/p
   });
 });
 
-test('original full local MCP still exposes all ten tools',async t=>{
+test('full local MCP exposes all thirteen tools',async t=>{
   await fixture(t,false,async({client,bridgeUrl,upstreamRequests})=>{
     const health=await fetch(bridgeUrl+'/health').then(res=>res.json());
-    assert.equal(health.tools,10);
+    assert.equal(health.tools,13);
     const names=(await client.listTools()).tools.map(x=>x.name);
-    assert.equal(names.length,10);
+    assert.equal(names.length,13);
     for(const name of [...allowed,...forbidden])assert.ok(names.includes(name),name);
     assert.deepEqual(upstreamRequests,[]);
   });

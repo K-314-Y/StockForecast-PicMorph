@@ -346,3 +346,45 @@ deterministic aborted timeout signal. The latter verifies error handling rather
 than waiting for the real 4500ms timer. No public listener or new authorization
 mechanism is added: Host/Origin/peer checks remain the browser boundary;
 untrusted processes on the same host remain outside that protection.
+
+## Sprint 86 · Local character art
+
+The full private MCP (HTTP or stdio) has three character-art tools. The
+read-only metadata connection exposes six tools. To start read-only stdio,
+run `node mcp/companion-stdio.mjs --read-only`.
+
+1. Call `generate_character_parts` with, for example,
+   `{"name":"モカ","hair_color":"#9069ac","clothing_color":"#47b8a2","accessory":"star","seed":42}`.
+   Use a 1–16 character display name, two six-digit hex colors, an optional
+   accessory (`none`, `ribbon`, `glasses` or `star`), and an optional integer
+   seed from 0 to 65535. The defaults are `none` and `0`. The seed selects the
+   fringe orientation.
+2. Call `package_character_parts` with the returned `generated_id`, then
+   select the returned `character_parts.zip` in the local Parts Lab ZIP
+   picker at `/parts-lab/preview.html`. The browser loads the body and all
+   three expressions from that one selection.
+3. Optionally call `register_demo_character` with the same ID to write a
+   local `demo.json` catalog entry. Browser auto-linking is unsupported.
+   Use the ZIP picker to display a registered demo.
+
+Generation uses Linux Python 3 with Pillow (`python3 -c 'import PIL'`).
+`engine=original-template` draws the artwork from project-authored
+geometric primitives. The same appearance inputs and Pillow environment
+produce the same image bytes. There is no diffusion model, external service,
+or Codex process at request time. Each transparent PNG is 1152 × 208 pixels
+with six horizontal 192 × 208 cells. The face-free body and the ready, happy
+and cautious overlays share frame coordinates. The animated `preview.gif`
+shows the composited ready expression. `manifest.json` records the model,
+appearance, layout, source provenance, dimensions, and SHA-256 hashes.
+
+Each generation gets a new ID under the worktree's ignored
+`local_state/character_parts/` directory. The tools return local paths and
+metadata. ZIP creation verifies the fixed asset files against the manifest.
+Files and complete generation directories are published atomically on Linux.
+A retry reclaims interrupted staging files. Repeating packaging or
+registration reuses the exact existing result and reports an error if an
+existing final file differs.
+Storage is capped at 32 entries, with a 512 KiB limit per image, a 3 MiB
+limit per ZIP, and a 4 KiB limit per metadata file. To free space, remove
+the selected generated directory locally. The tools operate independently
+of saved artwork, companion, XP, and market data.

@@ -18,4 +18,6 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 npx --yes @modelcontextprotocol/inspector@2.13.0 --cli node mcp/companion-stdio.mjs --method tools/list > "$tmp"
 node scripts/verify-plugin-inspector.mjs "$tmp"
+npx --yes @modelcontextprotocol/inspector@2.13.0 --cli --method tools/list -- node mcp/companion-stdio.mjs --read-only > "$tmp"
+node scripts/verify-plugin-inspector.mjs "$tmp" --read-only
 echo "ALL CHECKS PASSED. ChatGPT account installation is a separate user-authorized step."

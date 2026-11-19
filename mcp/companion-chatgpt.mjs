@@ -3,10 +3,11 @@
  *
  * ChatGPT -> private MCP -> Node 8890 -> node_game/companion.json
  * Does NOT expose the legacy Python 8765 MCP mutation tools, stock V6, XP
- * rewards, files, filesystem access, trade APIs, or arbitrary HTTP destinations.
+ * rewards, arbitrary filesystem access, trade APIs, or arbitrary HTTP destinations.
  * Authentication is supplied by a future Secure MCP Tunnel / private transport.
  * NEVER expose this listener using a public forwarding URL without auth.
  */
+import {execFile} from 'node:child_process';
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
@@ -42,7 +43,62 @@ const lookSchema=z.object({
   accessory:z.enum(['ribbon','glasses','star','none']),
 }).strict();
 
+const partsHelper = fileURLToPath(new URL('./character_parts.py', import.meta.url));
+const generatedIdSchema = z.object({
+  generated_id:z.string().length(35).regex(/^cp_[0-9a-f]{32}$/),
+}).strict();
+const appearanceSchema = z.object({
+  name:z.string().min(1).max(16).regex(/^[^\p{Cc}]+$/u).refine(name=>name.trim().length>0),
+  hair_color:z.string().length(7).regex(/^#[a-fA-F0-9]{6}$/),
+  clothing_color:z.string().length(7).regex(/^#[a-fA-F0-9]{6}$/),
+  accessory:z.enum(['none','ribbon','glasses','star']).default('none'),
+  seed:z.number().int().min(0).max(65535).default(0),
+}).strict();
+const localWrite = {readOnlyHint:false,destructiveHint:false,openWorldHint:false};
+let partsBusy = false;
 
+function runPartsHelper(operation,input,signal) {
+  return new Promise((resolve,reject)=>{
+    let outcome;
+    const child=execFile('python3',['-B','-E',partsHelper,operation],{
+      env:{PATH:process.env.PATH ?? '/usr/bin:/bin',LANG:'C.UTF-8'},
+      signal,timeout:10000,maxBuffer:16384,killSignal:'SIGKILL',
+    },(error,stdout)=>{outcome={error,stdout};});
+    // execFile may report cancellation before the child has exited and released the lock.
+    child.once('close',()=>{
+      if(outcome.error) reject(outcome.error);
+      else resolve(outcome.stdout);
+    });
+    child.stdin.on('error',()=>child.kill('SIGKILL'));
+    child.stdin.end(JSON.stringify(input)+'\n','utf8');
+  });
+}
+
+async function characterParts(operation, input, signal, message) {
+  if(partsBusy) return partsError('Character parts generation or packaging is busy. Try again.');
+  partsBusy = true;
+  try {
+    const stdout = await runPartsHelper(operation,input,signal);
+    const {result,error} = JSON.parse(stdout);
+    if(error) return partsError(error);
+    const localDirectory = 'local_state/character_parts/'+result.generated_id;
+    return {
+      content:[{type:'text',text:message(localDirectory)}],
+      structuredContent:{...result,local_directory:localDirectory},
+    };
+  } catch(error) {
+    if(signal?.aborted) return partsError('Character parts request was cancelled.');
+    return partsError(error.code==='ENOENT'
+      ? 'Python 3 is required for local character parts.'
+      : 'The local character parts helper failed or timed out.');
+  } finally {
+    partsBusy = false;
+  }
+}
+
+function partsError(text) {
+  return {isError:true,content:[{type:'text',text}]};
+}
 
 async function jsonFromGame(apiBase, path, body) {
   const response = await fetch(apiBase + path, {
@@ -107,11 +163,11 @@ function errorResult(error) {
 export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
   if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
   const server = new McpServer(
-    {name:'creature-lab-companion',version:'1.3.0'},
+    {name:'creature-lab-companion',version:'1.4.0'},
     {instructions:readOnly
       ? 'Creature Labの非公開・読み取り専用メタデータ接続。保存済みキャラ、外見、画像の登録状況、育成、学習済みキャラ一覧のみ確認できる。名前やXPも個人情報として扱う。保存・プレビュー・画像本体の転送はできない。'
       :
-      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はユーザーと相談する推測であり自動認識・自動分割ではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。実取引・V6変更・XP操作なし。'}
+      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はユーザーと相談する推測であり自動認識・自動分割ではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。オリジナルのキャラ画像は generate_character_parts でローカル作成し、package_character_parts でブラウザ用ZIPにまとめられる。実取引・V6変更・XP操作なし。'}
   );
   // Explicit metadata allowlist: readOnlyHint alone also permits previews/images.
   const registerTool=(name,config,handler)=>{
@@ -303,6 +359,27 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
         structuredContent:state};
     }catch(e){return errorResult(e);}
   });
+  registerTool('generate_character_parts',{
+    title:'Creature Lab: オリジナルのキャラパーツを生成',
+    description:'名前・髪色・服色・飾り・シードから、体と3表情の透過6コマPNG、GIF、manifestをローカル作成する。色は #RRGGBB。engine=original-template の手続き描画。',
+    inputSchema:appearanceSchema,
+    annotations:localWrite,
+  },(input,extra)=>characterParts('generate',input,extra?.signal,path=>
+    '手続き描画でキャラパーツと preview.gif を '+path+' に作成しました。ZIP化には generated_id を指定してください。'));
+  registerTool('package_character_parts',{
+    title:'Creature Lab: 生成済みのキャラパーツをZIP化',
+    description:'生成済みの generated_id を指定し、ブラウザのパーツラボで読み込めるローカルZIPを作成する。',
+    inputSchema:generatedIdSchema,
+    annotations:{...localWrite,idempotentHint:true},
+  },(input,extra)=>characterParts('package',input,extra?.signal,path=>
+    'パーツラボのZIP入力で '+path+'/character_parts.zip を選ぶと、体と3表情を読み込めます。'));
+  registerTool('register_demo_character',{
+    title:'Creature Lab: 生成キャラをローカルのデモ用に記録',
+    description:'生成済みの generated_id をローカルのデモ用メタデータに記録する。ブラウザとの自動連携は未実装。',
+    inputSchema:generatedIdSchema,
+    annotations:{...localWrite,idempotentHint:true},
+  },(input,extra)=>characterParts('register',input,extra?.signal,path=>
+    'ローカルのデモ用メタデータを '+path+'/demo.json に記録しました。ブラウザで使うにはパーツラボでZIPを選んでください。'));
   return server;
 }
 
@@ -328,7 +405,7 @@ export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
         .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,
-          tools:readOnly ? READ_ONLY_TOOLS.size : 10}));
+          tools:readOnly ? READ_ONLY_TOOLS.size : 13}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {

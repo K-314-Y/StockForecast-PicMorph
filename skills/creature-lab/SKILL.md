@@ -25,8 +25,16 @@ private local Creature Lab Node game. It has no real-trading capability.
 4. Use `list_my_trained_brains` to find training IDs and
    `get_my_creature_growth` only to read progression. Do not fabricate
    models, training, images, XP or results.
-5. All illustration uploads and manual crop actions currently belong in the
-   local web game. Image data must not be sent to arbitrary destinations.
+5. To create a new original chibi from appearance choices, call
+   `generate_character_parts` on the full private connection. Supply a
+   display name, hex hair and clothing colors, and optionally an accessory
+   and a seed. Describe the results as original procedural template artwork
+   (`engine=original-template`). Call `package_character_parts` with the
+   generated ID and give the user the local ZIP path to select in Parts Lab.
+   `register_demo_character` only records local catalog metadata. Opening a
+   demo in the browser requires the ZIP picker.
+   Existing artwork uploads and manual crop actions belong in the local web
+   game. Image data must not be sent to arbitrary destinations.
 6. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

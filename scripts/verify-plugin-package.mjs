@@ -1,5 +1,6 @@
 /** Offline package contract checks; safe to run before enabling any plugin. */
 import assert from 'node:assert/strict';
+import {verifyPluginTools} from './plugin-tool-contract.mjs';
 import {createRequire} from 'node:module';
 import {readFile,stat} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -38,12 +39,18 @@ console.log('PASS portable plugin package: manifest + MCP stdio + skill + privac
 const {Client}=await import('../mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js');
 const {StdioClientTransport}=await import('../mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js');
 const expand=value=>value.replaceAll('${PLUGIN_ROOT}',root);
-const transport=new StdioClientTransport({command:config.command,args:config.args.map(expand),cwd:expand(config.cwd),stderr:'pipe'});
-const client=new Client({name:'plugin-package-smoke',version:'1.0.0'});
-try {
-  await client.connect(transport,{timeout:5000});
-  const {tools}=await client.listTools({}, {timeout:5000});
-  assert.equal(tools.length,10);
-  assert.ok(tools.some(tool=>tool.name==='view_my_artwork_image'));
-  console.log('PASS official 1.0.0 schemas + manifest cwd/args stdio handshake (10 tools; no game calls)');
-}finally{await transport.close();}
+for(const readOnly of [false,true]) {
+  const args=[...config.args.map(expand),...(readOnly ? ['--read-only'] : [])];
+  const transport=new StdioClientTransport({
+    command:config.command,args,cwd:expand(config.cwd),stderr:'pipe',
+  });
+  const client=new Client({name:'plugin-package-smoke',version:'1.0.0'});
+  try {
+    await client.connect(transport);
+    const {tools}=await client.listTools({}, {timeout:5000});
+    verifyPluginTools(tools,{readOnly});
+    console.log(`PASS manifest stdio handshake (${tools.length} ${readOnly ? 'read-only' : 'full private'} tools)`);
+  } finally {
+    await transport.close();
+  }
+}

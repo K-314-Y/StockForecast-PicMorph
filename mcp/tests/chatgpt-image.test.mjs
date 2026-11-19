@@ -64,7 +64,7 @@ test('MCP read-only workspace snapshot does not save files and does not return a
 test('view_my_artwork_image supplies actual user-saved art to ChatGPT as MCP image content',async t=>{
   await fixture(t,async({client,gameUrl,dir})=>{
     const names=(await client.listTools()).tools.map(x=>x.name);
-    assert.equal(names.length,10);
+    assert.equal(names.length,13);
     const reader=(await client.listTools()).tools.find(x=>x.name==='view_my_artwork_image');
     assert.equal(reader.annotations.readOnlyHint,true);
     assert.equal(reader.annotations.destructiveHint,false);
