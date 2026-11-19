@@ -1,12 +1,13 @@
 import {once} from 'node:events';
 import {createServer} from 'node:http';
-import {configureFriendData} from './friend-account-data.mjs';
+import {configureFriendData, parseFriendProfileJson} from './friend-account-data.mjs';
 import {createFriendAuth, FRIEND_LOGIN_WINDOW_SECONDS} from './friend-auth.mjs';
 
 const BIND = '127.0.0.1';
 const HOST = 'friend.localhost';
 const MAX_BODY = 256;
 const ROUTES = new Set([
+  'POST /friend/character/companion', 'POST /friend/character/look',
   'GET /friend/character', 'GET /friend/forward/records',
   'POST /friend/invite/redeem', 'GET /friend/session', 'POST /friend/logout', 'GET /friend/forward/summary',
 ]);
@@ -50,27 +51,30 @@ function bodyError(status) {
   return Object.assign(new Error('Invalid friend request body'), {status});
 }
 
-async function readInvite(req) {
+async function readJsonBody(req, limit, parse = JSON.parse) {
   if (req.headersDistinct['content-type']?.length !== 1 || req.headers['content-type'] !== 'application/json') {
     throw bodyError(415);
   }
   const length = req.headers['content-length'];
-  if (req.headers['transfer-encoding'] || !/^[1-9]\d*$/.test(length ?? '')) throw bodyError(400);
-  if (Number(length) > MAX_BODY) throw bodyError(413);
+  if (req.headersDistinct['content-length']?.length !== 1 || req.headers['transfer-encoding'] || !/^[1-9]\d*$/.test(length ?? '')) throw bodyError(400);
+  if (Number(length) > limit) throw bodyError(413);
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw bodyError(413);
+    if (size > limit) throw bodyError(413);
     chunks.push(chunk);
   }
   if (size !== Number(length)) throw bodyError(400);
-  let body;
   try {
-    body = JSON.parse(new TextDecoder('utf-8', {fatal:true, ignoreBOM:true}).decode(Buffer.concat(chunks)));
+    return parse(new TextDecoder('utf-8', {fatal:true, ignoreBOM:true}).decode(Buffer.concat(chunks)));
   } catch {
     throw bodyError(400);
   }
+}
+
+async function readInvite(req) {
+  const body = await readJsonBody(req, MAX_BODY);
   if (!body || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'invite') ||
       typeof body.invite !== 'string') throw bodyError(400);
   return body.invite;
@@ -83,7 +87,7 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
   }
   accounts = new Map(accounts);
   const auth = createFriendAuth({accountIds:[...accounts.keys()], clock, randomBytes});
-  const readAccount = await configureFriendData(walletRoot, accounts, accountRecordSources);
+  const accessAccount = await configureFriendData(walletRoot, accounts, accountRecordSources);
   let authority;
   const limit = res => error(res, 429, 'login_limited', {'Retry-After':String(FRIEND_LOGIN_WINDOW_SECONDS)});
 
@@ -109,11 +113,32 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
           return respond(res, 200, {authenticated:true, sessionToken:result.sessionToken});
         }
 
+        const token = sessionToken(req);
+        if (route === 'POST /friend/character/companion' || route === 'POST /friend/character/look') {
+          const session = auth.readSession(token);
+          if (!session) return error(res, 401, 'authentication_required', {Connection:'close'});
+          const csrf = req.headersDistinct['x-csrf-token'];
+          if (csrf?.length !== 1 || !auth.canEdit(token, csrf[0])) {
+            return error(res, 403, 'csrf_required', {Connection:'close'});
+          }
+          function authorize() {
+            if (!auth.canEdit(token, csrf[0])) {
+              throw Object.assign(Error('Session expired or revoked'), {code:'FRIEND_SESSION_EXPIRED'});
+            }
+          }
+          let payload;
+          try { payload = await readJsonBody(req, 4096, parseFriendProfileJson); }
+          catch (err) { return error(res, err.status ?? 400, 'invalid_request', {Connection:'close'}); }
+          authorize();
+          const data = await accessAccount(session.accountId, path, payload, authorize);
+          authorize();
+          return respond(res, 200, data);
+        }
+
         if (req.headers['transfer-encoding'] ||
             (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')) {
           return error(res, 400, 'body_not_allowed', {Connection:'close'});
         }
-        const token = sessionToken(req);
         const session = auth.readSession(token);
         if (!session) return error(res, 401, 'authentication_required');
         if (route === 'POST /friend/logout') {
@@ -127,13 +152,17 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
           return respond(res, 200, {authenticated:true, ...session});
         }
 
-        const data = await readAccount(session.accountId, path);
+        const data = await accessAccount(session.accountId, path);
         // Do not return account data after a concurrent logout, rotation or expiry.
         if (auth.readSession(token)?.accountId !== session.accountId) return error(res, 401, 'authentication_required');
         return respond(res, 200, data);
       }
-      handle().catch(() => {
-        if (!res.headersSent && !res.destroyed) error(res, 503, 'unavailable', {Connection:'close'});
+      handle().catch(err => {
+        if (res.headersSent || res.destroyed) return;
+        if (err.code === 'FRIEND_INVALID_EDIT') return error(res, 400, 'invalid_request');
+        if (err.code === 'FRIEND_CONFLICT') return error(res, 409, 'profile_conflict');
+        if (err.code === 'FRIEND_SESSION_EXPIRED') return error(res, 401, 'authentication_required');
+        error(res, 503, 'unavailable', {Connection:'close'});
       });
     });
 

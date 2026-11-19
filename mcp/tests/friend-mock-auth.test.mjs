@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {createHmac} from 'node:crypto';
-import {chmod, link, mkdir, mkdtemp, open, readFile, rename, rm, symlink, unlink, writeFile} from 'node:fs/promises';
+import {chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {request} from 'node:http';
 import {dirname, join} from 'node:path';
 import test from 'node:test';
@@ -18,8 +20,8 @@ const sessionPath = '/friend/session';
 const logoutPath = '/friend/logout';
 const summaryPath = '/friend/forward/summary';
 
-function call(server, path, {method = 'GET', headers = {}, body} = {}) {
-  const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+function call(server, path, {method = 'GET', headers = {}, body, rawBody} = {}) {
+  const bytes = rawBody ?? (body === undefined ? undefined : Buffer.from(JSON.stringify(body)));
   const requestHeaders = {Host:new URL(server.origin).host, Connection:'close',
     ...(method === 'POST' ? {Origin:server.origin} : {}),
     ...(bytes ? {'Content-Type':'application/json', 'Content-Length':bytes.length} : {}),
@@ -671,4 +673,214 @@ test('P9f stops serving records on revocation, missing evidence, mode changes, o
   await rename(a.options.directory, a.options.directory + '.old');
   await mkdir(a.options.directory, {mode:0o700});
   await denied();
+});
+
+const companionEdit = '/friend/character/companion';
+const lookEdit = '/friend/character/look';
+const firstCompanion = {expected_revision:0, companion:exampleCompanion};
+const firstLook = {expected_revision:0, look:exampleLook};
+
+async function editor(server, id) {
+  const {sessionToken} = await login(server, id);
+  const {body:{csrfToken}} = await authenticated(server, sessionPath, sessionToken);
+  return {sessionToken, csrfToken, save:(path, body, headers) => authenticated(server, path, sessionToken,
+    {method:'POST', body, headers:{'X-CSRF-Token':csrfToken, ...headers}})};
+}
+
+test('P9g saves only the authenticated companion and strategy with optimistic revisions', async t => {
+  const {server, accounts} = await setup(t);
+  const a = await editor(server, 'Alice');
+  const result = await a.save(companionEdit, firstCompanion);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.companion, {created:true, revision:1, ...exampleCompanion});
+  assert.equal(result.body.model_version, deriveForwardCompanionModel(exampleCompanion).model_version);
+  assert.equal(result.body.looks.created, false);
+  assert.equal(result.headers['cache-control'], 'no-store');
+  assert.doesNotMatch(result.text, /sessionToken|csrfToken|modelHash|proof/);
+  const target = join(dirname(accounts.get('Alice')), 'companion.json');
+  const saved = await readFile(target);
+  assert.equal((await a.save(companionEdit, firstCompanion)).status, 409);
+  assert.deepEqual(await readFile(target), saved);
+  await assert.rejects(readFile(join(dirname(accounts.get('Bob')), 'companion.json')), {code:'ENOENT'});
+});
+
+test('P9g look and companion revisions are independent and persist through server restarts', async t => {
+  const {server, start} = await setup(t);
+  const a = await editor(server, 'Alice');
+  await a.save(companionEdit, firstCompanion);
+  const saved = await a.save(lookEdit, firstLook);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.companion.revision, 1);
+  assert.deepEqual(saved.body.looks, {created:true, revision:1, ...exampleLook});
+  const second = await start();
+  const next = await editor(second, 'Alice');
+  assert.deepEqual((await authenticated(second, characterPath, next.sessionToken)).body, saved.body);
+  const updated = await next.save(lookEdit, {expected_revision:1, look:{...exampleLook, accessory:'star'}});
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.looks.revision, 2);
+  assert.deepEqual(updated.body.companion, saved.body.companion);
+});
+
+test('P9g isolates A/B writes and keeps both fixed private files inside their own folder', async t => {
+  const {server, accounts} = await setup(t);
+  const users = await Promise.all(['Alice','Bob'].map(id => editor(server, id)));
+  for (const [i, id] of ['Alice','Bob'].entries()) {
+    const user = users[i];
+    const companion = {...exampleCompanion, name:id, risk_percent:25 + 25*i};
+    const look = {...exampleLook, accessory:i ? 'glasses' : 'none'};
+    assert.equal((await user.save(companionEdit, {expected_revision:0, companion})).status, 200);
+    const res = await user.save(lookEdit, {expected_revision:0, look});
+    assert.equal(res.status, 200);
+    assert.equal(res.body.model_version, deriveForwardCompanionModel(companion).model_version);
+    const folder = dirname(accounts.get(id));
+    assert.deepEqual((await readdir(folder)).sort(), ['companion.json','looks.json']);
+    for (const file of ['companion.json','looks.json']) {
+      const stat = await lstat(join(folder, file));
+      assert.equal(stat.mode & 0o7777, 0o600);
+      assert.equal(stat.uid, process.geteuid());
+      assert.equal(stat.nlink, 1);
+    }
+  }
+  assert.equal((await authenticated(server, characterPath, users[0].sessionToken)).body.companion.name, 'Alice');
+});
+
+test('P9g rejects unauthenticated writes, wrong or missing CSRF, foreign origin and account queries', async t => {
+  const {server, accounts} = await setup(t);
+  const [a,b] = await Promise.all(['Alice','Bob'].map(id => editor(server, id)));
+  for (const [path, body] of [[companionEdit,firstCompanion],[lookEdit,firstLook]]) {
+    assert.equal((await call(server, path, {method:'POST', body})).status, 401);
+    assert.equal((await authenticated(server,path,a.sessionToken,{method:'POST',body})).status, 403);
+    for (const headers of [{'X-CSRF-Token':b.csrfToken}, {'X-CSRF-Token':[a.csrfToken,a.csrfToken]},
+      {Origin:'http://other.localhost'}, {'Sec-Fetch-Site':'same-site'}, {Forwarded:'for=127.0.0.1'}]) {
+      assert.equal((await a.save(path, body, headers)).status, 403);
+    }
+    assert.equal((await a.save(path + '?accountId=Bob', body)).status, 400);
+    assert.equal((await a.save(path, {...body, accountId:'Bob'})).status, 400);
+    assert.equal((await a.save(path, {...body, path:'../Bob/looks.json'})).status, 400);
+  }
+  for (const file of accounts.values()) assert.deepEqual(await readdir(dirname(file)), []);
+});
+
+test('P9g rejects invalid strategy, look, revision, extra fields and control characters', async t => {
+  const {server,accounts} = await setup(t);
+  const a = await editor(server, 'Alice');
+  for (const payload of [null, {}, [], {expected_revision:0}, {...firstCompanion, expected_revision:-1},
+    {...firstCompanion, expected_revision:1.5}, {...firstCompanion, expected_revision:'0'},
+    ...[{name:'a\u0001b'},{approach:'external'},{risk_percent:77},{hair_color:'invalid'},{account:'Bob'}]
+      .map(change => ({...firstCompanion, companion:{...exampleCompanion, ...change}}))]) {
+    assert.equal((await a.save(companionEdit, payload)).status, 400);
+  }
+  for (const change of [{expression:'bad'},{hair_style:'bad'},{asset:'image.png'}]) {
+    assert.equal((await a.save(lookEdit, {...firstLook, look:{...exampleLook, ...change}})).status, 400);
+  }
+  assert.deepEqual(await readdir(dirname(accounts.get('Alice'))), []);
+});
+
+test('P9g rejects duplicate JSON keys including escaped names, malformed bytes, wrong content type and oversized body', async t => {
+  const {server, accounts} = await setup(t);
+  const a = await editor(server, 'Alice');
+  const raw = JSON.stringify(firstLook);
+  const send = (bytes, headers) => authenticated(server, lookEdit, a.sessionToken, {method:'POST',
+    rawBody:Buffer.from(bytes), headers:{'X-CSRF-Token':a.csrfToken, ...headers}});
+  for (const bytes of ['{', raw.replace('{','{"expected_revision":3,'),
+    raw.replace('"hair_style":', '"hair_\\u0073tyle":"long","hair_style":'), Buffer.from([0xff])]) {
+    assert.equal((await send(bytes)).status, 400);
+  }
+  assert.equal((await send(raw.padEnd(4097))).status, 413);
+  assert.equal((await send(raw, {'Content-Type':'text/plain'})).status, 415);
+  const chunked = await authenticated(server, lookEdit, a.sessionToken, {method:'POST',
+    headers:{'X-CSRF-Token':a.csrfToken, 'Content-Type':'application/json','Transfer-Encoding':'chunked'}});
+  assert.equal(chunked.status, 400);
+  assert.deepEqual(await readdir(dirname(accounts.get('Alice'))), []);
+});
+
+test('P9g refuses existing symlinks, hardlinks, unsafe modes and malformed records without replacement', async t => {
+  const {server, accounts} = await setup(t);
+  await writeProfile(accounts.get('Bob'), exampleCompanion, exampleLook);
+  const a = await editor(server, 'Alice');
+  const folder = dirname(accounts.get('Alice'));
+  for (const [name, path, payload] of [['looks.json',lookEdit,firstLook], ['companion.json',companionEdit,firstCompanion]]) {
+    const other = join(dirname(accounts.get('Bob')),name);
+    const before = await readFile(other);
+    const target = join(folder,name);
+    for (const install of [link, symlink]) {
+      await install(other, target);
+      const ino = (await lstat(target)).ino;
+      assert.equal((await a.save(path, payload)).status, 503);
+      assert.equal((await lstat(target)).ino, ino);
+      await unlink(target);
+      assert.deepEqual(await readFile(other), before);
+    }
+    await writeFile(target, '{}', {mode:0o644});
+    for (const mode of [0o644,0o600]) {
+      await chmod(target, mode);
+      assert.equal((await a.save(path, payload)).status, 503);
+      assert.equal(await readFile(target, 'utf8'), '{}');
+    }
+    await unlink(target);
+    assert.deepEqual(await readdir(folder), []);
+  }
+});
+
+test('P9g never clears stale or foreign locks and rejects a wallet path reserved for character storage', async t => {
+  const {server,config,accounts} = await setup(t);
+  const folder = dirname(accounts.get('Alice'));
+  const lock = join(folder,'.friend-character.lock');
+  await writeFile(lock, 'existing writer', {mode:0o600});
+  const a = await editor(server,'Alice');
+  assert.equal((await a.save(lookEdit, firstLook)).status, 409);
+  assert.equal(await readFile(lock, 'utf8'), 'existing writer');
+  for (const name of ['companion.json','looks.json','.friend-character.lock']) {
+    const unsafe = new Map(accounts).set('Alice', join(folder,name));
+    await assert.rejects(startFriendMockServer({...config, accounts:unsafe}), /conflicts/);
+  }
+});
+
+test('P9g simultaneous servers in separate processes can commit a given revision only once', async t => {
+  const {server, accounts, walletRoot} = await setup(t);
+  const module = new URL('../../game_runtime/friend-mock-server.mjs', import.meta.url).href;
+  const child = spawn(process.execPath, ['--input-type=module','-e', `
+    import {startFriendMockServer} from ${JSON.stringify(module)};
+    process.once('message', async ({accounts,walletRoot}) => {
+      const server = await startFriendMockServer({accounts:new Map(accounts),walletRoot});
+      process.send({origin:server.origin, port:server.port, invite:server.issueInvite('Alice').token});
+      process.once('disconnect', () => server.close());
+    });
+  `], {stdio:['ignore','ignore','inherit','ipc']});
+  const exited = once(child,'exit');
+  t.after(async () => { if (child.connected) child.disconnect(); await exited; });
+  const ready = once(child,'message');
+  child.send({accounts:[...accounts], walletRoot});
+  const [other] = await ready;
+  const b = await redeem(other, other.invite);
+  const otherToken = b.body.sessionToken;
+  const csrf = (await authenticated(other, sessionPath, otherToken)).body.csrfToken;
+  const a = await editor(server, 'Alice');
+  const second = {...firstCompanion, companion:{...exampleCompanion, name:'second'}};
+  const results = await Promise.all([a.save(companionEdit,firstCompanion),
+    authenticated(other,companionEdit,otherToken,{method:'POST',body:second,headers:{'X-CSRF-Token':csrf}})]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200,409]);
+  const stored = JSON.parse(await readFile(join(dirname(accounts.get('Alice')),'companion.json')));
+  assert.equal(stored.revision, 1);
+  assert.equal(stored.companion.name, results.find(result => result.status === 200).body.companion.name);
+});
+
+test('P9g editing a strategy preserves the frozen wallet and scored P4 record byte for byte', async t => {
+  const {start,accounts} = await setup(t);
+  const wallet = accounts.get('Alice');
+  const round = await provisionMockRound(wallet);
+  const server = await start({accountRecordSources:new Map([['Alice',round.config]])});
+  const a = await editor(server,'Alice');
+  const forecastFiles = (await readdir(round.options.directory)).sort();
+  const bytes = () => Promise.all([wallet, ...forecastFiles.map(name => join(round.options.directory,name))]
+    .map(file => readFile(file)));
+  const before = await bytes();
+  const old = await authenticated(server,recordsPath,a.sessionToken);
+  assert.equal(old.body.records[0].status, 'SCORED_MOCK_NONLIVE');
+  const saved = await a.save(companionEdit,{expected_revision:0, companion:{...exampleCompanion, approach:'reversion'}});
+  assert.equal(saved.status, 200);
+  assert.notEqual(saved.body.model_version, old.body.records[0].model_version);
+  assert.deepEqual((await authenticated(server,recordsPath,a.sessionToken)).body, old.body);
+  assert.deepEqual(await bytes(), before);
+  assert.deepEqual((await readdir(round.options.directory)).sort(), forecastFiles);
 });

@@ -106,6 +106,11 @@ export function createFriendAuth({accountIds, clock = Date.now, randomBytes = sy
       const {accountId, csrfToken, expiresAt} = session;
       return {accountId, csrfToken, expiresAt};
     },
+    canEdit(token, csrf) {
+      now();
+      const session = findCredential(sessions, token);
+      return Boolean(session && validCsrf(session, csrf));
+    },
     refresh(token, csrf) {
       const time = now();
       const session = findCredential(sessions, token);
