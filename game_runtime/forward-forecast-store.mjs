@@ -3,7 +3,7 @@ import {constants} from 'node:fs';
 import {link, lstat, mkdir, open, realpath, rmdir, unlink} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {identifyForwardAppearanceModel} from './appearance-model.mjs';
-import {MARKET_SYMBOL, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
+import {MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
 import {FORWARD_AI_ID} from './forward-paper.mjs';
 import {forecastDirection, hasFields, scoreMockForecast} from './forward-score.mjs';
 import {readForwardSnapshot} from './forward-store.mjs';
@@ -143,11 +143,14 @@ function outcomeFor(forecast, receipt, observation, scoredAt) {
  * walletFile. The optional clock and readMockOutcome are server configuration.
  * readMockOutcome is a server-owned synthetic fixture reader, called only after
  * the target of a TEST_ONLY forecast. It may return null while data is pending.
+ * readMockEvidence instead supplies a ledger-bound observation and fill time.
+ * The ledger-bound path also verifies previously saved outcomes before use.
  * After an abnormal exit, inspect any remaining lock and temporary file with all
  * writers stopped before removing them. A forecast without a receipt and its
  * cutoff confirmation stays closed.
  */
-export async function openForwardForecastStore({directory, walletFile, clock = Date.now, readMockOutcome}) {
+export async function openForwardForecastStore({directory, walletFile, clock = Date.now, readMockOutcome,
+  readMockEvidence}) {
   if (typeof walletFile !== 'string' || !walletFile.trim()) {
     throw new RangeError('An explicit walletFile is required');
   }
@@ -156,7 +159,8 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
     throw new RangeError('Forecast directory must be a real local directory');
   }
   walletFile = resolve(walletFile);
-  if (typeof clock !== 'function' || (readMockOutcome !== undefined && typeof readMockOutcome !== 'function')) {
+  if (typeof clock !== 'function' || (readMockOutcome !== undefined && typeof readMockOutcome !== 'function') ||
+      (readMockEvidence !== undefined && (typeof readMockEvidence !== 'function' || readMockOutcome !== undefined))) {
     throw new RangeError('Invalid server clock or mock source');
   }
 
@@ -170,6 +174,13 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
 
   function pathFor(id, kind) {
     return join(directory, id + '.' + kind + '.json');
+  }
+
+  function checkMockEvidence(forecast, evidence, scoredAt) {
+    if (!evidence || !(utcTime(scoredAt) >= utcTime(forecast.targetAt) &&
+        utcTime(scoredAt) >= utcTime(evidence.observedAt))) {
+      throw new RangeError('MOCK_NONLIVE score requires verified settlement at the target');
+    }
   }
 
   async function withLock(id, action) {
@@ -222,6 +233,13 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
     } catch (error) {
       throw corrupt(error);
     }
+    if (outcome && readMockEvidence) {
+      const evidence = await readMockEvidence(forecast, receipt);
+      checkMockEvidence(forecast, evidence, outcome.scoredAt);
+      if (canonical(evidence.observation) !== canonical(outcome.observation)) {
+        throw storeError('FORWARD_FORECAST_EVIDENCE_MISMATCH', 'Saved mock score does not match the signed ledger fill');
+      }
+    }
     // A prior write might have reached link before reporting a sync failure.
     await syncDirectory(directory);
     return {forecast, receipt, outcome};
@@ -270,15 +288,20 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
       if (!saved) throw storeError('FORWARD_FORECAST_NOT_FOUND', 'No saved forecast');
       const {forecast, receipt, outcome} = saved;
       if (forecast.sourceMode !== 'TEST_ONLY') throw new RangeError('Market scoring is closed');
-      if (outcome) return outcome;
-      if (utcTime(now()) < utcTime(forecast.targetAt) || !readMockOutcome) {
-        return {status:'PENDING', forecastId};
+      if (readMockOutcome && (await readForwardSnapshot(walletFile)).ledger.mode === MOCK_MARKET_PAPER_MODE) {
+        throw new RangeError('MOCK_NONLIVE paper ledgers require signed settlement evidence');
       }
-      const observation = await readMockOutcome(Object.freeze({
+      if (outcome) return outcome;
+      const pending = {status:'PENDING', forecastId};
+      if (utcTime(now()) < utcTime(forecast.targetAt)) return pending;
+      const evidence = readMockEvidence ? await readMockEvidence(forecast, receipt) : null;
+      const observation = readMockEvidence ? evidence?.observation : await readMockOutcome?.(Object.freeze({
         forecastId, symbol:forecast.symbol, targetAt:forecast.targetAt,
       }));
-      if (observation == null) return {status:'PENDING', forecastId};
-      const result = outcomeFor(forecast, receipt, observation, now());
+      if (observation == null) return pending;
+      const scoredAt = now();
+      if (readMockEvidence) checkMockEvidence(forecast, evidence, scoredAt);
+      const result = outcomeFor(forecast, receipt, observation, scoredAt);
       await publish(directory, pathFor(forecastId, 'outcome'), 'outcome', result);
       return (await read(forecastId)).outcome;
     }),

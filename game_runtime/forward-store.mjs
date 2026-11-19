@@ -59,13 +59,22 @@ function validatePosition(position, wallet, lastBatch) {
     position.modelHash === wallet.modelHash && timestamp(position.openedAt) <= lastBatch, '保有ポジション');
 }
 
-function validatePending(pending, wallets, orderIds, interval) {
+function validateMockForecast(binding, mode, interval) {
+  requireValid(mode === MOCK_MARKET_PAPER_MODE && interval !== undefined &&
+    fields(binding, 'forecastSha256', 'targetAt', 'reference') &&
+    matches(binding.forecastSha256, HASH) && Number.isFinite(utcTime(binding.targetAt)) &&
+    fields(binding.reference, 'raw', 'proof') && isEvidenceText(binding.reference.raw, 16_384) &&
+    isEvidenceText(binding.reference.proof, 4096), 'MOCK_NONLIVE 予測証拠');
+}
+
+function validatePending(pending, wallets, orderIds, interval, mode) {
   const aiIds = new Set();
   for (const order of pending) {
     const close = order?.action === 'CLOSE';
     const extra = close ? [] : ['margin', 'leverage'];
     requireValid(fields(order, 'id', 'aiId', 'symbol', 'action', 'receivedAt',
-      ...(interval === undefined ? [] : ['eligibleAt']), ...extra) &&
+      ...(interval === undefined ? [] : ['eligibleAt']),
+      ...(order && Object.hasOwn(order, 'mockForecast') ? ['mockForecast'] : []), ...extra) &&
       matches(order.id, ORDER_ID) && !orderIds.has(order.id) &&
       matches(order.aiId, AI_ID) && Object.hasOwn(wallets, order.aiId) && !aiIds.has(order.aiId) &&
       matches(order.symbol, MARKET_SYMBOL), '予約注文');
@@ -81,6 +90,12 @@ function validatePending(pending, wallets, orderIds, interval) {
     const received = timestamp(order.receivedAt);
     if (interval !== undefined) {
       requireValid(timestamp(order.eligibleAt) === nextObservation(received, interval), '予約注文の締切');
+    }
+    if (Object.hasOwn(order, 'mockForecast')) {
+      validateMockForecast(order.mockForecast, mode, interval);
+      const target = timestamp(order.mockForecast.targetAt);
+      const eligible = timestamp(order.eligibleAt);
+      requireValid(received < target && (close ? eligible <= target : eligible < target), 'MOCK_NONLIVE 予測注文の締切');
     }
     orderIds.add(order.id);
     aiIds.add(order.aiId);
@@ -114,7 +129,16 @@ function validateJournal(ledger, lastBatch, orderIds) {
       }
       requireValid(['OPENED', 'CLOSED'].includes(event.kind) &&
         fields(event, ...base, 'orderId', ...observation, ...(lastTradeAt ? ['receivedAt'] : []),
-          ...(interval === undefined ? [] : ['eligibleAt'])), '約定履歴');
+          ...(interval === undefined ? [] : ['eligibleAt']),
+          ...(Object.hasOwn(event, 'mockForecast') ? ['mockForecast',
+            ...(event.kind === 'CLOSED' ? ['realizedPnl'] : [])] : [])), '約定履歴');
+      if (Object.hasOwn(event, 'mockForecast')) {
+        validateMockForecast(event.mockForecast, ledger.mode, interval);
+        const target = timestamp(event.mockForecast.targetAt);
+        requireValid(event.kind === 'OPENED' ? time < target :
+          timestamp(event.tradeAt) === target && amount(event.realizedPnl, -MAX_BALANCE, MAX_BALANCE),
+        'MOCK_NONLIVE 予測約定');
+      }
     }
     requireValid(event.modelHash === wallets[event.aiId].modelHash &&
       matches(event.sourceId, MARKET_SOURCE_ID) && isMarketPrice(event.price), '取引履歴の観測');
@@ -200,7 +224,7 @@ function validateLedger(ledger) {
   requireValid(allocated === ledger.initialMedals, '開始メダル配分');
   if (hasGenerations) validateAppearanceGenerations(ledger.appearanceGenerations, ledger.wallets);
   const orderIds = new Set();
-  validatePending(ledger.pending, ledger.wallets, orderIds, ledger.observationIntervalMs);
+  validatePending(ledger.pending, ledger.wallets, orderIds, ledger.observationIntervalMs, ledger.mode);
   validateJournal(ledger, lastBatch, orderIds);
 }
 
@@ -488,14 +512,14 @@ export async function openForwardStore({
     await writeSnapshot(filePath, {revision: 0, ledger});
   }, {allowMissingParent: initial === undefined});
 
-  function update(expectedRevision, transition) {
+  function update(expectedRevision, transition, beforeCommit) {
     return withLedgerLock(filePath, async () => {
       const current = await readExisting();
       if (expectedRevision !== current.revision) throw revisionConflict();
       requireValid(current.revision < Number.MAX_SAFE_INTEGER, 'revision の上限');
       const ledger = await transition(current.ledger);
       const next = {revision: current.revision + 1, ledger};
-      await writeSnapshot(filePath, next);
+      await writeSnapshot(filePath, next, beforeCommit);
       return next;
     });
   }
@@ -518,11 +542,51 @@ export async function openForwardStore({
         return queueForwardOrder(ledger, request, receivedAt);
       });
     },
+    reserveMockForecastOrder: (order, binding, {notBefore, expectedRevision}) => {
+      const request = structuredClone(order);
+      const mockForecast = structuredClone(binding);
+      const close = request.action === 'CLOSE';
+      const cutoff = timestamp(mockForecast.targetAt);
+      const earliest = timestamp(notBefore);
+      let receivedAt;
+      function checkWindow(at) {
+        const time = timestamp(at);
+        if (!(time >= earliest && time < cutoff)) {
+          throw new RangeError('Server receipt is outside the MOCK_NONLIVE forecast window');
+        }
+      }
+      return update(expectedRevision, ledger => {
+        requireAdapter(ledger);
+        validateMockForecast(mockForecast, ledger.mode, ledger.observationIntervalMs);
+        adapter.mockReference(mockForecast.reference, request.symbol);
+        receivedAt = adapter.stamp();
+        checkWindow(receivedAt);
+        const next = queueForwardOrder(ledger, request, receivedAt);
+        const pending = next.pending.at(-1);
+        const eligible = timestamp(pending.eligibleAt);
+        if (close ? eligible > cutoff : eligible >= cutoff) {
+          throw new RangeError('No eligible batch before the MOCK_NONLIVE order cutoff');
+        }
+        pending.mockForecast = mockForecast;
+        return next;
+      }, () => {
+        adapter.authorize();
+        const checkedAt = adapter.stamp();
+        checkWindow(checkedAt);
+        if (timestamp(checkedAt) < timestamp(receivedAt)) {
+          throw new RangeError('Server clock reversed during MOCK_NONLIVE reservation');
+        }
+      });
+    },
     applyForwardBatch: expectedRevision => update(expectedRevision, async ledger => {
       if (isMarketMode(ledger.mode)) {
         requireAdapter(ledger);
         const {observation, options} = await adapter.observe();
-        return applyForwardBatch(ledger, observation, options);
+        const next = applyForwardBatch(ledger, observation, options);
+        for (const event of next.journal.slice(ledger.journal.length)) {
+          if (event.mockForecast) adapter.mockForecastTrades(event);
+        }
+        return next;
       }
       if (typeof getObservation !== 'function') {
         throw storeError('FORWARD_STORE_NO_OBSERVATION', '内部の市場観測関数が設定されていません');

@@ -226,12 +226,17 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
     }
     const quote = accepted.get(order.symbol);
     // A late delivery can carry a trade from before this order's eligible window.
-    if (!quote || quote.trade <= dateMs(order.receivedAt) ||
+    const target = order.mockForecast && dateMs(order.mockForecast.targetAt);
+    const inWindow = target === undefined || (order.action === 'CLOSE'
+      ? quote?.trade === target
+      : time < target && now < target && quote?.trade < target);
+    if (!quote || !inWindow || quote.trade <= dateMs(order.receivedAt) ||
         (interval !== undefined && quote.trade < dateMs(order.eligibleAt))) {
       remaining.push(order);
       continue;
     }
     const observedPrice = quote.price;
+    let realizedPnl;
     if (order.action === 'CLOSE') {
       const pos = wallet.position;
       if (!pos || pos.symbol !== order.symbol) {
@@ -239,7 +244,8 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
           observedAt, reason:'POSITION_NOT_FOUND'});
         continue;
       }
-      const proceeds = pos.margin + positionPnl(pos, observedPrice);
+      realizedPnl = positionPnl(pos, observedPrice);
+      const proceeds = pos.margin + realizedPnl;
       wallet.cash = Math.max(0, wallet.cash + proceeds);
       wallet.position = null;
     } else {
@@ -271,6 +277,8 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
       ...eventObservation(quote, order.symbol, observedAt, sourceId),
       ...(market ? {receivedAt: order.receivedAt} : {}),
       ...(interval === undefined ? {} : {eligibleAt: order.eligibleAt}),
+      ...(order.mockForecast ? {mockForecast:order.mockForecast} : {}),
+      ...(order.mockForecast && order.action === 'CLOSE' ? {realizedPnl} : {}),
     });
   }
   next.pending = remaining;

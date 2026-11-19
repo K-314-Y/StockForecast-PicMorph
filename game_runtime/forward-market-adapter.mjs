@@ -50,6 +50,38 @@ export function createForwardMarketAdapter({
     }
     return new Date(time).toISOString();
   }
+  function verifyTrade({raw, proof} = {}) {
+    if (!isEvidenceText(raw, 16_384) || !isEvidenceText(proof, 4096) || proof === TEST_FIXTURE_SOURCE) return null;
+    const verified = synchronous(verifyRecord(Object.freeze({sourceId, raw, proof})));
+    if (!verified || verified.sourceId !== sourceId || typeof verified.symbol !== 'string' ||
+        !MARKET_SYMBOL.test(verified.symbol)) return null;
+    return verified;
+  }
+  function isTrade({market, valueKind, price, tradeAt, publishedAt}) {
+    const delay = utcTime(publishedAt) - utcTime(tradeAt);
+    return market === 'XTKS' && valueKind === 'TRADE' && isMarketPrice(price) &&
+      delay >= 0 && delay <= maxPublicationDelayMs;
+  }
+  function mockReference(envelope, symbol) {
+    authorize();
+    const reference = mode === MOCK_MARKET_PAPER_MODE && verifyTrade(envelope ?? undefined);
+    if (!reference || reference.symbol !== symbol || !isTrade(reference)) {
+      throw new RangeError('Invalid signed MOCK_NONLIVE reference trade');
+    }
+    return reference;
+  }
+  function mockForecastTrades(event) {
+    const {evidence, mockForecast, sourceId: eventSource, symbol} = event;
+    const reference = mockReference(mockForecast.reference, symbol);
+    const trade = evidence && verifyTrade(evidence);
+    // The signed execution row names the exact signed reference of this fixture.
+    if (!trade || !isTrade(trade) || eventSource !== MOCK_MARKET_SOURCE ||
+        evidence.licenseRef !== licenseRef || trade.referenceProof !== mockForecast.reference.proof ||
+        !['symbol', 'price', 'tradeAt', 'publishedAt'].every(key => trade[key] === event[key])) {
+      throw new RangeError('Signed MOCK_NONLIVE trade does not match the ledger or reference');
+    }
+    return {reference, trade};
+  }
   async function observe() {
     authorize();
     const rows = await readBatch();
@@ -60,16 +92,12 @@ export function createForwardMarketAdapter({
     const symbols = new Set();
     for (const row of rows) {
       const {raw, proof} = row ?? {};
-      if (!isEvidenceText(raw, 16_384) || !isEvidenceText(proof, 4096) || proof === TEST_FIXTURE_SOURCE) continue;
-      const verified = synchronous(verifyRecord(Object.freeze({sourceId, raw, proof})));
-      if (!verified || verified.sourceId !== sourceId || typeof verified.symbol !== 'string' ||
-          !MARKET_SYMBOL.test(verified.symbol)) continue;
+      const verified = verifyTrade({raw, proof});
+      if (!verified) continue;
       const {symbol, price, market, valueKind, tradeAt, publishedAt} = verified;
       if (symbols.has(symbol)) throw new RangeError('観測バッチに重複銘柄があります');
       symbols.add(symbol);
-      const delay = utcTime(publishedAt) - utcTime(tradeAt);
-      if (market !== 'XTKS' || valueKind !== 'TRADE' || !isMarketPrice(price) ||
-          !(delay >= 0 && delay <= maxPublicationDelayMs)) continue;
+      if (!isTrade(verified)) continue;
       const evidence = Object.freeze({market, valueKind, raw, proof, licenseRef});
       quotes[symbol] = Object.freeze({symbol, price, tradeAt, publishedAt, ingestedAt: observedAt, proof, evidence});
     }
@@ -83,7 +111,8 @@ export function createForwardMarketAdapter({
   }
   authorize();
   const handle = Object.freeze({});
-  adapters.set(handle, Object.freeze({mode, authorize, stamp, observationIntervalMs, observe}));
+  adapters.set(handle, Object.freeze({mode, authorize, stamp, observationIntervalMs, observe,
+    mockReference, mockForecastTrades}));
   return handle;
 }
 
