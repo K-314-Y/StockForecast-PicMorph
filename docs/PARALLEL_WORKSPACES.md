@@ -9,6 +9,7 @@
 | HatchPet待機アニメーションの統合・表示調整 | workspaces/hatchpet-integration/ | sprint80/hatchpet-idle-integration |
 | HatchPet体＋顔PNG合成の実験 | workspaces/hatchpet-parts/ | sprint82/hatchpet-png-parts |
 | 自作PNGパーツのローカル表示・動作実験室 | workspaces/png-parts-lab/ | sprint83/png-parts-local-lab |
+| 生成した3×2画像シートの6コマ取込実験 | workspaces/lavender-generated-demo/ | sprint84/generated-lavender-demo |
 | 外見と株価予測AIの作成画面を分離 | workspaces/create-flow/ | sprint81/separate-appearance-and-model |
 | 仮想コイン・注文タイミングの試作 | workspaces/forward-paper/ | feature/forward-paper-core-20261118 |
 

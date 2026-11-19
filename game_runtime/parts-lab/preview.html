@@ -38,6 +38,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 #stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite}
 .metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
 .caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
+.generated-import{margin:16px 0;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
+.generated-import summary{font-weight:700;cursor:pointer;line-height:1.65;padding:3px}
+.generated-import summary:focus-visible{outline:3px solid #f9dc8b}
+
 @media(max-width:750px){.layout{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:460px){.files,.controls{grid-template-columns:minmax(0,1fr)}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
@@ -75,6 +79,22 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <button id="loadSample" type="button">デモ素材で試す</button>
 <button id="clear" type="button" disabled>試作を解除</button>
 </div>
+<details id="generatedStudio" class="generated-import">
+<summary>画像生成の3列×2行シートを読み込む（実験）</summary>
+<p class="hint">今回作ったラベンダー髪のキャラなど、<strong>3列×2行＝6コマ</strong>の画像を直接選べます。顔は自動で縮小・位置合わせしますが、絵柄によってはズレるため最終確認が必要です。</p>
+<div class="files">
+<label for="generatedBase">顔なしの体6コマ（必須）
+<input id="generatedBase" type="file" accept="image/png,image/webp"></label>
+<label for="generatedReady">通常の顔6コマ（必須）
+<input id="generatedReady" type="file" accept="image/png,image/webp"></label>
+<label for="generatedHappy">笑顔6コマ（任意）
+<input id="generatedHappy" type="file" accept="image/png,image/webp"></label>
+<label for="generatedCautious">心配顔6コマ（任意）
+<input id="generatedCautious" type="file" accept="image/png,image/webp"></label>
+</div>
+<p class="hint">4枚とも同じ画像サイズが必要です。体には顔を描かず、顔画像の背景は透明にしてください。アップロード・保存は行いません。</p>
+<div class="actions"><button id="loadGenerated" type="button" class="primary">生成シートを6コマに変換して試す</button></div>
+</details>
 <p id="status" role="status" aria-live="polite">まだ画像は読み込まれていません。</p>
 <p class="caution">自作または使用・改変の許可がある絵だけを読み込んでください。VRChatアバターや他人のイラストを少し改変しただけでは、利用許可の代わりになりません。</p>
 </section>

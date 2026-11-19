@@ -77,6 +77,25 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.match(script,/requestAnimationFrame/);
   assert.match(script,/if \(reduced\.matches\) \{\s*frame = 0;\s*paint\(\);\s*return;/);
 });
+test('generated 3-by-2 character sheets are opt-in and converted locally to six synchronized layers',()=>{
+  assert.match(html,/id="generatedStudio"/);
+  assert.match(html,/3列×2行＝6コマ/);
+  for(const id of ['generatedBase','generatedReady','generatedHappy','generatedCautious','loadGenerated']){
+    assert.match(html,new RegExp('id="'+id+'"'),id);
+  }
+  assert.match(script,/generatedSheetGeometry\(bitmap\)/);
+  assert.match(script,/GRID_COLUMNS=3, GRID_ROWS=2, TARGET_CELL=256/);
+  assert.match(script,/bitmap\.width \/ GRID_COLUMNS !== bitmap\.height \/ GRID_ROWS/);
+  assert.match(script,/createImageBitmap\(strip\)/);
+  assert.match(script,/if\(name!=='base'&&!hasAlpha\(image\)\)/);
+  assert.match(script,/displayLoaded\(next,6\)/);
+  assert.match(script,/status\('生成したキャラの6コマを合成しました/);
+  assert.match(script,/if\(myEpoch!==epoch\)return/);
+  assert.match(script,/\+\+epoch;resetPack\(\);setBusy\(false\)/);
+  assert.doesNotMatch(script,/\bFileReader\b|localStorage|indexedDB|sendBeacon\(/);
+  assert.doesNotMatch(html,/<form\b/);
+});
+
 test('the only game entrypoint is an opt-in link inside the appearance studio',async()=>{
   const game=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
   const studio=game.split('id="appearanceStudio"')[1].split('id="predictionStudio"')[0];
