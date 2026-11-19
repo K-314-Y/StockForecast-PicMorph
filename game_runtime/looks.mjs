@@ -10,7 +10,7 @@ export const LOOK_CHOICES=Object.freeze({
   expression:Object.freeze(['cheerful','calm','determined']),
   accessory:Object.freeze(['ribbon','glasses','star','none']),
 });
-const DEFAULT=Object.freeze({hair_style:'bob',expression:'cheerful',accessory:'ribbon'});
+export const DEFAULT_LOOK=Object.freeze({hair_style:'bob',expression:'cheerful',accessory:'ribbon'});
 const queues=new Map();
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const keyset=value=>Object.keys(value).sort().join('|');
@@ -39,7 +39,7 @@ export function createLookStore({file=LOOK_FILE}={}) {
          !Number.isSafeInteger(data.revision) || data.revision<1) throw Error('invalid record');
       return {created:true,revision:data.revision,look:validateLook(data.look)};
     }catch(error){
-      if(error.code==='ENOENT') return {created:false,revision:0,look:{...DEFAULT}};
+      if(error.code==='ENOENT') return {created:false,revision:0,look:{...DEFAULT_LOOK}};
       throw fail('保存した外見を読み込めません',503);
     }
   }

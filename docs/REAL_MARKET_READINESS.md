@@ -103,5 +103,11 @@ Gemini Web版との設計レビュー後、公式のデータ利用条件も照�
 
 - `startFriendMockServer({accounts, walletRoot})` を管理者のローカルコードから明示的に起動する。`accounts` は英数字の ID 2〜10件から、専用ルート下の個別ディレクトリに置いた絶対パスへの `Map`。専用ルートと個別ディレクトリは実行ユーザー所有の `0700`、既存の財布は同ユーザー所有の `0600` の通常ファイルでリンク数を1とする。これらを読み取り前後で照合する。財布が未作成の場合も個別ディレクトリは事前に作る。接続先は `127.0.0.1` に固定し、Host と POST の Origin は返された `http://friend.localhost:<port>` を使う。
 - `issueInvite(accountId)` で発行した招待は1回限りで24時間有効。`POST /friend/invite/redeem` に JSON の `invite` を渡すと、`no-store` の JSON に8時間有効の `sessionToken` を返す。クライアントは揮発性メモリにだけ保持し、同じローカルオリジンに `Authorization: Bearer <token>` を明示して送る。Cookie、URL、ソースコード、ログ、ディスク、`localStorage` に保存しない。`GET /friend/session` の CSRF トークンは `POST /friend/logout` の `X-CSRF-Token` に使う。招待とセッションは再起動で失効する。引き換えの失敗が上限に達しても、有効な招待は受け付ける。
-- `GET /friend/forward/summary` はセッションに対応する `MOCK_NONLIVE` 財布の要約だけを読み取る。財布、AI、口座を指定するクエリは受け付けない。招待サーバーのルートはこれら4つに限定し、通常のゲーム画面やモデル・外見・財布の更新 API とは分離する。
+- `GET /friend/forward/summary` はセッションに対応する `MOCK_NONLIVE` 財布の要約だけを読み取る。財布、AI、口座を指定するクエリは受け付けない。通常のゲーム画面やモデル・外見・財布の更新 API とは分離する。
 - この構成はローカル HTTP API 試験専用で、ブラウザー UI には未接続。公開には HTTPS と `Secure` な `__Host-` Cookie を使うフロントエンド、永続的な認証情報の管理、モデル・外見・予測のアカウント別認可が必要。OS 上の財布ディレクトリは信頼済みの管理者だけが扱う。
+
+### P9f 口座別キャラクターと模擬予測の読み取り
+
+- `GET /friend/character` は、Bearer に対応する財布と同じディレクトリの `companion.json`（最大4 KiB）と `looks.json`（最大2 KiB）を読む。各ファイルは実行ユーザー所有・0600・リンク数1の通常ファイルに限る。応答の `companion` と `looks` にそれぞれ保存済みフラグ `created` と `revision` が付く。ファイルがない側は未保存の初期値となり、相棒が未保存なら `model_version` は null。破損・権限違反・読み取り中の差し替えを検出すると503を返す。
+- `GET /friend/forward/records` は、管理者が起動時の任意設定 `accountRecordSources`（口座IDをキー、`{forecastId, source, fxSource?}` を値とする Map）で指定した1予測を返す。P4模擬ライフサイクルの `recordSource`、その口座の財布、財布と同じディレクトリ直下の専用 `forecasts/`（0700）が一致することが条件。該当口座が未設定なら `{"status":"unconnected","records":[]}`。設定済みの予測が見つからない場合や、必須の確認記録・保存済みの約定証拠を検証できない場合は503。任意のFX調整後損益は表示専用。
+- 両GETはローカルの友人用API専用で、セッションから対象口座を選ぶ。レスポンスは `no-store`。キャラクターの保存、予測の生成、ブラウザーUI、外部公開はこの段階の対象外。

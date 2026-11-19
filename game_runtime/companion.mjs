@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 
 export const COMPANION_FILE = fileURLToPath(new URL('../local_state/node_game/companion.json', import.meta.url));
 export const APPROACHES = Object.freeze(['trend', 'momentum', 'reversion', 'volatility']);
-const DEFAULT = Object.freeze({name:'私の相棒', hair_color:'#8882db', clothing_color:'#92e1d4', approach:'trend', risk_percent:35});
+export const DEFAULT_COMPANION = Object.freeze({name:'私の相棒', hair_color:'#8882db', clothing_color:'#92e1d4', approach:'trend', risk_percent:35});
 const queues = new Map();
 const fail = (message, status=400) => Object.assign(new Error(message), {status});
 const keys = value => Object.keys(value).sort().join('|');
@@ -44,7 +44,7 @@ export function createCompanionStore({file=COMPANION_FILE}={}) {
           !Number.isSafeInteger(record.revision) || record.revision < 1) throw Error('invalid record');
       return {revision:record.revision, created:true, companion:validateCompanion(record.companion)};
     } catch (error) {
-      if (error.code === 'ENOENT') return {revision:0, created:false, companion:{...DEFAULT}};
+      if (error.code === 'ENOENT') return {revision:0, created:false, companion:{...DEFAULT_COMPANION}};
       throw fail('相棒の保存情報を読み取れません',503);
     }
   }

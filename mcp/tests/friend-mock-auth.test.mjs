@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import {chmod, link, mkdir, mkdtemp, open, readFile, rename, rm, symlink, unlink} from 'node:fs/promises';
+import {createHmac} from 'node:crypto';
+import {chmod, link, mkdir, mkdtemp, open, readFile, rename, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {request} from 'node:http';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import test from 'node:test';
 import {createFriendAuth} from '../../game_runtime/friend-auth.mjs';
 import {startFriendMockServer} from '../../game_runtime/friend-mock-server.mjs';
 import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adapter.mjs';
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
-import {openForwardStore} from '../../game_runtime/forward-store.mjs';
+import {createGameServer} from '../../game_runtime/server.mjs';
+import {deriveForwardCompanionModel} from '../../game_runtime/forward-model.mjs';
+import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
+import {openForwardStore, saveForwardGeneration} from '../../game_runtime/forward-store.mjs';
 
 const redeemPath = '/friend/invite/redeem';
 const sessionPath = '/friend/session';
@@ -422,4 +426,249 @@ test('P9e rechecks the opened wallet permissions and path identity after reading
   assert.equal(onRead, null);
   assert.equal(fileChanged.status, 503);
   assert.deepEqual(fileChanged.body, {error:'unavailable'});
+});
+
+const characterPath = '/friend/character';
+const recordsPath = '/friend/forward/records';
+const exampleCompanion = {name:'藍', approach:'trend', risk_percent:30, hair_color:'#123456', clothing_color:'#abcdef'};
+const exampleLook = {hair_style:'bob', accessory:'glasses', expression:'calm'};
+
+async function writeProfile(wallet, companion, look) {
+  const folder = dirname(wallet);
+  await writeFile(join(folder, 'companion.json'), JSON.stringify({schema:1, revision:2, companion}), {mode:0o600});
+  await writeFile(join(folder, 'looks.json'), JSON.stringify({schema:1, revision:1, look}), {mode:0o600});
+}
+
+test('P9f both GETs require bearer, reject selectors and writes, and are absent on the legacy listener', async t => {
+  const {server} = await setup(t);
+  const {sessionToken} = await login(server, 'Alice');
+  const legacy = createGameServer();
+  await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(done => legacy.close(done)));
+  for (const path of [characterPath, recordsPath]) {
+    assert.equal((await call(server, path)).status, 401);
+    assert.equal((await authenticated(server, path + '?accountId=Bob', sessionToken)).status, 400);
+    assert.equal((await authenticated(server, path, sessionToken, {method:'POST'})).status, 404);
+    const legacyUrl = 'http://127.0.0.1:' + legacy.address().port + path;
+    assert.equal((await fetch(legacyUrl)).status, 404);
+  }
+});
+
+test('P9f each bearer selects its own companion, look and strategy even with identical wallet AI IDs', async t => {
+  const {server, accounts} = await setup(t);
+  const other = {...exampleCompanion, name:'茜', approach:'momentum', risk_percent:60};
+  const otherLook = {...exampleLook, accessory:'star', hair_style:'long'};
+  for (const [id, companion, look] of [['Alice', exampleCompanion, exampleLook], ['Bob', other, otherLook]]) {
+    await seed(accounts.get(id), 100);
+    await writeProfile(accounts.get(id), companion, look);
+  }
+  const [alice, bob] = await Promise.all(['Alice', 'Bob'].map(id => login(server, id)));
+  for (const [user, companion, look] of [[bob, other, otherLook], [alice, exampleCompanion, exampleLook]]) {
+    const res = await authenticated(server, characterPath, user.sessionToken);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.deepEqual(res.body, {companion:{created:true, revision:2, ...companion},
+      looks:{created:true, revision:1, ...look}, model_version:deriveForwardCompanionModel(companion).model_version});
+  }
+});
+
+test('P9f absent files independently return unsaved defaults and do not adopt another profile', async t => {
+  const {server, accounts} = await setup(t);
+  await writeProfile(accounts.get('Bob'), exampleCompanion, exampleLook);
+  const {sessionToken} = await login(server, 'Alice');
+  const initial = await authenticated(server, characterPath, sessionToken);
+  assert.equal(initial.status, 200);
+  assert.equal(initial.body.model_version, null);
+  assert.equal(initial.body.companion.created, false);
+  assert.equal(initial.body.looks.created, false);
+  assert.notEqual(initial.body.companion.name, exampleCompanion.name);
+  await writeProfile(accounts.get('Alice'), exampleCompanion, exampleLook);
+  await unlink(join(dirname(accounts.get('Alice')), 'looks.json'));
+  const partial = await authenticated(server, characterPath, sessionToken);
+  assert.equal(partial.status, 200);
+  assert.deepEqual(partial.body.looks, initial.body.looks);
+  assert.equal(partial.body.companion.created, true);
+});
+
+test('P9f rejects malformed, oversized, non-private, and linked profile files', async t => {
+  const {server, accounts} = await setup(t);
+  const alice = accounts.get('Alice');
+  const bob = accounts.get('Bob');
+  await writeProfile(bob, exampleCompanion, exampleLook);
+  const {sessionToken} = await login(server, 'Alice');
+  const denied = async () => {
+    const res = await authenticated(server, characterPath, sessionToken);
+    assert.equal(res.status, 503);
+    assert.deepEqual(res.body, {error:'unavailable'});
+  };
+  for (const [file, field, value, limit] of [['companion.json','companion',exampleCompanion,4096],
+    ['looks.json','look',exampleLook,2048]]) {
+    const path = join(dirname(alice), file);
+    const record = {schema:1, revision:1, [field]:value};
+    for (const content of ['{', JSON.stringify({...record, schema:2}), JSON.stringify({...record, revision:0}),
+      JSON.stringify({...record, extra:true}), JSON.stringify({...record, [field]:{...value, extra:true}}),
+      JSON.stringify(record).padEnd(limit + 1)]) {
+      await writeFile(path, content, {mode:0o600});
+      await denied();
+    }
+    await writeFile(path, JSON.stringify(record));
+    await chmod(path, 0o644);
+    await denied();
+    await unlink(path);
+    for (const install of [symlink, link]) {
+      await install(join(dirname(bob), file), path);
+      await denied();
+      await unlink(path);
+    }
+  }
+});
+
+test('P9f rejects a profile whose pathname changes while its verified descriptor is open', async t => {
+  const {server, accounts} = await setup(t);
+  const wallet = accounts.get('Alice');
+  const path = join(dirname(wallet), 'companion.json');
+  await writeProfile(wallet, exampleCompanion, exampleLook);
+  const {sessionToken} = await login(server, 'Alice');
+  const handle = await open(path);
+  const {dev, ino} = await handle.stat();
+  const prototype = Object.getPrototypeOf(handle);
+  const read = prototype.read;
+  await handle.close();
+  let replaced = false;
+  t.mock.method(prototype, 'read', async function(...args) {
+    const result = await read.apply(this, args);
+    const stat = await this.stat();
+    if (!replaced && stat.dev === dev && stat.ino === ino) {
+      replaced = true;
+      await rename(path, path + '.old');
+      await writeFile(path, '{}', {mode:0o600});
+    }
+    return result;
+  });
+  const res = await authenticated(server, characterPath, sessionToken);
+  assert.equal(replaced, true);
+  assert.equal(res.status, 503);
+  assert.deepEqual(res.body, {error:'unavailable'});
+});
+
+test('P9f record configuration rejects unbranded and unknown account sources', async t => {
+  const {config} = await setup(t);
+  for (const id of ['Alice', 'Unknown']) {
+    const entry = {source:{read:assert.fail, snapshot:assert.fail}, forecastId:'a'.repeat(64)};
+    await assert.rejects(startFriendMockServer({...config, accountRecordSources:new Map([[id,entry]])}),
+      /Invalid account mock record source/);
+  }
+});
+
+// Drive a complete P4 round with local signed synthetic trades. The friend GET
+// must reverify stored evidence without asking this adapter for another batch.
+async function provisionMockRound(walletFile, targetPrice = 108) {
+  const directory = join(dirname(walletFile), 'forecasts');
+  await mkdir(directory, {mode:0o700});
+  const issue = Date.parse('2030-01-07T01:00:00Z');
+  const target = issue + 10 * 60_000;
+  const state = {now:issue, rows:[], reads:0, allowed:true};
+  const sign = raw => createHmac('sha256', 'P9f public test fixture').update(raw).digest('hex');
+  function trade(time, price, extra) {
+    const at = new Date(time).toISOString();
+    const raw = JSON.stringify({sourceId:MOCK_MARKET_SOURCE, market:'XTKS', symbol:'FAKE', valueKind:'TRADE',
+      price, tradeAt:at, publishedAt:at, ...extra});
+    return {raw, proof:sign(raw)};
+  }
+  const reference = trade(issue - 60_000, 100);
+  const marketAdapter = createForwardMarketAdapter({sourceId:MOCK_MARKET_SOURCE, licenseRef:'Local P9f fixture',
+    observationIntervalMs:5 * 60_000, maxAgeMs:10 * 60_000, maxPublicationDelayMs:60_000,
+    clock:() => state.now, verifyUsage:() => state.allowed, marketStatusAt:() => 'OPEN',
+    verifyRecord:({raw, proof}) => sign(raw) === proof ? JSON.parse(raw) : null,
+    readBatch:() => { state.reads++; return state.rows; },
+  });
+  const generation = deriveForwardCompanionModel(exampleCompanion);
+  await openForwardStore({filePath:walletFile, marketAdapter, initial:{mode:MOCK_MARKET_PAPER_MODE,
+    initialMedals:1000, allocations:[{id:'control', modelHash:'a'.repeat(64), medals:100}]}});
+  await saveForwardGeneration({filePath:walletFile, aiId:'shared_ai', medals:300, generation, expectedRevision:0});
+  const options = {walletFile, directory, marketAdapter, reference, margin:100, leverage:1};
+  const lifecycle = await openForwardMockLifecycle(options);
+  const {receipt:{forecastId}} = await lifecycle.freeze({aiId:'shared_ai', modelHash:generation.modelHash,
+    model_version:generation.model_version, sourceMode:'TEST_ONLY', symbol:'FAKE',
+    targetAt:new Date(target).toISOString(), probabilities:{UP:.8, FLAT:.1, DOWN:.1}});
+  async function fill(time, price) {
+    state.now = time;
+    state.rows = [trade(time, price, {referenceProof:reference.proof})];
+    await lifecycle.applyBatch();
+  }
+  await lifecycle.reserveOpen(forecastId);
+  await fill(issue + 5 * 60_000, 100);
+  await lifecycle.reserveClose(forecastId);
+  await fill(target, targetPrice);
+  await lifecycle.score(forecastId);
+  return {state, options, config:{forecastId, source:lifecycle.recordSource}};
+}
+
+test('P9f an authorized scored P4 record is private even when another wallet has the identical forecast ID', async t => {
+  const {start, accounts} = await setup(t);
+  const a = await provisionMockRound(accounts.get('Alice'), 108);
+  const b = await provisionMockRound(accounts.get('Bob'), 93);
+  assert.equal(a.config.forecastId, b.config.forecastId);
+  const sources = new Map([['Alice', a.config]]);
+  const first = await start({accountRecordSources:sources});
+  const {sessionToken} = await login(first, 'Bob');
+  assert.deepEqual((await authenticated(first, recordsPath, sessionToken)).body, {status:'unconnected', records:[]});
+  sources.set('Bob', b.config);
+  const second = await start({accountRecordSources:sources});
+  for (const [account, pnl] of [['Alice',8], ['Bob',-7]]) {
+    const auth = await login(second, account);
+    const res = await authenticated(second, recordsPath, auth.sessionToken);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'MOCK_NONLIVE');
+    assert.equal(res.body.records.length, 1);
+    const [record] = res.body.records;
+    assert.equal(record.aiId, 'shared_ai');
+    assert.equal(record.realizedPnl, pnl);
+    assert.equal(record.status, 'SCORED_MOCK_NONLIVE');
+    assert.doesNotMatch(res.text, /accountId|proof|nonce|evidence|modelHash|forecastSha256|\/tmp\//);
+  }
+  assert.deepEqual([a.state.reads, b.state.reads], [2, 2]);
+});
+
+test('P9f refuses another wallet, shared forecast directory, false FX capability and revoked usage', async t => {
+  const {config, accounts} = await setup(t);
+  const a = await provisionMockRound(accounts.get('Alice'));
+  const b = await provisionMockRound(accounts.get('Bob'));
+  const wrongDir = await openForwardMockLifecycle({...b.options, directory:a.options.directory});
+  for (const entries of [
+    [['Bob', a.config]], [['Alice', a.config], ['Bob', {...b.config, source:wrongDir.recordSource}]],
+    [['Alice', {...a.config, fxSource:{}}]],
+  ]) {
+    await assert.rejects(startFriendMockServer({...config, accountRecordSources:new Map(entries)}),
+      /Invalid account mock record source|trusted FX source/);
+  }
+  a.state.allowed = false;
+  await assert.rejects(startFriendMockServer({...config, accountRecordSources:new Map([['Alice', a.config]])}),
+    /利用許可/);
+});
+
+test('P9f stops serving records on revocation, missing evidence, mode changes, or forecast directory replacement', async t => {
+  const {accounts, start} = await setup(t);
+  const a = await provisionMockRound(accounts.get('Alice'));
+  const server = await start({accountRecordSources:new Map([['Alice', a.config]])});
+  const {sessionToken} = await login(server, 'Alice');
+  const denied = async () => {
+    const res = await authenticated(server, recordsPath, sessionToken);
+    assert.equal(res.status, 503);
+    assert.deepEqual(res.body, {error:'unavailable'});
+  };
+  a.state.allowed = false;
+  await denied();
+  a.state.allowed = true;
+  await chmod(a.options.walletFile, 0o644);
+  await denied();
+  await chmod(a.options.walletFile, 0o600);
+  const receipt = join(a.options.directory, a.config.forecastId + '.receipt.json');
+  await rename(receipt, receipt + '.old');
+  await denied();
+  await rename(receipt + '.old', receipt);
+  assert.equal((await authenticated(server, recordsPath, sessionToken)).status, 200);
+  await rename(a.options.directory, a.options.directory + '.old');
+  await mkdir(a.options.directory, {mode:0o700});
+  await denied();
 });
