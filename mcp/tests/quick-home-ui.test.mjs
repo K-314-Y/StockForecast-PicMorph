@@ -137,14 +137,14 @@ test('the single original scene is the first game panel, outside advanced traini
   assert.ok(get('scene').offset<get('simpleHome').offset);
   assert.ok(get('simpleHome').offset<get('advancedEntry').offset);
   for(const id of ['scene','companionName','speech','chibi','portrait','artworkStage',
-    'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption']) {
+    'artworkBase','artworkOutfit','artworkFace','artworkHair','skinCaption','generatedAvatar']) {
     assert.equal(nodes.filter(node=>node.id===id).length,1,id);
     assert.ok(get(id).parents.includes('frontCharacter'),id);
     assert.ok(!get(id).parents.includes('advancedEntry'),id);
     if(id!=='scene')assert.ok(get(id).parents.includes('scene'),id);
   }
   const buttons=nodes.filter(node=>node.tag==='button'&&node.parents.includes('frontCharacter'));
-  assert.deepEqual(buttons.map(node=>node.id),['quickArtwork','quickCustomize','hatchIdleToggle','hatchPartsToggle']);
+  assert.deepEqual(buttons.map(node=>node.id),['generatedAvatarPause','quickArtwork','quickCustomize','hatchIdleToggle','hatchPartsToggle']);
   for(const button of buttons)assert.match(button.attributes,/type="button"/);
   for(const id of ['quickModel','quickAmount','quickLeverage','quickReplay'])
     assert.ok(get(id).parents.includes('simpleHome'),id);
@@ -284,7 +284,7 @@ test('mobile front stage overrides desktop spacing while allowing speech and fon
   assert.match(mobile,/\.front-character \.speech\{margin:0 0 8px;padding:8px 12px;min-height:0\}/);
   assert.match(mobile,/\.front-character \.scene>h2\{[^}]*overflow-wrap:anywhere;max-width:100%/);
   assert.match(mobile,/\.front-character #artworkStage\{width:min\(150px,100%\)\}/);
-  assert.match(mobile,/\.front-character \.scene>:is\(#chibi,#artworkStage,#portrait\)\{flex-shrink:0\}/);
+  assert.match(mobile,/\.front-character \.scene>:is\(#chibi,#artworkStage,#portrait,#generatedAvatar\)\{flex-shrink:0\}/);
   assert.doesNotMatch(mobile,/(?:^|[;{])(?:height|max-height):/);
   assert.doesNotMatch(css,/position:\s*(?:fixed|sticky)/);
 });

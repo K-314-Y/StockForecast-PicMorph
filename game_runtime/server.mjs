@@ -20,15 +20,18 @@ import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket} from './historical-market.mjs';
+import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
+const ACTIVE_CHARACTER_API='/api/active-character';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
 const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
+const GENERATED_AVATAR_JS = new URL('./generated-avatar.mjs', import.meta.url);
 // Fixed allowlist: do not map client input to arbitrary filesystem paths.
 const HATCH_ASSETS = new Map([
   ['/assets/hatchpet-demo-idle.webp', new URL('./assets/hatchpet-demo-idle.webp', import.meta.url)],
@@ -296,7 +299,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   lookStore = createLookStore(),
                                   artworkStore = createArtworkStore(),
                                   artworkExpressionStore = createArtworkExpressionStore(),
-                                  catalogRoot,
+                                  catalogRoot, activeCharacterStore = createActiveCharacterStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -308,6 +311,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   }
   if (chatgptDialogue !== null && typeof chatgptDialogue !== 'function') throw Error('Invalid chatgptDialogue injection');
   const characterDemos=createCharacterDemoCatalog(catalogRoot);
+  const isRegisteredDemo=async id=>(await characterDemos.list()).some(item=>item.generated_id===id);
   let demoImagesInFlight=0;
   let dialogueBusy = false;
   let dialogueAttempts = [];
@@ -344,6 +348,22 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if (rawPath===ACTIVE_CHARACTER_API || path===ACTIVE_CHARACTER_API) {
+      const origin=req.headers.origin;
+      if (origin!==undefined && origin!==`http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      if (rawPath!==path) return json(res,404,{error:'見つかりません'});
+      if (req.method==='GET') {
+        try {
+          const record=await activeCharacterStore.read();
+          const available=record.active_demo_id!==null && await isRegisteredDemo(record.active_demo_id);
+          return json(res,200,{...record,available});
+        }
+        catch {return json(res,503,{error:'登録キャラの外見設定を読み込めません'});}
+      }
+    }
     if ([rawPath,path].some(target=>target===CHARACTER_DEMOS_API || target.startsWith(CHARACTER_DEMOS_API+'/'))) {
       const origin=req.headers.origin;
       if (origin!==undefined && origin!==`http://${req.headers.host}`) {
@@ -594,12 +614,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
     }
 
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
-      const script = path === '/demo.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
+      const script = path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
       let body;
       try {
         body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
-        path === '/arena-ui.mjs' ? ARENA_JS : script ? DEMO_JS : DEMO);
+        path === '/arena-ui.mjs' ? ARENA_JS : path === '/generated-avatar.mjs' ? GENERATED_AVATAR_JS : script ? DEMO_JS : DEMO);
       } catch (error) {
         console.error('Creature Lab static asset read failed', error);
         return json(res, 503, {error: 'ゲーム画面を読み込めません'});
@@ -617,7 +637,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return res.end(body);
     }
     if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/looks','/api/artwork'].includes(path)) {
+        ![ACTIVE_CHARACTER_API,'/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/looks','/api/artwork'].includes(path)) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -626,6 +646,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const payload = await getBody(req, path === '/api/artwork' ? MAX_ARTWORK_REQUEST : MAX_REQUEST);
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         throw failure('JSONオブジェクトを指定してください', 400);
+      }
+      if (path === ACTIVE_CHARACTER_API) {
+        const record=await activeCharacterStore.save(payload,isRegisteredDemo);
+        return json(res,200,{...record,available:record.active_demo_id!==null});
       }
       if (path === '/api/companion') return json(res, 200, await companionStore.save(payload));
       if (path === '/api/looks') return json(res, 200, await lookStore.save(payload));

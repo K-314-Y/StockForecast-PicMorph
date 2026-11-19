@@ -219,6 +219,16 @@ test('the demo atlas route serves exact bytes and accepts only same-origin GET t
   assert.equal((await send(idlePath,'GET',{origin:'http://127.0.0.1:8890'})).status,200);
 });
 
+function reducedMotionRule(selector) {
+  const rules=html.matchAll(/@media\(prefers-reduced-motion:reduce\)\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g);
+  for(const [,block] of rules) {
+    for(const [,selectors,declarations] of block.matchAll(/([^{}]+)\{([^{}]+)\}/g)) {
+      if(selector.test(selectors)) return declarations;
+    }
+  }
+  assert.fail('Missing reduced-motion rule for '+selector);
+}
+
 test('the optional front character button uses six idle frames inside the chibi and a static first frame for reduced motion',()=>{
   const front=html.slice(html.indexOf('id="frontCharacter"'),html.indexOf('id="simpleHome"'));
   assert.match(front,/<button id="hatchIdleToggle"[^>]*aria-pressed="false"[^>]*>動くデモを見る<\/button>/);
@@ -230,9 +240,7 @@ test('the optional front character button uses six idle frames inside the chibi 
   assert.match(declarations,/background-size:900px 162\.5px;background-position:0 0/);
   assert.match(declarations,/steps\(6,jump-none\)/);
   assert.match(html,/@keyframes hatch-idle-frames\{to\{background-position:-750px 0\}\}/);
-  const reduced=html.split('@media(prefers-reduced-motion:reduce)')[1].split('</style>')[0];
-  assert.match(reduced,sprite);
-  assert.match(reduced,/animation:none/);
+  assert.match(reducedMotionRule(sprite),/animation:none/);
   assert.doesNotMatch(html,/\/assets\/hatchpet-demo-idle/);
   assert.doesNotMatch(script,/setTimeout|setInterval|requestAnimationFrame/);
 });
@@ -245,9 +253,7 @@ test('opt-in PNG body+face parts use one six-frame animation with reduced-motion
   assert.match(html,/background-image:var\(--parts-face-ready\),var\(--parts-body\)/);
   assert.match(html,/@keyframes hatch-parts-frames\{to\{background-position:-750px 0,-750px 0\}\}/);
   assert.match(html,/background-size:900px 162\.5px,900px 162\.5px/);
-  const reduced=html.split('@media(prefers-reduced-motion:reduce)')[1].split('</style>')[0];
-  assert.match(reduced,/data-hatch-parts/);
-  assert.match(reduced,/animation:none/);
+  assert.match(reducedMotionRule(/#chibi\[data-hatch-parts="true"\]:not\(\[hidden\]\)::after/),/animation:none/);
   assert.doesNotMatch(script,/setInterval|requestAnimationFrame/);
 });
 test('PNG face parts load only on click, switch mutually exclusively, and never save',async()=>{

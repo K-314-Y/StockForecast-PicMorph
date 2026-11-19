@@ -696,7 +696,7 @@ $('reloadLook').addEventListener('click',async()=>{
   catch(error){$('lookStatus').textContent='外見の再取得に失敗しました: '+error.message;}
   finally{lookSaving=false;refreshButtons();}
 });
-loadLook().catch(error=>{
+const initialLook=loadLook().catch(error=>{
   $('lookStatus').textContent='外見パーツを読み込めません: '+error.message;
   refreshButtons();
 });
@@ -806,7 +806,7 @@ async function reloadCompanionGroup(group) {
 }
 $('reloadAppearanceBasics').addEventListener('click', () => reloadCompanionGroup('appearance'));
 $('reloadCompanion').addEventListener('click', () => reloadCompanionGroup('prediction'));
-loadCompanion().catch(companionLoadError).finally(() => {
+const initialCompanion=loadCompanion().catch(companionLoadError).finally(() => {
   companionLoading = false;
   refreshButtons();
 });
@@ -1219,10 +1219,20 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
     for (const slot of artworkSlots) discardArtworkPreview(slot);
   });
 }
-loadArtwork().catch(error => {
+const initialArtwork=loadArtwork().catch(error => {
   if ($('artworkStatus')) $('artworkStatus').textContent = 'イラストを読み込めません: ' + error.message + '。再取得してください。';
   refreshArtworkButtons();
 });
+
+if ($('generatedAvatarOptions')?.tagName === 'FIELDSET') {
+  Promise.all([initialArtwork,initialLook,initialCompanion])
+    .then(()=>import('/generated-avatar.mjs'))
+    .then(({mountGeneratedAvatar})=>mountGeneratedAvatar())
+    .catch(()=>{
+      $('generatedAvatarStatus').textContent='登録キャラの外見を読み込めません。';
+      $('generatedAvatarWarning').textContent='登録キャラの外見を読み込めません。元の外見を表示しています。';
+    });
+}
 
 async function applyCreateHandoff() {
   if (typeof window === 'undefined' || !window.location) return;
