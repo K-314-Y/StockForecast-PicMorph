@@ -17,6 +17,7 @@
 | キャラの表情・動き | workspaces/character-animation/ | sprint79/manual-expression-artwork |
 | HatchPet待機アニメーションの統合・表示調整 | workspaces/hatchpet-integration/ | sprint80/hatchpet-idle-integration |
 | HatchPet体＋顔PNG合成の実験 | workspaces/hatchpet-parts/ | sprint82/hatchpet-png-parts |
+| 自作PNGパーツのローカル表示・動作実験室 | workspaces/png-parts-lab/ | sprint83/png-parts-local-lab |
 | 外見と株価予測AIの作成画面を分離 | workspaces/create-flow/ | sprint81/separate-appearance-and-model |
 | 予測AI・仮想メダル・先出し予測の継続開発 | ~/.paseo/worktrees/2fbfnfht/forward-predict-engine/ | dev/forward-game |
 

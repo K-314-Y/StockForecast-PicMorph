@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PNGパーツ実験室 | Creature Lab</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,"Noto Sans JP",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:#e6f3fa;background:#101d31}
+main{max-width:1100px;margin:0 auto;padding:clamp(12px,3vw,30px)}
+h1{font-size:clamp(23px,4vw,31px);margin:10px 0}
+h2{font-size:19px;margin:0 0 12px}
+p{line-height:1.65}
+a{color:#9eeecf}
+small,.hint{color:#b3c7da;line-height:1.5}
+main>p{max-width:920px}
+.layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(260px,.85fr);gap:18px;align-items:start}
+.panel{background:#1a2b43;border:1px solid #38516b;border-radius:15px;padding:clamp(12px,2vw,19px);min-width:0}
+label{display:grid;gap:5px;font-size:14px;font-weight:600}
+.files{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:14px 0}
+.files label{min-width:0}
+input[type=file]{width:100%;max-width:100%;padding:8px;border:1px solid #516c80;border-radius:7px;background:#10253b;color:#eef7ff}
+select,input[type=number]{min-width:0;width:100%;padding:9px;font-size:16px;color:#f4fdff;border:1px solid #6284a0;border-radius:8px;background:#10253b}
+.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
+button{font:inherit;min-height:43px;padding:9px 13px;border:1px solid #7295ad;border-radius:10px;background:#344962;color:white;cursor:pointer}
+button.primary{background:#b9f4db;color:#153e36;border-color:#b9f4db;font-weight:700}
+button:disabled{opacity:.55;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #f9dc8b;outline-offset:2px}
+#status{min-height:42px;padding:9px 11px;background:#102437;border-radius:8px;overflow-wrap:anywhere}
+#stage{min-height:365px;display:grid;place-items:center;border:1px solid #59768b;border-radius:13px;overflow:hidden;background:radial-gradient(circle at 45% 68%,#58618e,transparent 64%),linear-gradient(145deg,#322d5f,#204057)}
+#previewCanvas{display:block;width:auto;max-width:min(90%,300px);max-height:330px;object-fit:contain;image-rendering:auto;filter:drop-shadow(0 8px 10px #10111a80)}
+#stage[data-has-preview=false] #previewCanvas{display:none}
+#stagePlaceholder{text-align:center;color:#d6e2f0;padding:22px}
+#stage[data-has-preview=true] #stagePlaceholder{display:none}
+@keyframes gentle-bob{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-4px) rotate(.4deg)}}
+#stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite}
+.metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
+.caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
+@media(max-width:750px){.layout{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:460px){.files,.controls{grid-template-columns:minmax(0,1fr)}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style>
+<script src="/parts-lab/preview.js" defer></script>
+</head>
+<body>
+<main>
+<p><a href="/game">Creature Labの外見づくりに戻る</a></p>
+<h1>PNGパーツ実験室</h1>
+<p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて、待機中の動きと表情の切替を試せます。画像はブラウザ内だけで使い、アップロードも保存もしません。</p>
+<div class="layout">
+<section class="panel" aria-labelledby="fileTitle">
+<h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
+<p class="hint">顔が描かれていない「体」を用意してください。完成イラストをそのまま体に使うと目・口が二重になります。必須は体と通常の顔、ほかは任意です。</p>
+<div class="controls">
+<label for="frames">1枚あたりの動作コマ数
+<select id="frames"><option value="1">1コマ（静止画を揺らす）</option><option value="6">6コマ（横一列のPNG）</option></select>
+</label>
+<label for="fps">6コマ時の再生速度
+<select id="fps"><option value="3">ゆっくり（3コマ/秒）</option><option value="5" selected>普通（5コマ/秒）</option><option value="8">速い（8コマ/秒）</option></select>
+</label>
+</div>
+<div class="files">
+<label for="partBase">体・土台（必須）<input id="partBase" type="file" accept="image/png,image/webp"><small>目と口が描かれていない画像</small></label>
+<label for="partReady">顔：通常（必須）<input id="partReady" type="file" accept="image/png,image/webp"><small>背景透明、体と同じサイズ</small></label>
+<label for="partHappy">顔：うれしい（任意）<input id="partHappy" type="file" accept="image/png,image/webp"></label>
+<label for="partCautious">顔：しんぱい（任意）<input id="partCautious" type="file" accept="image/png,image/webp"></label>
+<label for="partOutfit">服（任意）<input id="partOutfit" type="file" accept="image/png,image/webp"></label>
+<label for="partHair">前髪（任意）<input id="partHair" type="file" accept="image/png,image/webp"></label>
+</div>
+<p class="hint">全パーツは<strong>同じキャンバス寸法</strong>で用意します。6コマなら6枚を横一列に並べ、各パーツも同じ6コマにしてください。各コマは最大1024×1024px、1ファイル最大5MB。</p>
+<div class="actions">
+<button id="loadOwn" class="primary" type="button">選んだPNGで試す</button>
+<button id="loadSample" type="button">デモ素材で試す</button>
+<button id="clear" type="button" disabled>試作を解除</button>
+</div>
+<p id="status" role="status" aria-live="polite">まだ画像は読み込まれていません。</p>
+<p class="caution">自作または使用・改変の許可がある絵だけを読み込んでください。VRChatアバターや他人のイラストを少し改変しただけでは、利用許可の代わりになりません。</p>
+</section>
+<section class="panel" aria-labelledby="previewTitle">
+<h2 id="previewTitle">2. 動きと表情を確認</h2>
+<div id="stage" data-has-preview="false">
+<canvas id="previewCanvas" role="img" aria-label="選んだPNGパーツを合成したキャラクター" width="192" height="208"></canvas>
+<p id="stagePlaceholder">まず「デモ素材で試す」または自分のPNGを選んでください。</p>
+</div>
+<div class="controls">
+<label for="mood">表示する表情
+<select id="mood"><option value="ready">通常</option><option value="happy">うれしい</option><option value="cautious">しんぱい</option></select></label>
+<label for="pause">アニメーション
+<button id="pause" type="button" disabled aria-pressed="false">停止する</button></label>
+<label for="faceX">顔の横位置（px）
+<input id="faceX" type="number" value="0" step="1" min="-24" max="24"></label>
+<label for="faceY">顔の縦位置（px）
+<input id="faceY" type="number" value="0" step="1" min="-24" max="24"></label>
+</div>
+<p id="frameInfo" class="metadata">未読込</p>
+<p class="hint">髪・服は体の上に重なります。「うれしい」「しんぱい」が未指定なら通常の顔を表示。体はそのままで表情だけ変わります。</p>
+<p class="hint">動きを減らす設定では最初の1コマだけを表示します。ここでの操作は予測AI・XP・コインには影響しません。</p>
+</section>
+</div>
+</main>
+</body>
+</html>

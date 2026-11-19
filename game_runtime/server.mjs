@@ -11,7 +11,8 @@ import {createLookStore} from './looks.mjs';
 import {COMPANION_MODEL_VERSION, deriveForwardCompanionModel} from './forward-model.mjs';
 import {FORWARD_AI_ID, MAX_FORWARD_MEDALS, inspectForwardWallet} from './forward-paper.mjs';
 import {MOCK_MARKET_PAPER_MODE} from './forward-market-guard.mjs';
-import {FORWARD_STARTING_MEDALS, readForwardSnapshot, saveForwardGeneration} from './forward-store.mjs';
+import {FORWARD_STARTING_MEDALS, readForwardSnapshot, requireForwardGameWalletMode,
+  saveForwardGeneration} from './forward-store.mjs';
 import {createForwardRecordReader} from './forward-records.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createArtworkExpressionStore,EXPRESSION_MOODS,MAX_EXPRESSION_REQUEST} from './artwork-expressions.mjs';
@@ -60,6 +61,12 @@ const ARTWORK_LAB = new Map([
 ]);
 // Original meta policies remain intact and also apply (including blob-only images).
 const ARTWORK_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src blob: data:; connect-src 'none'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// Fixed routes, no user-controlled filenames or filesystem access.
+const PARTS_LAB = new Map([
+  ['/parts-lab/preview.html', new URL('./parts-lab/preview.html', import.meta.url)],
+  ['/parts-lab/preview.js', new URL('./parts-lab/preview.js', import.meta.url)],
+]);
+const PARTS_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
@@ -289,6 +296,7 @@ async function getBody(req, limit = MAX_REQUEST) {
 
 function forwardWalletState(snapshot, created = false) {
   const {revision = null, ledger} = snapshot ?? {};
+  if (ledger) requireForwardGameWalletMode(ledger.mode);
   const generations = ledger?.appearanceGenerations ?? [];
   return {
     mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', revision, created,
@@ -412,6 +420,23 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         return json(res,status,{error:status>=500?'表情イラストの保存情報を更新できません。保存ファイルを確認してください':error.message});
       } finally {
         inFlight--;
+      }
+    }
+    if (rawPath.startsWith('/parts-lab/') || path.startsWith('/parts-lab/')) {
+      const asset = PARTS_LAB.get(rawPath);
+      if (req.method !== 'GET' || !asset) return json(res, 404, {error: '見つかりません'});
+      try {
+        const bytes = await readFile(asset);
+        res.writeHead(200, {
+          'Content-Type': rawPath.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+          'Content-Length': bytes.length, 'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+          'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin',
+          'Content-Security-Policy': PARTS_LAB_CSP,
+        });
+        return res.end(bytes);
+      } catch {
+        return json(res, 404, {error: '見つかりません'});
       }
     }
     const forwardSummary = req.url === '/api/companion/forward-ai?view=summary';

@@ -415,6 +415,12 @@ function revisionConflict() {
 
 export const FORWARD_STARTING_MEDALS = 10_000;
 
+export function requireForwardGameWalletMode(mode) {
+  if (mode !== FORWARD_PAPER_MODE && mode !== MOCK_MARKET_PAPER_MODE) {
+    throw new RangeError('実市場用の台帳は接続できません');
+  }
+}
+
 export async function saveForwardAppearanceGeneration({appearance, ...options}) {
   return saveForwardGeneration({...options, generation:identifyForwardAppearanceModel(appearance)});
 }
@@ -432,6 +438,7 @@ export async function saveForwardGeneration({
   if (filePath === DEFAULT_FILE && expectedRevision === null) await prepareDefaultDirectory();
   return withLedgerLock(filePath, async () => {
     const current = await readSnapshot(filePath);
+    if (current) requireForwardGameWalletMode(current.ledger.mode);
     if ((current?.revision ?? null) !== expectedRevision) throw revisionConflict();
     const generations = current?.ledger.appearanceGenerations ?? [];
     const latest = generations.at(-1);

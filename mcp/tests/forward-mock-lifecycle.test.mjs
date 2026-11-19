@@ -9,7 +9,7 @@ import {deriveForwardAppearanceModel, identifyForwardAppearanceModel} from '../.
 import {deriveForwardCompanionModel, identifyForwardModel} from '../../game_runtime/forward-model.mjs';
 import {openForwardForecastStore} from '../../game_runtime/forward-forecast-store.mjs';
 import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adapter.mjs';
-import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
+import {MARKET_PAPER_MODE, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
 import {openForwardPredictor} from '../../game_runtime/forward-predict.mjs';
 import {openForwardStore, saveForwardGeneration} from '../../game_runtime/forward-store.mjs';
@@ -101,6 +101,92 @@ test('P5 records are unconnected by default and only accept a local GET with no 
   assert.equal((await request(recordsPath, {method:'POST'})).status, 404);
   assert.equal((await request(recordsPath, {headers:{Origin:'http://example.test'}})).status, 403);
   assert.deepEqual(await readdir(root), []);
+});
+
+test('P8 serves the PNG parts lab and an unconnected forward summary on the same server', async t => {
+  const root = await mkdtemp('/tmp/forward-p8-default-');
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const unavailable = () => assert.fail('Unexpected model or market access');
+  const request = await serveRecords(t, {forwardLedgerFile:join(root, 'wallet.json'),
+    loadSnapshot:unavailable, predict:unavailable, historicalPredict:unavailable});
+  const page = await request('/game');
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /href="\/parts-lab\/preview\.html"/);
+  assert.match(html, /id="forwardPanel"/);
+  const parts = await request('/parts-lab/preview.html');
+  assert.equal(parts.status, 200);
+  assert.match(parts.headers.get('content-security-policy'), /default-src 'none'/);
+  assert.match(await parts.text(), /id="previewCanvas"/);
+  assert.equal((await request('/forward-view-ui.mjs')).status, 200);
+  const summary = await request('/api/companion/forward-ai?view=summary');
+  assert.equal(summary.status, 200);
+  const {mode, mock, revision, wallets} = await summary.json();
+  assert.deepEqual({mode, mock, revision, wallets}, {
+    mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', mock:false, revision:null, wallets:{},
+  });
+  assert.deepEqual(await (await request()).json(), {status:'unconnected', records:[]});
+  const selection = {aiId:'ai_new', medals:10, expected_revision:null,
+    model_version:'companion-v1_100_0_0_0_35'};
+  for (const field of [{sourceId:'SAMPLE_PROVIDER'}, {price:123}, {licenseRef:'claimed permission'},
+    {sourceMode:'LIVE'}]) {
+    const response = await request('/api/companion/forward-ai?view=summary', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...selection, ...field}),
+    });
+    assert.equal(response.status, 400);
+  }
+  assert.deepEqual(await readdir(root), []);
+});
+
+test('P8 wallet API rejects a real-market ledger and preserves paper and signed mock wallet saves', async t => {
+  const fixture = await setup(t);
+  const paperFile = join(fixture.root, 'paper-wallet.json');
+  const marketFile = join(fixture.root, 'market-wallet.json');
+  const paper = await seedWallet(paperFile);
+  const unavailable = () => assert.fail('Unexpected market access');
+  const adapter = createForwardMarketAdapter({...fixture.config, sourceId:'P8_FIXTURE_ONLY',
+    verifyUsage:() => true, verifyRecord:unavailable, marketStatusAt:unavailable, readBatch:unavailable});
+  await openForwardStore({filePath:marketFile, marketAdapter:adapter, initial:{
+    mode:MARKET_PAPER_MODE, initialMedals:1000, allocations:[{id:'control', modelHash:'b'.repeat(64), medals:200}],
+  }});
+  const companion = {approach:'momentum', risk_percent:40};
+  const {model_version} = deriveForwardCompanionModel(companion);
+  for (const [walletFile, revision, expectedMock] of [
+    [marketFile, 0, null],
+    [paperFile, paper.revision, false],
+    [fixture.options.walletFile, fixture.initial.revision, true],
+  ]) {
+    const request = await serveRecords(t, {forwardLedgerFile:walletFile,
+      companionStore:{read:async () => ({created:true, companion})}});
+    const original = await readFile(walletFile);
+    const path = '/api/companion/forward-ai';
+    const summaryPath = path + '?view=summary';
+    for (const route of [path, summaryPath]) {
+      const response = await request(route);
+      assert.equal(response.status, expectedMock === null ? 503 : 200);
+      if (expectedMock === null) {
+        assert.deepEqual(await response.json(), {error:'AI財布の台帳を読み取れません'});
+      } else if (route === summaryPath) {
+        assert.equal((await response.json()).mock, expectedMock);
+      }
+    }
+    const response = await request(summaryPath, {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({aiId:'ai_new', medals:10, expected_revision:revision, model_version}),
+    });
+    if (expectedMock === null) {
+      assert.equal(response.status, 503);
+      assert.deepEqual(await readFile(walletFile), original);
+    } else {
+      assert.equal(response.status, 201);
+      const saved = await response.json();
+      assert.equal(saved.mock, expectedMock);
+      assert.equal(saved.currentAiId, 'ai_new');
+      assert.equal(saved.revision, revision + 1);
+      assert.equal(saved.wallets.ai_new.cash, 10);
+      assert.notDeepEqual(await readFile(walletFile), original);
+    }
+  }
+  assert.equal(fixture.state.reads, 0);
 });
 
 for (const generation of [appearance, deriveForwardCompanionModel({approach:'trend', risk_percent:35})]) {
