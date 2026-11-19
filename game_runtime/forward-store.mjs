@@ -241,7 +241,7 @@ function encode(revision, ledger) {
   return JSON.stringify({...payload, checksum}) + '\n';
 }
 
-async function readSnapshot(filePath) {
+async function readSnapshot(filePath, verifyOpened) {
   let stat;
   try {
     stat = await lstat(filePath);
@@ -263,6 +263,7 @@ async function readSnapshot(filePath) {
     const opened = await handle.stat();
     const {size, nlink} = opened;
     requireValid(opened.isFile() && nlink === 1, '保存ファイル種別・リンク数');
+    verifyOpened?.(opened);
     requireValid(size > 0 && size <= MAX_BYTES, '保存ファイルのサイズ');
     const buffer = Buffer.alloc(size + 1);
     let length = 0;
@@ -279,6 +280,7 @@ async function readSnapshot(filePath) {
     validateLedger(saved.ledger);
     // Requiring the writer's exact encoding also rejects repeated JSON keys.
     requireValid(content === encode(saved.revision, saved.ledger), '保存形式・チェックサム');
+    verifyOpened?.(await handle.stat());
     return {revision: saved.revision, ledger: saved.ledger};
   } catch (error) {
     throw storeError('FORWARD_STORE_CORRUPT', '仮想台帳の保存ファイルを検証できません', error);
@@ -347,11 +349,11 @@ async function checkLedgerDirectory(directory, allowMissingParent) {
   }
 }
 
-/** Read one validated atomic snapshot without creating a ledger or taking a write lock. */
-export async function readForwardSnapshot(filePath = DEFAULT_FILE) {
+/** Read a snapshot without writes. A caller may synchronously check the opened file's stat before and after reading. */
+export async function readForwardSnapshot(filePath = DEFAULT_FILE, {verifyOpened} = {}) {
   filePath = resolve(filePath);
   await checkLedgerDirectory(dirname(filePath), true);
-  const current = await readSnapshot(filePath);
+  const current = await readSnapshot(filePath, verifyOpened);
   if (current === null) throw uninitialized();
   return current;
 }

@@ -9,11 +9,11 @@ import {randomBytes} from 'node:crypto';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
 import {COMPANION_MODEL_VERSION, deriveForwardCompanionModel} from './forward-model.mjs';
-import {FORWARD_AI_ID, MAX_FORWARD_MEDALS, inspectForwardWallet} from './forward-paper.mjs';
+import {FORWARD_AI_ID, MAX_FORWARD_MEDALS} from './forward-paper.mjs';
 import {MOCK_MARKET_PAPER_MODE} from './forward-market-guard.mjs';
 import {getForwardMockRecordContext} from './forward-mock-lifecycle.mjs';
-import {FORWARD_STARTING_MEDALS, readForwardSnapshot, requireForwardGameWalletMode,
-  saveForwardGeneration} from './forward-store.mjs';
+import {readForwardSnapshot, saveForwardGeneration} from './forward-store.mjs';
+import {forwardWalletState, forwardWalletSummary} from './forward-wallet-view.mjs';
 import {createForwardRecordReader} from './forward-records.mjs';
 import {createArtworkStore,ARTWORK_SLOTS} from './artwork.mjs';
 import {createArtworkExpressionStore,EXPRESSION_MOODS,MAX_EXPRESSION_REQUEST} from './artwork-expressions.mjs';
@@ -293,32 +293,6 @@ async function getBody(req, limit = MAX_REQUEST) {
   }
   try {return JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks)));}
   catch {throw failure('JSONが不正です', 400);}
-}
-
-function forwardWalletState(snapshot, created = false) {
-  const {revision = null, ledger} = snapshot ?? {};
-  if (ledger) requireForwardGameWalletMode(ledger.mode);
-  const generations = ledger?.appearanceGenerations ?? [];
-  return {
-    mode:'FORWARD_WALLETS_MARKET_UNCONNECTED', revision, created,
-    initialMedals:ledger?.initialMedals ?? FORWARD_STARTING_MEDALS,
-    unallocated:ledger?.unallocated ?? FORWARD_STARTING_MEDALS,
-    currentAiId:generations.at(-1)?.aiId ?? null,
-    generations, wallets:ledger?.wallets ?? {},
-  };
-}
-
-function forwardWalletSummary(snapshot, created = false) {
-  const state = forwardWalletState(snapshot, created);
-  const ledger = snapshot?.ledger;
-  return {...state, mock:ledger?.mode === MOCK_MARKET_PAPER_MODE,
-    generations:state.generations.map(({aiId, model_version}) => ({aiId, model_version})),
-    wallets:Object.fromEntries(Object.keys(state.wallets).map(aiId => {
-      const {cash, equity, status, position} = inspectForwardWallet(ledger, aiId);
-      return [aiId, {cash, equity, status, position:position ?
-        {symbol:position.symbol, direction:position.direction} : null}];
-    })),
-  };
 }
 
 const isRevision = value => Number.isSafeInteger(value) && value >= 0;
