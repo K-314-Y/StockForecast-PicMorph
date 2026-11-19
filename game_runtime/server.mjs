@@ -28,8 +28,14 @@ const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.
 const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
-const HATCH_IDLE_PATH = '/assets/hatchpet-demo-idle.webp';
-const HATCH_IDLE_ASSET = new URL('./assets/hatchpet-demo-idle.webp', import.meta.url);
+// Fixed allowlist: do not map client input to arbitrary filesystem paths.
+const HATCH_ASSETS = new Map([
+  ['/assets/hatchpet-demo-idle.webp', new URL('./assets/hatchpet-demo-idle.webp', import.meta.url)],
+  ['/assets/hatchpet-demo-parts-body.webp', new URL('./assets/hatchpet-demo-parts-body.webp', import.meta.url)],
+  ['/assets/hatchpet-demo-parts-face-ready.webp', new URL('./assets/hatchpet-demo-parts-face-ready.webp', import.meta.url)],
+  ['/assets/hatchpet-demo-parts-face-happy.webp', new URL('./assets/hatchpet-demo-parts-face-happy.webp', import.meta.url)],
+  ['/assets/hatchpet-demo-parts-face-cautious.webp', new URL('./assets/hatchpet-demo-parts-face-cautious.webp', import.meta.url)],
+]);
 const ARENA_JS = new URL('./arena-ui.mjs', import.meta.url);
 const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
@@ -327,13 +333,13 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
-    if (req.method === 'GET' && rawPath === HATCH_IDLE_PATH) {
+    if (req.method === 'GET' && HATCH_ASSETS.has(rawPath)) {
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
         return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});
       }
       let bytes;
       try {
-        bytes = await readFile(HATCH_IDLE_ASSET);
+        bytes = await readFile(HATCH_ASSETS.get(rawPath));
       } catch {
         return json(res, 404, {error: '見つかりません'});
       }

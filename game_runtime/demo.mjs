@@ -299,6 +299,42 @@ function discard() {
 // Appearance is purely page-local and never changes the forecast model or XP.
 let skinEpoch = 0;
 let hatchIdlePreview = null;
+let hatchPartsPreview = null;
+const hatchPartAssets = Object.freeze([
+  'body','face-ready','face-happy','face-cautious'
+]);
+function releaseHatchPartsPreview() {
+  if (!hatchPartsPreview) return;
+  for (const url of hatchPartsPreview.urls || []) URL.revokeObjectURL(url);
+  hatchPartsPreview = null;
+}
+function refreshHatchParts(message) {
+  const button = $('hatchPartsToggle');
+  if (!button) return;
+  const chibi = $('chibi');
+  const {hairStyle,expression,accessory} = chibi.dataset;
+  const appearanceLoaded = savedCompanion && savedLook && savedArtwork;
+  const eligible = appearanceLoaded && !artworkActive && !$('skinSelect').value && !chibi.hidden &&
+    $('creatorHair').value.toLowerCase() === '#8882db' && $('creatorClothing').value.toLowerCase() === '#92e1d4' &&
+    hairStyle === 'bob' && expression === 'cheerful' && accessory === 'ribbon';
+  if (!eligible) releaseHatchPartsPreview();
+  const urls = hatchPartsPreview?.urls;
+  if (urls) {
+    const names = ['--parts-body','--parts-face-ready','--parts-face-happy','--parts-face-cautious'];
+    names.forEach((name,i)=>chibi.style.setProperty(name, 'url("' + urls[i] + '")'));
+    chibi.dataset.hatchParts = 'true';
+  } else if (chibi.dataset.hatchParts) {
+    delete chibi.dataset.hatchParts;
+    for (const name of ['--parts-body','--parts-face-ready','--parts-face-happy','--parts-face-cautious']) {
+      chibi.style.removeProperty(name);
+    }
+  }
+  button.disabled = !eligible || Boolean(hatchPartsPreview && !urls);
+  button.setAttribute('aria-pressed',String(Boolean(urls)));
+  $('hatchPartsStatus').textContent = message ?? (!appearanceLoaded ? 'キャラの外見を読み込むと利用できます。' :
+    !eligible ? '初期色・初期パーツのデモだけに適用できます。' : '');
+}
+
 
 function refreshHatchIdle(message) {
   const button = $('hatchIdleToggle');
@@ -325,10 +361,14 @@ function refreshHatchIdle(message) {
   button.setAttribute('aria-pressed', String(Boolean(url)));
   $('hatchIdleStatus').textContent = message ?? (!appearanceLoaded ? '外見の設定を確認するとデモを選べます。' :
     !eligible ? '初期の髪色・服色・パーツのchibiで使えます。' : '');
+  refreshHatchParts();
 }
 
 $('hatchIdleToggle')?.addEventListener('click', async () => {
   if ($('hatchIdleToggle').disabled) return;
+  // Modes are mutually exclusive; cancel even an in-flight parts download.
+  releaseHatchPartsPreview();
+  refreshHatchParts();
   if (hatchIdlePreview?.url) {
     URL.revokeObjectURL(hatchIdlePreview.url);
     hatchIdlePreview = null;
@@ -361,6 +401,52 @@ $('hatchIdleToggle')?.addEventListener('click', async () => {
     refreshHatchIdle('デモ画像を表示できません。通常のchibiで遊べます。');
   } finally {
     if (url) URL.revokeObjectURL(url);
+  }
+});
+
+$('hatchPartsToggle')?.addEventListener('click', async () => {
+  if ($('hatchPartsToggle').disabled) return;
+  if (hatchPartsPreview?.urls) {
+    releaseHatchPartsPreview();
+    refreshHatchParts();
+    return;
+  }
+  // Cancel the original full-body preview without touching saved character settings.
+  if (hatchIdlePreview?.url) URL.revokeObjectURL(hatchIdlePreview.url);
+  hatchIdlePreview = null;
+  const pending = {urls:null};
+  hatchPartsPreview = pending;
+  refreshHatchIdle();
+  refreshHatchParts('体と顔のPNGを読み込んでいます…');
+  const urls = [];
+  try {
+    for (const kind of hatchPartAssets) {
+      const response = await fetch('/assets/hatchpet-demo-parts-' + kind + '.webp',{mode:'same-origin'});
+      if (!response.ok) throw Error('part asset unavailable');
+      const blob = await response.blob();
+      if (blob.type !== 'image/webp') throw Error('unexpected image MIME');
+      const url = URL.createObjectURL(blob);
+      urls.push(url);
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      if (image.naturalWidth !== 1152 || image.naturalHeight !== 208) throw Error('unexpected dimensions');
+      if (hatchPartsPreview !== pending) return;
+    }
+    if (hatchPartsPreview !== pending) return;
+    pending.urls=urls.slice();
+    refreshHatchIdle();
+    refreshHatchParts('顔のPNGパーツを重ねています。元の画像は変更しません。');
+  } catch {
+    if (hatchPartsPreview === pending) {
+      hatchPartsPreview = null;
+      refreshHatchIdle();
+      refreshHatchParts('PNGパーツを表示できません。通常のchibiで遊べます。');
+    }
+  } finally {
+    // URLs belong to pending only after the successful commit.
+    if (pending.urls !== null) return;
+    for (const url of urls) URL.revokeObjectURL(url);
   }
 });
 

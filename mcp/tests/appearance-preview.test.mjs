@@ -15,6 +15,10 @@ const html = await readFile(new URL('demo.html',root),'utf8');
 const script = await readFile(new URL('demo.mjs',root),'utf8');
 const idlePath = '/assets/hatchpet-demo-idle.webp';
 const idleBytes = await readFile(new URL('.'+idlePath,root));
+const partPaths = ['body','face-ready','face-happy','face-cautious'].map(kind=>'/assets/hatchpet-demo-parts-'+kind+'.webp');
+const partBytes = new Map(await Promise.all(partPaths.map(async url=>
+  [url, await readFile(new URL('.'+url,root))])));
+
 
 async function serve(opts,fn) {
   const server = createGameServer(opts);
@@ -115,6 +119,10 @@ async function mount(drafts=catalog().drafts, {artwork=false, companion={}, look
       assert.equal(options.mode,'same-origin');
       return {ok:true,blob:async()=>new Blob([idleBytes],{type:'image/webp'})};
     }
+    if(partBytes.has(path)) {
+      assert.equal(options.mode,'same-origin');
+      return {ok:true,blob:async()=>new Blob([partBytes.get(path)],{type:'image/webp'})};
+    }
     if(path==='/api/growth')return {ok:true,json:async()=>({
       revision:0,slots:[{slot:'mine',level:1,xp:0,gear:'none',
         gear_options:[{id:'none',unlocked:true,name:'装備なし',icon:'·'}]}]})};
@@ -188,7 +196,19 @@ test('the demo atlas route serves exact bytes and accepts only same-origin GET t
     assert.equal(response.headers.get(name),value,name);
   }
   assert.deepEqual(response.body,idleBytes);
-  for (const path of ['/assets/', '/assets/other.webp', '/assets/%2e%2e%2flocal_state/private',
+  for (const [path, bytes] of partBytes) {
+    const served = await send(path);
+    assert.equal(served.status,200,path);
+    assert.equal(served.headers.get('content-type'),'image/webp');
+    assert.equal(served.headers.get('cross-origin-resource-policy'),'same-origin');
+    assert.deepEqual(served.body,bytes);
+    assert.equal((await send(path,'HEAD')).status,404);
+    assert.equal((await send(path,'POST')).status,404);
+    assert.equal((await send(path,'GET',{origin:'https://other.invalid'})).status,403);
+  }
+  for (const path of ['/assets/', '/assets/other.webp', '/assets/hatchpet-demo-parts-unknown.webp',
+    '/assets/%68atchpet-demo-parts-body.webp','/assets/%2e%2e%2fprivate',
+    '/assets/%2e%2e%2flocal_state/private',
     '/assets/../assets/hatchpet-demo-idle.webp', '/assets/%68atchpet-demo-idle.webp', '/local_state/private', '/workspaces/private']) {
     assert.equal((await send(path)).status,404,path);
   }
@@ -215,6 +235,58 @@ test('the optional front character button uses six idle frames inside the chibi 
   assert.match(reduced,/animation:none/);
   assert.doesNotMatch(html,/\/assets\/hatchpet-demo-idle/);
   assert.doesNotMatch(script,/setTimeout|setInterval|requestAnimationFrame/);
+});
+
+test('opt-in PNG body+face parts use one six-frame animation with reduced-motion fallback',()=>{
+  const front=html.slice(html.indexOf('id="frontCharacter"'),html.indexOf('id="simpleHome"'));
+  assert.match(front,/<button id="hatchPartsToggle"[^>]*aria-pressed="false"/);
+  assert.match(front,/体」と「顔」に分け/);
+  assert.match(html,/#chibi\[data-hatch-parts="true"\]:not\(\[hidden\]\)::after/);
+  assert.match(html,/background-image:var\(--parts-face-ready\),var\(--parts-body\)/);
+  assert.match(html,/@keyframes hatch-parts-frames\{to\{background-position:-750px 0,-750px 0\}\}/);
+  assert.match(html,/background-size:900px 162\.5px,900px 162\.5px/);
+  const reduced=html.split('@media(prefers-reduced-motion:reduce)')[1].split('</style>')[0];
+  assert.match(reduced,/data-hatch-parts/);
+  assert.match(reduced,/animation:none/);
+  assert.doesNotMatch(script,/setInterval|requestAnimationFrame/);
+});
+test('PNG face parts load only on click, switch mutually exclusively, and never save',async()=>{
+  const {get,click,calls,writes,urls}=await mount();
+  const chibi=get('chibi'),button=get('hatchPartsToggle');
+  assert.equal(button.disabled,false);
+  assert.equal(calls.some(path=>partPaths.includes(path)),false);
+  await click('hatchPartsToggle');
+  assert.equal(button.attributes['aria-pressed'],'true');
+  assert.equal(chibi.dataset.hatchParts,'true');
+  assert.equal(urls.size,4);
+  for (const path of partPaths) assert.equal(calls.includes(path),true);
+  assert.ok(chibi.style.get('--parts-face-happy').includes('blob:fixture'));
+  await click('hatchIdleToggle');
+  assert.equal(chibi.dataset.hatchParts,undefined);
+  assert.equal(chibi.dataset.hatchIdle,'true');
+  assert.equal(urls.size,1);
+  await click('hatchPartsToggle');
+  assert.equal(chibi.dataset.hatchIdle,undefined);
+  assert.equal(chibi.dataset.hatchParts,'true');
+  assert.equal(urls.size,4);
+  get('creatorHair').value='#123456';
+  await click('creatorHair','input');
+  assert.equal(button.disabled,true);
+  assert.equal(chibi.dataset.hatchParts,undefined);
+  assert.equal(urls.size,0);
+  assert.deepEqual(writes,[]);
+});
+test('PNG parts broken decode and imported artwork fall back without changes',async()=>{
+  const failed=await mount(undefined,{decode:async()=>{throw Error('broken face');}});
+  await failed.click('hatchPartsToggle');
+  assert.equal(failed.get('chibi').dataset.hatchParts,undefined);
+  assert.equal(failed.urls.size,0);
+  assert.match(failed.get('hatchPartsStatus').textContent,/表示できません/);
+  const saved=await mount(undefined,{artwork:true});
+  assert.equal(saved.get('hatchPartsToggle').disabled,true);
+  await saved.click('hatchPartsToggle');
+  assert.equal(saved.calls.some(path=>partPaths.includes(path)),false);
+  assert.deepEqual(saved.writes,[]);
 });
 
 test('preview loads on click and can be toggled off without persisting appearance',async()=>{

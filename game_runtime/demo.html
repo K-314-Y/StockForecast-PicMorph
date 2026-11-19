@@ -112,6 +112,29 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
  animation:hatch-idle-frames 1.8s steps(6,jump-none) infinite
 }
 @keyframes hatch-idle-frames{to{background-position:-750px 0}}
+
+/* Opt-in PNG parts prototype: a single two-layer spritesheet prevents timing drift.
+   All assets come from this project's original demo art, never from user uploads. */
+.scene:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden]){animation:none}
+.scene:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden]) > *{display:none}
+.scene:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after{
+ content:"";position:absolute;bottom:0;left:0;width:150px;height:162.5px;
+ background-image:var(--parts-face-ready),var(--parts-body);
+ background-repeat:no-repeat,no-repeat;
+ background-size:900px 162.5px,900px 162.5px;
+ background-position:0 0,0 0;
+ animation:hatch-parts-frames 1.8s steps(6,jump-none) infinite
+}
+.scene[data-mood="happy"]:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after,
+.scene[data-mood="growth"]:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after{
+ background-image:var(--parts-face-happy),var(--parts-body)
+}
+.scene[data-mood="cautious"]:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after{
+ background-image:var(--parts-face-cautious),var(--parts-body)
+}
+@keyframes hatch-parts-frames{to{background-position:-750px 0,-750px 0}}
+#hatchPartsToggle[aria-pressed="true"]{background:var(--mint);color:#12303b}
+
 @keyframes companion-blink{0%,91%,97%,100%{scale:1 1}94%{scale:1 .14}}
 .scene:is([data-mood="thinking"],[data-mood="happy"],[data-mood="cautious"],[data-mood="growth"]) #chibi .eye{
  top:36px;height:16px;border-radius:50%;transform:none
@@ -261,6 +284,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  .scene[data-growing="true"] > :is(#chibi,#artworkStage,#portrait):not([hidden]),
  .scene[data-mood="ready"] #chibi:not([hidden]) .eye,
  .scene[data-mood="ready"]:not([data-expression-other-model]) #chibi[data-hatch-idle="true"]:not([hidden])::after,
+ .scene:not([data-expression-other-model]) #chibi[data-hatch-parts="true"]:not([hidden])::after,
  .quick-pre-cue[data-reaction] #quickPreCueIcon{animation:none;transition:none}
 }
 </style>
@@ -307,9 +331,12 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </div>
   <div class="actions">
    <button id="hatchIdleToggle" type="button" aria-pressed="false" aria-describedby="hatchIdleHint hatchIdleStatus" disabled>動くデモを見る</button>
+   <button id="hatchPartsToggle" type="button" aria-pressed="false" aria-describedby="hatchPartsHint hatchPartsStatus" disabled>PNGパーツ合成を試す</button>
   </div>
   <small id="hatchIdleHint">実験用に生成した固定デモ画像。髪や服の色・予測モデルは変わりません。自作イラストには適用しません。</small>
   <small id="hatchIdleStatus" role="status"></small>
+  <small id="hatchPartsHint">既存のHatchPet待機6コマを「体」と「顔」に分け、気分で顔のPNGパーツを切り替える実験。元絵・保存画像は変えません。デモ専用です。</small>
+  <small id="hatchPartsStatus" role="status"></small>
   <p>未保存時はデモchibi。SAVEした完成イラスト（base）は再読込後も表示。</p>
   <p class="sub">髪・顔・服は任意の追加レイヤー。画像選択は仮表示、各SAVEで保存。</p>
  </div>
