@@ -220,8 +220,12 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
       const {forecastId, issuedAt, provenance, ...input} = forecast;
       const normalized = normalizeInput(input);
       const identified = identifyForwardModel({model_version:input.model_version, model:provenance.model});
+      const {mockReferenceSha256} = provenance;
+      const boundReference = Object.hasOwn(provenance, 'mockReferenceSha256');
       if (forecastId !== id || idFor(normalized) !== id || normalized.targetAt !== input.targetAt ||
-        canonical(provenance) !== canonical({walletRevision:provenance.walletRevision, model:identified.model}) ||
+        (boundReference && (input.sourceMode !== 'TEST_ONLY' || !isHash(mockReferenceSha256))) ||
+        canonical(provenance) !== canonical({walletRevision:provenance.walletRevision, model:identified.model,
+          ...(boundReference ? {mockReferenceSha256} : {})}) ||
         identified.modelHash !== input.modelHash ||
         !Number.isSafeInteger(provenance.walletRevision) || provenance.walletRevision < 0 ||
         canonical(issued.payload) !== canonical(receiptFor(id, saved.checksum)) ||
@@ -248,7 +252,7 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
   }
 
   return {
-    async freeze(input) {
+    async freeze(input, {verifyMockReference} = {}) {
       input = normalizeInput(input);
       const forecastId = idFor(input);
       return withLock(forecastId, async () => {
@@ -268,8 +272,18 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
         const issuedAt = now();
         const target = utcTime(input.targetAt);
         requireOpenWindow(utcTime(issuedAt), utcTime(issuedAt), target);
-        const forecast = {...input, forecastId, issuedAt,
-          provenance:{walletRevision:revision, model:generation.model}};
+        const provenance = {walletRevision:revision, model:generation.model};
+        // Optional server-side check after the wallet read and before publication.
+        if (verifyMockReference !== undefined) {
+          if (ledger.mode !== MOCK_MARKET_PAPER_MODE || input.sourceMode !== 'TEST_ONLY' ||
+              typeof verifyMockReference !== 'function') {
+            throw new RangeError('A signed reference requires a TEST_ONLY forecast and a MOCK_NONLIVE wallet');
+          }
+          const proofHash = verifyMockReference(utcTime(issuedAt));
+          if (!isHash(proofHash)) throw new RangeError('Expected a verified MOCK_NONLIVE reference hash');
+          provenance.mockReferenceSha256 = proofHash;
+        }
+        const forecast = {...input, forecastId, issuedAt, provenance};
         const checksum = await publish(directory, pathFor(forecastId, 'forecast'), 'forecast', forecast);
         const beforeReceipt = utcTime(now());
         requireOpenWindow(utcTime(issuedAt), beforeReceipt, target);
@@ -291,7 +305,8 @@ export async function openForwardForecastStore({directory, walletFile, clock = D
       if (!saved) throw storeError('FORWARD_FORECAST_NOT_FOUND', 'No saved forecast');
       const {forecast, receipt, outcome} = saved;
       if (forecast.sourceMode !== 'TEST_ONLY') throw new RangeError('Market scoring is closed');
-      if (readMockOutcome && (await readForwardSnapshot(walletFile)).ledger.mode === MOCK_MARKET_PAPER_MODE) {
+      if (readMockOutcome && (forecast.provenance.mockReferenceSha256 !== undefined ||
+          (await readForwardSnapshot(walletFile)).ledger.mode === MOCK_MARKET_PAPER_MODE)) {
         throw new RangeError('MOCK_NONLIVE paper ledgers require signed settlement evidence');
       }
       if (outcome) return outcome;

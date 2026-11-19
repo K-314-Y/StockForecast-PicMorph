@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {openForwardForecastStore} from './forward-forecast-store.mjs';
-import {getForwardMarketAdapter} from './forward-market-adapter.mjs';
+import {getForwardMarketAdapter, mockReferenceSha256} from './forward-market-adapter.mjs';
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
 import {MAX_FORWARD_MEDALS} from './forward-paper.mjs';
 import {forecastDirection} from './forward-score.mjs';
@@ -19,10 +19,14 @@ function requireModel(ledger, forecast) {
   }
 }
 
-function requireReference(reference, forecast) {
+function requireReference(reference, forecast, envelope) {
   if (!(utcTime(reference.tradeAt) <= utcTime(reference.publishedAt) &&
         utcTime(reference.publishedAt) <= utcTime(forecast.issuedAt))) {
     throw new RangeError('Signed MOCK_NONLIVE reference must have been published by forecast issuance');
+  }
+  const boundReference = forecast.provenance.mockReferenceSha256;
+  if (boundReference !== undefined && mockReferenceSha256(envelope) !== boundReference) {
+    throw new RangeError('Signed MOCK_NONLIVE reference differs from the frozen prediction reference');
   }
 }
 
@@ -73,7 +77,7 @@ export async function openForwardMockLifecycle({
         closed.mockForecast.reference.proof !== opened.mockForecast.reference.proof) {
       throw new RangeError('MOCK_NONLIVE opening and settlement refer to different signed scenarios');
     }
-    requireReference(reference, forecast);
+    requireReference(reference, forecast, opened.mockForecast.reference);
     const evidence = createHash('sha256').update(JSON.stringify([opened, closed])).digest('hex');
     return {observedAt:closed.observedAt, observation:{
       evidence:`MOCK_NONLIVE:sha256:${evidence}`, status:'OBSERVED', sourceMode:MOCK_MARKET_SOURCE,
@@ -109,11 +113,14 @@ export async function openForwardMockLifecycle({
           throw new RangeError('MOCK_NONLIVE opening and settlement refer to different signed scenarios');
         }
         for (const event of [opened, closed]) {
-          if (event) requireReference(adapter.mockForecastTrades(event).reference, forecast);
+          if (event) requireReference(adapter.mockForecastTrades(event).reference, forecast, event.mockForecast.reference);
         }
         const pending = ledger.pending.find(order => ['open', 'close'].some(action =>
           order.id === mockForecastOrderId(forecast.forecastId, action)));
-        if (pending) requireReference(adapter.mockReference(pending.mockForecast.reference, forecast.symbol), forecast);
+        if (pending) {
+          const envelope = pending.mockForecast.reference;
+          requireReference(adapter.mockReference(envelope, forecast.symbol), forecast, envelope);
+        }
         return saved;
       },
     }),
@@ -123,7 +130,7 @@ export async function openForwardMockLifecycle({
       requireModel(ledger, forecast);
       const action = orderRoute[forecastDirection(forecast)];
       if (!action) return {action:'NO_TRADE'};
-      requireReference(adapter.mockReference(reference, forecast.symbol), forecast);
+      requireReference(adapter.mockReference(reference, forecast.symbol), forecast, reference);
       const {aiId, symbol, targetAt} = forecast;
       const id = mockForecastOrderId(forecastId, 'open');
       const binding = {forecastSha256:receipt.forecastSha256, targetAt, reference};
@@ -146,7 +153,7 @@ export async function openForwardMockLifecycle({
         throw new RangeError('No open position for this MOCK_NONLIVE forecast');
       }
       const {reference} = adapter.mockForecastTrades(opened);
-      requireReference(reference, forecast);
+      requireReference(reference, forecast, opened.mockForecast.reference);
       const id = mockForecastOrderId(forecastId, 'close');
       const next = await paper.reserveMockForecastOrder({id, aiId, symbol, action:'CLOSE'}, opened.mockForecast,
         {notBefore:opened.observedAt, expectedRevision:revision});

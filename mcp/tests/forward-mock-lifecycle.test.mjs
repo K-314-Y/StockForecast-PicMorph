@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {createHash, createHmac} from 'node:crypto';
-import {mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile} from 'node:fs/promises';
+import {copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {deriveForwardAppearanceModel, identifyForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
 import {deriveForwardCompanionModel, identifyForwardModel} from '../../game_runtime/forward-model.mjs';
 import {openForwardForecastStore} from '../../game_runtime/forward-forecast-store.mjs';
 import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adapter.mjs';
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
+import {openForwardPredictor} from '../../game_runtime/forward-predict.mjs';
 import {openForwardStore, saveForwardGeneration} from '../../game_runtime/forward-store.mjs';
 import {createGameServer} from '../../game_runtime/server.mjs';
 
@@ -453,4 +455,233 @@ test('rejects a late reference, a reversed receipt clock and an opening trade be
   assert.deepEqual(older.ledger.journal, []);
   const delayed = await batch(target, scenarioTrade(entry, 102));
   assert.deepEqual(delayed.ledger.journal, []);
+});
+
+const predictorUrl = new URL('../../game_runtime/forward-predict.mjs', import.meta.url);
+const cli = fileURLToPath(new URL('./forward_predict_bridge.py', predictorUrl));
+const trend = deriveForwardCompanionModel({approach:'trend', risk_percent:35});
+const history = [
+  ...Array.from({length:24}, (_, i) => signedTrade(issue - (25 - i) * minute, 76 + i)),
+  reference,
+];
+const selection = {aiId:input.aiId};
+
+function predictionConfig({options, state}, readHistory = () => history) {
+  const {walletFile, directory, marketAdapter} = options;
+  return {walletFile, directory, marketAdapter, readHistory, clock:() => state.now,
+    targetAt:iso(target), symbol:input.symbol};
+}
+
+test('P7 uses the saved model version and returns engine probabilities without writing', async t => {
+  const fixture = await setup(t, trend);
+  const {initial, options, lifecycle, state} = fixture;
+  const second = deriveForwardCompanionModel({approach:'reversion', risk_percent:35});
+  const {revision, ledger} = await saveForwardGeneration({filePath:options.walletFile, aiId:'ai_second',
+    generation:second, medals:100, expectedRevision:initial.revision});
+  const predictor = await openForwardPredictor(predictionConfig(fixture, query => {
+    assert.deepEqual(query, {symbol:input.symbol, throughAt:iso(issue)});
+    assert.ok(Object.isFrozen(query));
+    return history;
+  }));
+  const a = await predictor.predict(selection);
+  const b = await predictor.predict({aiId:'ai_second'});
+  const aExpected = execFileSync('/usr/bin/python3', ['-I', '-B', '-S', '-c', `
+import json, sys
+sys.path.insert(0, '.')
+from engine import prediction
+from game_runtime.predict_bridge import model_from_record
+data = json.load(sys.stdin)
+print(json.dumps({"probabilities": prediction(model_from_record(data["model"]), tuple(data["prices"]))}))
+`], {cwd:new URL('../', predictorUrl), env:{}, encoding:'utf8',
+    input:JSON.stringify({model:trend.model, prices:history.map(row => JSON.parse(row.raw).price)})});
+  assert.deepEqual(a, JSON.parse(aExpected));
+  assert.notDeepEqual(a.probabilities, b.probabilities);
+  assert.deepEqual(await readdir(options.directory), []);
+  assert.deepEqual(await lifecycle.snapshot(), {revision, ledger});
+  assert.equal(state.reads, 0);
+});
+
+test('P7 rejects invalid rows throughout the history, disallowed clocks and external prediction fields', async t => {
+  const fixture = await setup(t, trend);
+  const {state, initial, lifecycle, options} = fixture;
+  let rows = history;
+  let calls = 0;
+  const predictor = await openForwardPredictor(predictionConfig(fixture, () => {calls++; return rows;}));
+  for (const override of [{prices:[110]}, {futurePrices:[110]}, {result:'UP'},
+    {symbol:'OTHER'}, {targetAt:iso(target)}, {model:trend.model}, {sourceMode:'MARKET_UNCONNECTED'}]) {
+    await assert.rejects(predictor.freeze({...selection, ...override}), /only a saved AI ID/);
+  }
+  await assert.rejects(predictor.freeze(selection, [110]), /only a saved AI ID/);
+  await assert.rejects(predictor.freeze({aiId:'control'}), /saved MOCK_NONLIVE wallet generation/);
+  assert.equal(calls, 0);
+  const [first, ...rest] = history;
+  const firstAt = issue - 25 * minute;
+  for (const [badRows, error] of [
+    [[{...first, raw:first.raw.replace('"price":76','"price":77')}, ...rest], /Invalid signed/],
+    [[signedTrade(firstAt, 76, {sourceId:'OTHER_SOURCE'}), ...rest], /Invalid signed/],
+    [[signedTrade(firstAt, 76, {symbol:'OTHER'}), ...rest], /Invalid signed/],
+    [[signedTrade(firstAt, 76, {market:'OTHER'}), ...rest], /Invalid signed/],
+    [[signedTrade(firstAt, 76, {valueKind:'BID'}), ...rest], /Invalid signed/],
+    [[signedTrade(firstAt, 0), ...rest], /Invalid signed/],
+    [[{...first, futurePrice:110}, ...rest], /signed history envelope/],
+    [[first, ...history], /out of order/],
+    [[rest[0], first, ...rest.slice(1)], /out of order/],
+    [[...history, scenarioTrade(target, 110)], /not yet published/],
+    [[...history, signedTrade(issue, 110, {publishedAt:iso(issue + 1)})], /not yet published/],
+    [[...history, signedTrade(issue - 1, 110, {publishedAt:iso(issue - 2)})], /Invalid signed/],
+    [history.slice(0, -10), /stale/],
+    [history.slice(-8), /Insufficient history/],
+    [Array(201).fill(first), /history size/],
+  ]) {
+    rows = badRows;
+    await assert.rejects(predictor.freeze(selection), error);
+  }
+  rows = history;
+  state.status = 'HALTED';
+  await assert.rejects(predictor.freeze(selection), /not OPEN/);
+  state.status = 'OPEN';
+  state.authorized = false;
+  await assert.rejects(predictor.freeze(selection), /利用許可/);
+  state.authorized = true;
+  state.now = target;
+  await assert.rejects(predictor.freeze(selection), /closed prediction window/);
+  state.now = issue;
+  const late = await openForwardPredictor(predictionConfig(fixture, async () => {
+    state.now = target;
+    return history;
+  }));
+  await assert.rejects(late.freeze(selection), /closed prediction window/);
+  const crossing = await openForwardPredictor({...predictionConfig(fixture),
+    clock:() => state.stamps.shift()});
+  state.stamps = [issue, issue, issue, target];
+  await assert.rejects(crossing.freeze(selection), {code:'FORWARD_FORECAST_CUTOFF'});
+  assert.deepEqual(await readdir(options.directory), []);
+  assert.deepEqual(await lifecycle.snapshot(), initial);
+  assert.equal(state.reads, 0);
+});
+
+test('P7 accepts only a dedicated signed mock adapter and a matching mock ledger', async t => {
+  const fixture = await setup(t, trend);
+  const config = predictionConfig(fixture, () => assert.fail('Unexpected history read'));
+  await assert.rejects(openForwardPredictor({...config, marketAdapter:{}}), /signed MOCK_NONLIVE/);
+  const liveHandle = createForwardMarketAdapter({...fixture.config, sourceId:'OTHER_SOURCE',
+    verifyUsage:() => true, verifyRecord:() => null, marketStatusAt:() => 'OPEN', readBatch:() => []});
+  await assert.rejects(openForwardPredictor({...config, marketAdapter:liveHandle}), /signed MOCK_NONLIVE/);
+  const walletFile = join(fixture.root, 'unconnected.json');
+  await seedWallet(walletFile, undefined, trend);
+  const predictor = await openForwardPredictor({...config, walletFile});
+  await assert.rejects(predictor.freeze(selection), /saved MOCK_NONLIVE wallet generation/);
+});
+
+test('P7 CLI rejects extra data, invalid models and invalid or oversized price sequences', () => {
+  const valid = {model:trend.model, prices:Array(9).fill(100)};
+  for (const raw of [
+    JSON.stringify({...valid, futurePrices:[110]}),
+    JSON.stringify({...valid, result:'UP'}),
+    JSON.stringify({...valid, model:{...valid.model, slow_window:21}}),
+    JSON.stringify({...valid, model:{...valid.model, plugin_strengths:{}}}),
+    JSON.stringify({...valid, model:{...valid.model, fast_window:true}}),
+    JSON.stringify({...valid, prices:Array(8).fill(100)}),
+    JSON.stringify({...valid, prices:Array(201).fill(100)}),
+    JSON.stringify({...valid, prices:[0, ...valid.prices]}),
+    JSON.stringify({...valid, prices:[true, ...valid.prices]}),
+    JSON.stringify({...valid, prices:['INFINITY', ...valid.prices]}).replace('"INFINITY"', '1e999'),
+    JSON.stringify(valid) + ' '.repeat(16 * 1024),
+    JSON.stringify(valid).replace('"prices":','"prices":[],"prices":'),
+  ]) {
+    const result = spawnSync('/usr/bin/python3', ['-I', '-B', '-S', cli],
+      {input:raw, encoding:'utf8', timeout:3000, env:{}});
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+  }
+});
+
+test('P7 closes on Python failure, timeout, excess stdout and invalid output without publishing', async t => {
+  const fixture = await setup(t, trend);
+  const runtime = join(fixture.root, 'runtime');
+  await mkdir(runtime);
+  const path = join(runtime, 'forward-predict.mjs');
+  await copyFile(predictorUrl, path);
+  for (const name of ['forward-forecast-store', 'forward-market-adapter', 'forward-market-guard',
+    'forward-model', 'forward-paper', 'forward-score', 'forward-store']) {
+    await symlink(fileURLToPath(new URL('./' + name + '.mjs', predictorUrl)), join(runtime, name + '.mjs'));
+  }
+  const bridge = join(runtime, 'forward_predict_bridge.py');
+  const {openForwardPredictor:openWithTestBridge} = await import(pathToFileURL(path));
+  const predictor = await openWithTestBridge(predictionConfig(fixture));
+  for (const script of [
+    'import sys\nsys.exit(1)',
+    'import time\ntime.sleep(60)',
+    'print("x" * 2048)',
+    'print("not JSON")',
+    'print(\'{"probabilities":{"UP":0.9,"FLAT":0.9,"DOWN":0.9}}\')',
+  ]) {
+    await writeFile(bridge, 'import sys\nsys.stdin.read()\n' + script);
+    await assert.rejects(predictor.freeze(selection), /Forward Python prediction failed/);
+    assert.deepEqual(await readdir(fixture.options.directory), []);
+  }
+  assert.deepEqual(await fixture.lifecycle.snapshot(), fixture.initial);
+});
+
+test('P7 freeze binds the P4 reference and survives duplicate calls, process restart and mock scoring', async t => {
+  const fixture = await setup(t, trend);
+  const {lifecycle, options, initial, batch, state, root} = fixture;
+  const predictor = await openForwardPredictor(predictionConfig(fixture));
+  const saved = await predictor.freeze(selection);
+  const {forecast, receipt} = saved;
+  assert.equal(forecast.sourceMode, 'TEST_ONLY');
+  assert.equal(forecast.modelHash, trend.modelHash);
+  assert.equal(forecast.model_version, trend.model_version);
+  assert.equal(forecast.targetAt, iso(target));
+  assert.equal(forecast.symbol, input.symbol);
+  assert.ok(!Object.hasOwn(forecast, 'predictedChangePct'));
+  assert.equal(saved.outcome, null);
+  assert.deepEqual(await lifecycle.snapshot(), initial);
+  assert.equal(state.reads, 0);
+  const id = receipt.forecastId;
+
+  const reopened = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import {openForwardForecastStore} from ${JSON.stringify(new URL('./forward-forecast-store.mjs', predictorUrl).href)};
+    const store = await openForwardForecastStore(${JSON.stringify({
+      walletFile:options.walletFile, directory:options.directory,
+    })});
+    console.log(JSON.stringify(await store.read(${JSON.stringify(id)}, {readOnly:true})));
+  `], {encoding:'utf8'});
+  assert.deepEqual(JSON.parse(reopened), saved);
+  const restarted = await openForwardPredictor(predictionConfig(fixture));
+  await assert.rejects(restarted.freeze(selection), {code:'FORWARD_FORECAST_EXISTS'});
+  const wrongReference = signedTrade(issue - minute, 100, {fixture:'different'});
+  const wrong = await openForwardMockLifecycle({...options, reference:wrongReference});
+  await assert.rejects(wrong.reserveOpen(id), /differs from the frozen prediction reference/);
+  const reserved = await lifecycle.reserveOpen(id);
+  assert.equal(reserved.action, 'OPEN_LONG');
+  assert.deepEqual(reserved.ledger.pending[0].mockForecast.reference, history.at(-1));
+  await batch(entry, scenarioTrade(entry, 102));
+  await lifecycle.reserveClose(id);
+  const settled = await batch(target, scenarioTrade(target, 110));
+  const otherWallet = join(root, 'unconnected.json');
+  await seedWallet(otherWallet, undefined, trend);
+  const legacy = await openForwardForecastStore({directory:options.directory, walletFile:otherWallet,
+    clock:() => state.now, readMockOutcome:() => assert.fail('Unexpected unsigned score lookup')});
+  await assert.rejects(legacy.scoreMock(id), /require signed settlement evidence/);
+  const result = await lifecycle.score(id);
+  assert.equal(result.status, 'SCORED_MOCK_NONLIVE');
+  assert.equal(result.observation.referenceTradeAt, iso(issue - minute));
+  assert.equal(result.observation.referencePrice, 100);
+  assert.equal(result.observation.targetPrice, 110);
+  assert.equal(result.score.directionCorrect, true);
+  assert.equal(result.score.absoluteChangeErrorPctPoints, null);
+  assert.ok(settled.ledger.journal.every(event => event.modelHash === forecast.modelHash && event.aiId === forecast.aiId));
+  const request = await serveRecords(t, {forwardLedgerFile:options.walletFile,
+    forwardRecords:{forecastId:id, source:lifecycle.recordSource}});
+  const response = await request();
+  assert.equal(response.status, 200);
+  const report = await response.json();
+  assert.equal(report.status, 'MOCK_NONLIVE');
+  assert.equal(report.records[0].predictedChangePct, null);
+  assert.ok(!JSON.stringify(report).includes(forecast.provenance.mockReferenceSha256));
+  for (const path of ['/api/companion/forward-predict', '/forward-predict.mjs']) {
+    assert.equal((await request(path)).status, 404);
+    assert.equal((await request(path, {method:'POST'})).status, 404);
+  }
 });

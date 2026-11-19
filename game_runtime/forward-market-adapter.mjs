@@ -1,10 +1,16 @@
+import {createHash} from 'node:crypto';
 import {
   MARKET_PAPER_MODE, MARKET_SOURCE_ID, MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE,
-  TEST_FIXTURE_SOURCE, isEvidenceText, isMarketPrice, isObservationInterval, utcTime,
+  TEST_FIXTURE_SOURCE, guardMarketQuotes, isEvidenceText, isMarketPrice, isObservationInterval, utcTime,
 } from './forward-market-guard.mjs';
+import {hasFields} from './forward-score.mjs';
 
 const adapters = new WeakMap();
 const MAX_QUOTES = 200;
+
+// Bind the exact source text and proof, without copying them into the forecast.
+export const mockReferenceSha256 = ({raw, proof}) =>
+  createHash('sha256').update(JSON.stringify([raw, proof])).digest('hex');
 
 function synchronous(result) {
   if (typeof result?.then === 'function') {
@@ -70,6 +76,51 @@ export function createForwardMarketAdapter({
     }
     return reference;
   }
+  function policyFor(verifyQuote) {
+    return {sourceId, enabled:true, usageAuthorized:true, maxAgeMs, verifyQuote,
+      marketStatusAt:input => synchronous(marketStatusAt(input))};
+  }
+  function requireOpenTrade(trade, proof, now) {
+    const {symbol, price, tradeAt, publishedAt} = trade;
+    // Only trades already authenticated by mockReference reach this check.
+    const quote = {symbol, price, tradeAt, publishedAt, proof, ingestedAt:new Date(now).toISOString()};
+    if (!guardMarketQuotes({sourceId, quotes:{[symbol]:quote}}, now, {}, policyFor(() => true), now).has(symbol)) {
+      throw new RangeError('MOCK_NONLIVE trade is stale or market status is not OPEN');
+    }
+  }
+  function verifyMockHistoryReference(reference, symbol, now) {
+    requireOpenTrade(mockReference(reference, symbol), reference.proof, now);
+    return mockReferenceSha256(reference);
+  }
+  function verifyMockHistory(rows, symbol, now) {
+    const count = Array.isArray(rows) ? rows.length : 0;
+    if (count < 1 || count > MAX_QUOTES) {
+      throw new RangeError('Invalid MOCK_NONLIVE history size');
+    }
+    let previousTrade = -Infinity;
+    let previousPublication = -Infinity;
+    const prices = [];
+    let reference;
+    let latest;
+    for (let index = 0; index < count; index++) {
+      const row = rows[index];
+      if (!hasFields(row, ['raw', 'proof'])) throw new RangeError('Expected a signed history envelope');
+      reference = Object.freeze({...row});
+      const trade = mockReference(reference, symbol);
+      const stamp = utcTime(trade.tradeAt);
+      const publication = utcTime(trade.publishedAt);
+      if (!(previousTrade < stamp && previousPublication <= publication && publication <= now)) {
+        throw new RangeError('History is out of order or was not yet published');
+      }
+      requireOpenTrade(trade, reference.proof, publication);
+      previousTrade = stamp;
+      previousPublication = publication;
+      prices.push(trade.price);
+      latest = trade;
+    }
+    requireOpenTrade(latest, reference.proof, now);
+    return {prices, reference};
+  }
   function mockForecastTrades(event) {
     const {evidence, mockForecast, sourceId: eventSource, symbol} = event;
     const reference = mockReference(mockForecast.reference, symbol);
@@ -101,18 +152,14 @@ export function createForwardMarketAdapter({
       const evidence = Object.freeze({market, valueKind, raw, proof, licenseRef});
       quotes[symbol] = Object.freeze({symbol, price, tradeAt, publishedAt, ingestedAt: observedAt, proof, evidence});
     }
-    const providerPolicy = {
-      sourceId, enabled: true, usageAuthorized: true, maxAgeMs,
-      verifyQuote: quote => quote.sourceId === sourceId && Object.hasOwn(quotes, quote.symbol) &&
-        Object.entries(quotes[quote.symbol]).every(([field, value]) => quote[field] === value),
-      marketStatusAt: input => synchronous(marketStatusAt(input)),
-    };
+    const providerPolicy = policyFor(quote => quote.sourceId === sourceId && Object.hasOwn(quotes, quote.symbol) &&
+      Object.entries(quotes[quote.symbol]).every(([field, value]) => quote[field] === value));
     return {observation: {sourceId, observedAt, quotes}, options: {providerPolicy, now: utcTime(stamp())}};
   }
   authorize();
   const handle = Object.freeze({});
   adapters.set(handle, Object.freeze({mode, authorize, stamp, observationIntervalMs, observe,
-    mockReference, mockForecastTrades}));
+    mockReference, mockForecastTrades, verifyMockHistory, verifyMockHistoryReference}));
   return handle;
 }
 
