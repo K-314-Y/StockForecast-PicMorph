@@ -317,6 +317,15 @@ async function checkLedgerDirectory(directory, allowMissingParent) {
   }
 }
 
+/** Read one validated atomic snapshot without creating a ledger or taking a write lock. */
+export async function readForwardSnapshot(filePath) {
+  filePath = resolve(filePath);
+  await checkLedgerDirectory(dirname(filePath), true);
+  const current = await readSnapshot(filePath);
+  if (current === null) throw uninitialized();
+  return current;
+}
+
 function withLedgerLock(filePath, operation, {allowMissingParent = false} = {}) {
   const lockPath = filePath + '.lock';
   const running = (operations.get(filePath) ?? Promise.resolve()).then(async () => {
