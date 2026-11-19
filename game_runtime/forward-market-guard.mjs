@@ -1,7 +1,18 @@
 export const TEST_FIXTURE_SOURCE = 'TEST_FIXTURE_NOT_LIVE';
 export const MARKET_PAPER_MODE = 'FORWARD_MARKET_PAPER';
+export const MOCK_MARKET_SOURCE = 'MOCK_NONLIVE';
+export const MOCK_MARKET_PAPER_MODE = 'FORWARD_MARKET_PAPER_MOCK_NONLIVE';
 export const MARKET_SYMBOL = /^[0-9A-Z]{4,5}$/;
 export const MARKET_SOURCE_ID = /^[A-Z0-9_]{3,40}$/;
+
+export const isMarketMode = mode => mode === MARKET_PAPER_MODE || mode === MOCK_MARKET_PAPER_MODE;
+export const isObservationInterval = ms => Number.isSafeInteger(ms) && ms > 0 && ms <= 24 * 60 * 60_000;
+export const observationSlot = (time, interval) => Math.floor(time / interval);
+// A receipt exactly on a boundary belongs to the following batch.
+export const nextObservation = (time, interval) => (observationSlot(time, interval) + 1) * interval;
+export const isEvidenceText = (value, maxBytes) =>
+  typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= maxBytes &&
+  Buffer.from(value, 'utf8').toString('utf8') === value;
 
 const JST_OFFSET = 9 * 60 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -63,11 +74,13 @@ export function guardMarketQuotes({sourceId, quotes}, batchTime, lastTradeAt, po
         now - trade > policy.maxAgeMs || jstSession(trade) !== session ||
         (Object.hasOwn(lastTradeAt, symbol) && trade <= utcTime(lastTradeAt[symbol]))) continue;
 
-    if (policy.verifyQuote(Object.freeze({sourceId, symbol, price, tradeAt, publishedAt, ingestedAt, proof})) !== true ||
+    const {evidence} = quote;
+    if (policy.verifyQuote(Object.freeze({sourceId, symbol, price, tradeAt, publishedAt, ingestedAt, proof,
+      ...(evidence ? {evidence} : {})})) !== true ||
         [...new Set([trade, published, ingested, batchTime, now])].some(time =>
           policy.marketStatusAt({symbol, at: new Date(time).toISOString()}) !== 'OPEN')) continue;
 
-    accepted.set(symbol, {price, tradeAt, publishedAt, ingestedAt, trade});
+    accepted.set(symbol, {price, tradeAt, publishedAt, ingestedAt, trade, evidence});
   }
   return accepted;
 }

@@ -9,7 +9,7 @@ import {join} from 'node:path';
 import {inspectForwardWallet} from '../../game_runtime/forward-paper.mjs';
 import {deriveForwardAppearanceModel} from '../../game_runtime/appearance-model.mjs';
 import {openForwardStore, saveForwardAppearanceGeneration} from '../../game_runtime/forward-store.mjs';
-import {MARKET_PAPER_MODE, TEST_FIXTURE_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
+import {MARKET_PAPER_MODE} from '../../game_runtime/forward-market-guard.mjs';
 
 const initial = {
   initialMedals: 1000,
@@ -289,59 +289,15 @@ test('keeps pending orders and the saved revision when observations are unavaila
   assert.deepEqual(await restored.snapshot(), queued);
 });
 
-test('market store rejects re-ingested trades after restart and checks saved execution chronology', async t => {
+test('market storage cannot be enabled with a legacy caller-supplied provider policy', async t => {
   const {filePath} = await tempLedger(t);
-  const stamp = min => `2026-11-19T01:${min}:00Z`;
-  const sourceId = 'MOCK_PROVIDER_NOT_LIVE';
-  let quote = {
-    symbol: '7203', price: 100, tradeAt: stamp('01'), publishedAt: stamp('02'),
-    ingestedAt: stamp('03'), proof: TEST_FIXTURE_SOURCE,
-  };
-  let observedAt = stamp('04');
-  const getObservation = () => ({sourceId, observedAt, quotes: {'7203': quote}});
-  const clock = () => Date.parse(observedAt);
-  const providerPolicy = {
-    enabled: true, usageAuthorized: true, sourceId, maxAgeMs: 15 * 60_000,
-    verifyQuote: observation => observation.sourceId === sourceId &&
-      Object.entries(quote).every(([key, value]) => observation[key] === value),
-    marketStatusAt: () => 'OPEN',
-  };
-  const store = await openForwardStore({
-    filePath, initial: {...initial, mode: MARKET_PAPER_MODE}, getObservation, providerPolicy, clock,
-  });
-  await store.queueForwardOrder(order('short', 'ai_red', 'OPEN_SHORT'), stamp('00'), 0);
-  const opened = await store.applyForwardBatch(1);
-  assert.equal(opened.ledger.lastTradeAt['7203'], quote.tradeAt);
-  assert.equal(opened.ledger.journal[0].ingestedAt, stamp('03'));
-  const disabled = await openForwardStore({filePath, getObservation, clock});
-  const restored = await openForwardStore({filePath, getObservation, providerPolicy, clock});
-  assert.deepEqual(await restored.snapshot(), opened);
-  await assert.rejects(restored.applyForwardBatch(2), /時系列/);
-  observedAt = stamp('05');
-  await assert.rejects(disabled.applyForwardBatch(2), /利用許可/);
-  assert.deepEqual(await restored.snapshot(), opened);
-
-  // A later ingestion can carry a repeated trade or an out-of-order correction.
-  quote = {...quote, price: 300, ingestedAt: observedAt};
-  const replayed = await restored.applyForwardBatch(2);
-  assert.equal(wallet(replayed).position.lastPrice, 100);
-  assert.deepEqual(replayed.ledger.journal, opened.ledger.journal);
-  observedAt = stamp('06');
-  quote = {...quote, tradeAt: stamp('00'), ingestedAt: observedAt};
-  const older = await restored.applyForwardBatch(3);
-  assert.equal(wallet(older).position.lastPrice, 100);
-  assert.deepEqual(older.ledger.lastTradeAt, opened.ledger.lastTradeAt);
-
-  observedAt = stamp('07');
-  quote = {...quote, tradeAt: observedAt, publishedAt: observedAt, ingestedAt: observedAt};
-  const liquidated = await restored.applyForwardBatch(4);
-  assert.equal(wallet(liquidated).status, 'LIQUIDATED');
-  assert.equal(liquidated.ledger.journal.at(-1).kind, 'LIQUIDATED');
-  assert.equal(liquidated.ledger.journal.at(-1).tradeAt, stamp('07'));
-  const saved = JSON.parse(await readFile(filePath, 'utf8'));
-  saved.ledger.journal[0].tradeAt = saved.ledger.journal[0].receivedAt;
-  await writeFile(filePath, encodeTestRecord(saved));
-  await assert.rejects(openForwardStore({filePath}), {code: 'FORWARD_STORE_CORRUPT'});
+  await assert.rejects(openForwardStore({
+    filePath, initial: {...initial, mode: MARKET_PAPER_MODE},
+    getObservation: () => assert.fail('legacy observer must not run'),
+    providerPolicy: {enabled: true, usageAuthorized: true, sourceId: 'MOCK_NONLIVE',
+      verifyQuote: () => true, marketStatusAt: () => 'OPEN', maxAgeMs: 60000},
+  }), /利用許可/);
+  await assert.rejects(readFile(filePath), {code: 'ENOENT'});
 });
 
 test('appends generations to a traded legacy ledger and preserves old trades on further edits', async t => {

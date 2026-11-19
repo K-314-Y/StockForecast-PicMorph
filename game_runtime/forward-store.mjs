@@ -4,13 +4,15 @@ import {lstat, mkdir, open, realpath, rename, rmdir, unlink} from 'node:fs/promi
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {identifyForwardAppearanceModel} from './appearance-model.mjs';
+import {getForwardMarketAdapter} from './forward-market-adapter.mjs';
 import {
   FORWARD_AI_ID as AI_ID, FORWARD_PAPER_MODE, MAX_FORWARD_MEDALS as MAX_MEDALS, MAX_FORWARD_WALLETS,
   allocateForwardWallet, applyForwardBatch, createForwardLedger,
   inspectForwardWallet, queueForwardOrder,
 } from './forward-paper.mjs';
 import {
-  MARKET_PAPER_MODE, MARKET_SOURCE_ID, MARKET_SYMBOL, TEST_FIXTURE_SOURCE, isMarketPrice, utcTime,
+  MARKET_SOURCE_ID, MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, TEST_FIXTURE_SOURCE,
+  isEvidenceText, isMarketMode, isMarketPrice, isObservationInterval, nextObservation, utcTime,
 } from './forward-market-guard.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -57,12 +59,13 @@ function validatePosition(position, wallet, lastBatch) {
     position.modelHash === wallet.modelHash && timestamp(position.openedAt) <= lastBatch, '保有ポジション');
 }
 
-function validatePending(pending, wallets, orderIds) {
+function validatePending(pending, wallets, orderIds, interval) {
   const aiIds = new Set();
   for (const order of pending) {
     const close = order?.action === 'CLOSE';
     const extra = close ? [] : ['margin', 'leverage'];
-    requireValid(fields(order, 'id', 'aiId', 'symbol', 'action', 'receivedAt', ...extra) &&
+    requireValid(fields(order, 'id', 'aiId', 'symbol', 'action', 'receivedAt',
+      ...(interval === undefined ? [] : ['eligibleAt']), ...extra) &&
       matches(order.id, ORDER_ID) && !orderIds.has(order.id) &&
       matches(order.aiId, AI_ID) && Object.hasOwn(wallets, order.aiId) && !aiIds.has(order.aiId) &&
       matches(order.symbol, MARKET_SYMBOL), '予約注文');
@@ -75,13 +78,17 @@ function validatePending(pending, wallets, orderIds) {
         integer(order.margin, 1, MAX_MEDALS) && order.margin <= wallet.cash &&
         integer(order.leverage, 1, 25), '新規注文');
     }
-    timestamp(order.receivedAt);
+    const received = timestamp(order.receivedAt);
+    if (interval !== undefined) {
+      requireValid(timestamp(order.eligibleAt) === nextObservation(received, interval), '予約注文の締切');
+    }
     orderIds.add(order.id);
     aiIds.add(order.aiId);
   }
 }
 
-function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
+function validateJournal(ledger, lastBatch, orderIds) {
+  const {journal, wallets, lastTradeAt, observationIntervalMs: interval} = ledger;
   let previous = -Infinity;
   for (const event of journal) {
     requireValid(record(event) && matches(event.aiId, AI_ID) &&
@@ -93,6 +100,7 @@ function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
     const base = ['kind', 'aiId', 'observedAt'];
     const observation = ['modelHash', 'sourceId', 'price'];
     if (lastTradeAt) observation.push('symbol', 'tradeAt', 'publishedAt', 'ingestedAt');
+    if (interval !== undefined) observation.push('evidence');
     if (event.kind === 'LIQUIDATED') {
       requireValid(fields(event, ...base, ...observation), '強制決済履歴');
     } else {
@@ -105,7 +113,8 @@ function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
         continue;
       }
       requireValid(['OPENED', 'CLOSED'].includes(event.kind) &&
-        fields(event, ...base, 'orderId', ...observation, ...(lastTradeAt ? ['receivedAt'] : [])), '約定履歴');
+        fields(event, ...base, 'orderId', ...observation, ...(lastTradeAt ? ['receivedAt'] : []),
+          ...(interval === undefined ? [] : ['eligibleAt'])), '約定履歴');
     }
     requireValid(event.modelHash === wallets[event.aiId].modelHash &&
       matches(event.sourceId, MARKET_SOURCE_ID) && isMarketPrice(event.price), '取引履歴の観測');
@@ -118,6 +127,20 @@ function validateJournal(journal, wallets, lastBatch, orderIds, lastTradeAt) {
         trade <= timestamp(lastTradeAt[event.symbol]) &&
         trade <= published && published <= ingested && ingested <= time &&
         (event.kind === 'LIQUIDATED' || timestamp(event.receivedAt) < trade), '取引履歴の市場時刻');
+    }
+    if (interval !== undefined) {
+      const {evidence} = event;
+      requireValid((ledger.mode === MOCK_MARKET_PAPER_MODE) === (event.sourceId === MOCK_MARKET_SOURCE) &&
+        fields(evidence, 'market', 'valueKind', 'raw', 'proof', 'licenseRef') &&
+        evidence.market === 'XTKS' && evidence.valueKind === 'TRADE' &&
+        isEvidenceText(evidence.raw, 16_384) && isEvidenceText(evidence.proof, 4096) &&
+        evidence.proof !== TEST_FIXTURE_SOURCE && isEvidenceText(evidence.licenseRef, 256) &&
+        timestamp(event.ingestedAt) === time, '取引履歴の出典');
+      if (event.kind !== 'LIQUIDATED') {
+        const eligible = timestamp(event.eligibleAt);
+        requireValid(eligible === nextObservation(timestamp(event.receivedAt), interval) &&
+          eligible <= timestamp(event.tradeAt), '約定履歴の締切');
+      }
     }
   }
 }
@@ -139,11 +162,15 @@ function validateAppearanceGenerations(generations, wallets) {
 }
 
 function validateLedger(ledger) {
-  const market = ledger?.mode === MARKET_PAPER_MODE;
+  const market = isMarketMode(ledger?.mode);
+  const scheduled = record(ledger) && Object.hasOwn(ledger, 'observationIntervalMs');
   const hasGenerations = record(ledger) && Object.hasOwn(ledger, 'appearanceGenerations');
   requireValid(fields(ledger, 'mode', 'initialMedals', 'unallocated', 'wallets', 'pending', 'journal',
-    'lastBatchAt', ...(market ? ['lastTradeAt'] : []), ...(hasGenerations ? ['appearanceGenerations'] : [])) &&
+    'lastBatchAt', ...(market ? ['lastTradeAt'] : []), ...(scheduled ? ['observationIntervalMs'] : []),
+    ...(hasGenerations ? ['appearanceGenerations'] : [])) &&
     (market || ledger.mode === FORWARD_PAPER_MODE) &&
+    (!scheduled || (market && isObservationInterval(ledger.observationIntervalMs))) &&
+    (ledger.mode !== MOCK_MARKET_PAPER_MODE || scheduled) &&
     integer(ledger.initialMedals, 1, MAX_MEDALS) && integer(ledger.unallocated, 0, MAX_MEDALS) &&
     record(ledger.wallets) && Array.isArray(ledger.pending) && Array.isArray(ledger.journal), '形式');
   const wallets = Object.entries(ledger.wallets);
@@ -173,8 +200,8 @@ function validateLedger(ledger) {
   requireValid(allocated === ledger.initialMedals, '開始メダル配分');
   if (hasGenerations) validateAppearanceGenerations(ledger.appearanceGenerations, ledger.wallets);
   const orderIds = new Set();
-  validatePending(ledger.pending, ledger.wallets, orderIds);
-  validateJournal(ledger.journal, ledger.wallets, lastBatch, orderIds, ledger.lastTradeAt);
+  validatePending(ledger.pending, ledger.wallets, orderIds, ledger.observationIntervalMs);
+  validateJournal(ledger, lastBatch, orderIds);
 }
 
 function encode(revision, ledger) {
@@ -393,10 +420,10 @@ export async function saveForwardAppearanceGeneration({
  * filePath for tests requires an existing parent for writes. Pass initial ({initialMedals,
  * allocations}) only to create a ledger. Snapshots include a revision, starting at 0.
  *
- * receivedAt is assigned by the caller's trusted server clock. getObservation()
- * supplies batches under the lock and must avoid reentering the store.
- * A market ledger requires an explicit initial.mode and separate server-owned
- * providerPolicy. clock returns epoch milliseconds (Date.now by default).
+ * The unconnected fixture path takes caller timestamps and getObservation().
+ * Market writes require a server-owned adapter and use reserveMarketOrder()
+ * for clock-stamped orders. Existing unscheduled market ledgers are readable.
+ * Observation callbacks run under the lock and must avoid reentering the store.
  *
  * Across processes, a busy lock fails immediately. After an abnormal exit a lock
  * may remain. Remove it manually only after stopping every writer and checking
@@ -405,10 +432,25 @@ export async function saveForwardAppearanceGeneration({
  * before retrying. The format retains IDs and stops at 4 MiB without pruning.
  */
 export async function openForwardStore({
-  filePath = DEFAULT_FILE, initial, getObservation, providerPolicy, clock = Date.now,
+  filePath = DEFAULT_FILE, initial, getObservation, marketAdapter,
 } = {}) {
   filePath = resolve(filePath);
   const directory = dirname(filePath);
+  const adapter = getForwardMarketAdapter(marketAdapter);
+  if ((marketAdapter !== undefined && !adapter) ||
+      (adapter?.mode === MOCK_MARKET_PAPER_MODE && filePath === DEFAULT_FILE)) {
+    throw new RangeError('市場アダプターまたは保存先が不正です');
+  }
+  function requireAdapter(ledger) {
+    if (!adapter || adapter.mode !== ledger.mode ||
+        adapter.observationIntervalMs !== ledger.observationIntervalMs) {
+      throw new RangeError('市場観測元の利用許可または台帳の観測間隔を確認できません');
+    }
+  }
+  if (initial !== undefined && (adapter || isMarketMode(initial?.mode))) {
+    requireAdapter({mode: initial?.mode, observationIntervalMs: adapter?.observationIntervalMs});
+    adapter.authorize();
+  }
   if (filePath === DEFAULT_FILE && initial !== undefined) await prepareDefaultDirectory();
 
   async function readExisting() {
@@ -423,6 +465,7 @@ export async function openForwardStore({
       if (initial !== undefined) {
         throw storeError('FORWARD_STORE_ALREADY_INITIALIZED', '保存済みの仮想台帳は初期化できません');
       }
+      if (adapter) requireAdapter(current.ledger);
       await syncDirectory(directory);
       return;
     }
@@ -431,7 +474,9 @@ export async function openForwardStore({
       fields(initial, 'initialMedals', 'allocations', 'mode')) && Array.isArray(initial.allocations) &&
       initial.allocations.every(item => fields(item, 'id', 'modelHash', 'medals') &&
         matches(item.id, AI_ID) && matches(item.modelHash, HASH)), '初期メダル配分');
-    await writeSnapshot(filePath, {revision: 0, ledger: createForwardLedger(initial)});
+    const ledger = createForwardLedger(initial);
+    if (adapter) ledger.observationIntervalMs = adapter.observationIntervalMs;
+    await writeSnapshot(filePath, {revision: 0, ledger});
   }, {allowMissingParent: initial === undefined});
 
   function update(expectedRevision, transition) {
@@ -448,9 +493,28 @@ export async function openForwardStore({
 
   return {
     snapshot: () => withLedgerLock(filePath, readExisting),
-    queueForwardOrder: (order, receivedAt, expectedRevision) => update(expectedRevision, ledger =>
-      queueForwardOrder(ledger, order, receivedAt)),
+    queueForwardOrder: (order, receivedAt, expectedRevision) => update(expectedRevision, ledger => {
+      requireValid(ledger.mode === FORWARD_PAPER_MODE, '予約注文の受付経路');
+      return queueForwardOrder(ledger, order, receivedAt);
+    }),
+    reserveMarketOrder: async (order, expectedRevision) => {
+      requireValid(fields(order, 'id', 'aiId', 'symbol', 'action',
+        ...(order?.action === 'CLOSE' ? [] : ['margin', 'leverage'])), '予約注文の入力');
+      if (!adapter) throw new RangeError('市場観測元の利用許可を確認できません');
+      const receivedAt = adapter.stamp();
+      const request = structuredClone(order);
+      return update(expectedRevision, ledger => {
+        requireAdapter(ledger);
+        adapter.authorize();
+        return queueForwardOrder(ledger, request, receivedAt);
+      });
+    },
     applyForwardBatch: expectedRevision => update(expectedRevision, async ledger => {
+      if (isMarketMode(ledger.mode)) {
+        requireAdapter(ledger);
+        const {observation, options} = await adapter.observe();
+        return applyForwardBatch(ledger, observation, options);
+      }
       if (typeof getObservation !== 'function') {
         throw storeError('FORWARD_STORE_NO_OBSERVATION', '内部の市場観測関数が設定されていません');
       }
@@ -458,8 +522,7 @@ export async function openForwardStore({
       if (observation == null) {
         throw storeError('FORWARD_STORE_NO_OBSERVATION', '内部の市場観測データがありません');
       }
-      const options = ledger.mode === MARKET_PAPER_MODE ? {providerPolicy, now: clock()} : undefined;
-      return applyForwardBatch(ledger, structuredClone(observation), options);
+      return applyForwardBatch(ledger, structuredClone(observation));
     }),
   };
 }

@@ -5,8 +5,8 @@
  * One open position per AI wallet in this first, intentionally isolated seam.
  */
 import {
-  MARKET_PAPER_MODE, MARKET_SYMBOL, TEST_FIXTURE_SOURCE,
-  guardMarketQuotes, isMarketPrice, utcTime,
+  MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, TEST_FIXTURE_SOURCE,
+  guardMarketQuotes, isMarketMode, isMarketPrice, nextObservation, observationSlot, utcTime,
 } from './forward-market-guard.mjs';
 
 export const FORWARD_PAPER_MODE = 'FORWARD_PAPER_CORE_UNCONNECTED';
@@ -29,7 +29,7 @@ function dateMs(value) {
   return time;
 }
 function ledgerMode(mode) {
-  return mode === FORWARD_PAPER_MODE || mode === MARKET_PAPER_MODE;
+  return mode === FORWARD_PAPER_MODE || isMarketMode(mode);
 }
 function walletOf(state, id) {
   if (typeof id !== 'string' || !Object.hasOwn(state.wallets, id)) {
@@ -95,7 +95,7 @@ export function createForwardLedger({initialMedals, allocations, mode = FORWARD_
     pending: [],
     journal: [],
     lastBatchAt: null,
-    ...(mode === MARKET_PAPER_MODE ? {lastTradeAt: {}} : {}),
+    ...(isMarketMode(mode) ? {lastTradeAt: {}} : {}),
   };
   for (const item of allocations) allocateWallet(ledger, item);
   return ledger;
@@ -110,10 +110,14 @@ export function queueForwardOrder(ledger, order, receivedAt) {
   if (!ledgerMode(ledger?.mode) || !order ||
       typeof order !== 'object' || Array.isArray(order)) fail('注文データが不正です');
   const stamp = dateMs(receivedAt);
-  if (ledger.lastBatchAt !== null && stamp <= dateMs(ledger.lastBatchAt)) {
+  const interval = ledger.observationIntervalMs;
+  const lastBatch = ledger.lastBatchAt === null ? -Infinity : dateMs(ledger.lastBatchAt);
+  if (stamp < lastBatch || (stamp === lastBatch && interval === undefined) ||
+      (interval !== undefined && ledger.pending.some(order => dateMs(order.receivedAt) > stamp))) {
     fail('過去の時刻では注文できません');
   }
-  if (!ORDER_ID.test(order.id) || typeof order.symbol !== 'string' || !MARKET_SYMBOL.test(order.symbol) ||
+  if (typeof order.id !== 'string' || !ORDER_ID.test(order.id) ||
+      typeof order.symbol !== 'string' || !MARKET_SYMBOL.test(order.symbol) ||
       !['OPEN_LONG', 'OPEN_SHORT', 'CLOSE'].includes(order.action)) {
     fail('注文ID・銘柄・売買区分が不正です');
   }
@@ -141,6 +145,7 @@ export function queueForwardOrder(ledger, order, receivedAt) {
   next.pending.push({
     id: order.id, aiId: order.aiId, symbol: order.symbol,
     action: order.action, receivedAt,
+    ...(interval === undefined ? {} : {eligibleAt: new Date(nextObservation(stamp, interval)).toISOString()}),
     ...(order.action === 'CLOSE' ? {} :
       {margin: order.margin, leverage: order.leverage}),
   });
@@ -148,10 +153,11 @@ export function queueForwardOrder(ledger, order, receivedAt) {
 }
 
 function eventObservation(quote, symbol, observedAt, sourceId) {
-  const {price, tradeAt, publishedAt, ingestedAt} = quote;
+  const {price, tradeAt, publishedAt, ingestedAt, evidence} = quote;
   return {
     observedAt, sourceId, price,
     ...(tradeAt === undefined ? {} : {symbol, tradeAt, publishedAt, ingestedAt}),
+    ...(evidence === undefined ? {} : {evidence}),
   };
 }
 
@@ -166,10 +172,21 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
   const entries = Object.entries(quotes);
   if (entries.length > 200) fail('銘柄一覧が不正です');
   if (entries.some(([symbol]) => !MARKET_SYMBOL.test(symbol))) fail('銘柄コードが不正です');
-  const market = ledger.mode === MARKET_PAPER_MODE;
+  const market = isMarketMode(ledger.mode);
+  const interval = ledger.observationIntervalMs;
   let accepted;
   if (market) {
+    if ((ledger.mode === MOCK_MARKET_PAPER_MODE) !== (sourceId === MOCK_MARKET_SOURCE)) {
+      fail('市場観測元と台帳のモードが一致しません');
+    }
+    if (interval !== undefined && ledger.lastBatchAt !== null &&
+        observationSlot(time, interval) <= observationSlot(dateMs(ledger.lastBatchAt), interval)) {
+      fail('この観測間隔のバッチは処理済みです');
+    }
     accepted = guardMarketQuotes({sourceId, quotes}, time, ledger.lastTradeAt, providerPolicy, now);
+    if (interval !== undefined && [...accepted.values()].some(quote => !quote.evidence)) {
+      fail('市場観測の出典証拠がありません');
+    }
   } else {
     if (sourceId !== TEST_FIXTURE_SOURCE) fail('試験台帳には試験用の観測元が必要です');
     accepted = new Map(entries.map(([symbol, price]) => {
@@ -208,7 +225,9 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
       continue;
     }
     const quote = accepted.get(order.symbol);
-    if (!quote || quote.trade <= dateMs(order.receivedAt)) {
+    // A late delivery can carry a trade from before this order's eligible window.
+    if (!quote || quote.trade <= dateMs(order.receivedAt) ||
+        (interval !== undefined && quote.trade < dateMs(order.eligibleAt))) {
       remaining.push(order);
       continue;
     }
@@ -251,6 +270,7 @@ export function applyForwardBatch(ledger, {observedAt, sourceId, quotes}, {provi
       orderId: order.id, aiId: order.aiId, modelHash: wallet.modelHash,
       ...eventObservation(quote, order.symbol, observedAt, sourceId),
       ...(market ? {receivedAt: order.receivedAt} : {}),
+      ...(interval === undefined ? {} : {eligibleAt: order.eligibleAt}),
     });
   }
   next.pending = remaining;
