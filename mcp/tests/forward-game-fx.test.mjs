@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {createHash, createHmac} from 'node:crypto';
-import {mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {promisify} from 'node:util';
-import {openForwardGameFx} from '../../game_runtime/forward-game-fx.mjs';
+import {initializeForwardGameFxAudit, openAnchoredForwardGameFx, openForwardGameFx} from '../../game_runtime/forward-game-fx.mjs';
 import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adapter.mjs';
 import {MARKET_PAPER_MODE, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
 import {deriveForwardCompanionModel} from '../../game_runtime/forward-model.mjs';
 import {openForwardPredictor} from '../../game_runtime/forward-predict.mjs';
+import {createForwardRecordReader} from '../../game_runtime/forward-records.mjs';
 import {openForwardStore, saveForwardGeneration} from '../../game_runtime/forward-store.mjs';
 
 const exec = promisify(execFile);
@@ -38,7 +39,7 @@ const reference = trade(issue - minute, 100);
 const scenario = (time, price) => trade(time, price, {referenceProof:reference.proof});
 const fixedDraw = byte => () => Buffer.alloc(32, byte);
 
-async function setup(t, {root, accountId = 'alice', margin = 100, deriveRoundBytes = fixedDraw(4)} = {}) {
+async function setup(t, {root, accountId = 'alice', margin = 100, deriveRoundBytes = fixedDraw(4), anchored = false} = {}) {
   if (!root) {
     root = await mkdtemp('/tmp/forward-game-fx-');
     t.after(() => rm(root, {recursive:true, force:true}));
@@ -48,7 +49,7 @@ async function setup(t, {root, accountId = 'alice', margin = 100, deriveRoundByt
   const directory = join(scope, 'forecasts');
   const walletFile = join(scope, 'wallet.json');
   await mkdir(directory, {recursive:true});
-  await mkdir(journalDirectory, {recursive:true});
+  await mkdir(journalDirectory, {recursive:true, mode:0o700});
   const state = {now:issue, times:[], rows:[], reads:0, allowed:true};
   const marketAdapter = createForwardMarketAdapter({...adapterConfig,
     clock:() => state.times.shift() ?? state.now, marketStatusAt:() => 'OPEN',
@@ -67,7 +68,12 @@ async function setup(t, {root, accountId = 'alice', margin = 100, deriveRoundByt
   const lifecycle = await openForwardMockLifecycle(options);
   const config = {journalDirectory, signingKey, accountId, recordSource:lifecycle.recordSource,
     symbol, targetAt:iso(target), deriveRoundBytes};
-  const fx = await openForwardGameFx(config);
+  if (anchored) {
+    config.auditAnchorDirectory = join(root, 'independent-audit');
+    await mkdir(config.auditAnchorDirectory, {mode:0o700});
+    await initializeForwardGameFxAudit(config);
+  }
+  const fx = await (anchored ? openAnchoredForwardGameFx : openForwardGameFx)(config);
 
   async function freeze(aiId = 'ai_trend', overrides = {}) {
     const {model_version, modelHash} = models[aiId];
@@ -96,9 +102,10 @@ async function setup(t, {root, accountId = 'alice', margin = 100, deriveRoundByt
 }
 
 async function journalPaths(fixture, kind) {
-  const {journalDirectory} = fixture.config;
+  const {journalDirectory, auditAnchorDirectory} = fixture.config;
+  const prefix = auditAnchorDirectory ? 'p9c-journal-' : 'p9b-';
   return (await readdir(journalDirectory))
-    .filter(name => new RegExp('^p9b-' + kind + '-[a-f0-9]{64}\\.json$').test(name))
+    .filter(name => new RegExp('^' + prefix + kind + '-[a-f0-9]{64}\\.json$').test(name))
     .map(name => join(journalDirectory, name));
 }
 
@@ -523,4 +530,298 @@ test('P9b rejects changed and transplanted proof records and P4 receipt or fill 
   await writeFile(outcomePath, outcomeBytes);
   await writeFile(f.options.walletFile, walletBytes);
   assert.deepEqual(await f.fx.settle(id), settled);
+});
+
+const auditMismatch = {code:'FORWARD_FX_AUDIT_MISMATCH'};
+
+async function readyForFxSettlement(f) {
+  await f.fx.commitRound();
+  const id = await f.openPosition();
+  await f.fx.reserve(id);
+  await f.closePosition(id);
+  return id;
+}
+
+async function auditPath(f, kind) {
+  const {auditAnchorDirectory} = f.config;
+  const [name] = (await readdir(auditAnchorDirectory)).filter(file => file.startsWith('p9c-anchor-' + kind + '-')
+    && /^[a-f0-9]{64}\.json$/.test(file.slice(('p9c-anchor-' + kind + '-').length)));
+  assert.ok(name, kind);
+  return join(auditAnchorDirectory, name);
+}
+
+test('P9c explicitly provisions independent directories; P9b remains available on legacy journals', async t => {
+  const f = await setup(t);
+  const anchor = join(f.root, 'unprovisioned');
+  const fresh = join(f.root, 'fresh');
+  await mkdir(anchor, {mode:0o700});
+  await mkdir(fresh, {mode:0o700});
+  const config = {...f.config, journalDirectory:fresh, auditAnchorDirectory:anchor};
+  await assert.rejects(openAnchoredForwardGameFx(f.config), /explicit FX audit anchor/);
+  await assert.rejects(openAnchoredForwardGameFx(config), /Missing or mismatched FX audit manifests/);
+  assert.deepEqual(await readdir(fresh), []);
+  assert.deepEqual(await readdir(anchor), []);
+  await assert.rejects(initializeForwardGameFxAudit({...config, journalDirectory:f.config.journalDirectory}),
+    /two empty directories/);
+  await assert.rejects(initializeForwardGameFxAudit({...config, auditAnchorDirectory:fresh}), /independent directories/);
+  await assert.rejects(initializeForwardGameFxAudit({...config, auditAnchorDirectory:join(fresh, 'child')}),
+    /independent directories/);
+  await assert.rejects(initializeForwardGameFxAudit({...config, auditAnchorDirectory:f.root}), /separate from P4 data/);
+  const alias = join(f.root, 'alias');
+  await symlink(fresh, alias);
+  await assert.rejects(initializeForwardGameFxAudit({...config, auditAnchorDirectory:alias}), /server-owned local/);
+
+  await initializeForwardGameFxAudit(config);
+  await assert.rejects(initializeForwardGameFxAudit(config), /two empty directories/);
+  const anchored = await openAnchoredForwardGameFx(config);
+  assert.ok(anchored.fxSource);
+  await assert.rejects(openForwardGameFx({...config, auditAnchorDirectory:undefined}), /requires its configured/);
+  const manifest = join(fresh, (await readdir(fresh)).find(name => name.startsWith('p9c-manifest-')));
+  const manifestBytes = await readFile(manifest);
+  await unlink(manifest);
+  await assert.rejects(openForwardGameFx({...config, auditAnchorDirectory:undefined}), /requires its configured/);
+  await writeFile(manifest, manifestBytes, {mode:0o600});
+  for (const path of [f.root, f.options.directory, join(f.options.directory, 'child'), join(f.root, 'alice', 'child')]) {
+    await assert.rejects(openAnchoredForwardGameFx({...config, auditAnchorDirectory:path}), /separate from P4 data/);
+  }
+  assert.equal(f.fx.fxSource, undefined);
+  assert.ok((await f.fx.commitRound()).commitment);
+});
+
+test('P9c blocks a deleted settlement, round proof, wallet owner or independent witness on active handles and restart', async t => {
+  const f = await setup(t, {anchored:true});
+  const id = await readyForFxSettlement(f);
+  const settled = await f.fx.settle(id);
+  const read = createForwardRecordReader({forecastId:id, source:f.config.recordSource, fxSource:f.fx.fxSource});
+  const p4 = await p4Bytes(f);
+  const [settlement] = await journalPaths(f, 'settlement');
+  const [roundProof] = await journalPaths(f, 'round-confirmed');
+  const [owner] = await journalPaths(f, 'wallet-owner');
+  const witness = await auditPath(f, 'settlement');
+  for (const path of [settlement, roundProof, owner, witness]) {
+    const original = await readFile(path);
+    await unlink(path);
+    await assert.rejects(f.fx.settle(id), auditMismatch);
+    await assert.rejects(read(), auditMismatch);
+    await assert.rejects(openAnchoredForwardGameFx(f.config), auditMismatch);
+    await assert.rejects(readFile(path), {code:'ENOENT'});
+    await writeFile(path, original, {mode:0o600});
+  }
+  const witnessBytes = await readFile(witness);
+  const tampered = JSON.parse(witnessBytes);
+  tampered.payload.sha256 = '0'.repeat(64);
+  await writeFile(witness, JSON.stringify(tampered));
+  await assert.rejects(read(), /journal authentication/);
+  await writeFile(witness, witnessBytes);
+  assert.deepEqual(await f.fx.settle(id), settled);
+  assert.deepEqual(await p4Bytes(f), p4);
+});
+
+test('P9c detects loss of either entire side and authentic-but-different journal records', async t => {
+  const f = await setup(t, {anchored:true});
+  const old = await setup(t);
+  old.state.now = issue + 1;
+  await f.fx.commitRound();
+  await old.fx.commitRound();
+  const [validOther] = await journalPaths(old, 'round');
+  const [local] = await journalPaths(f, 'round');
+  const original = await readFile(local);
+  const alternate = await readFile(validOther);
+  assert.notDeepEqual(original, alternate);
+  await writeFile(local, alternate);
+  await assert.rejects(f.fx.commitRound(), /does not match its independent audit commitment/);
+  await writeFile(local, original);
+
+  for (const directory of [f.config.auditAnchorDirectory, f.config.journalDirectory]) {
+    const names = await readdir(directory);
+    const files = await Promise.all(names.map(async name => [name, await readFile(join(directory, name))]));
+    await rm(directory, {recursive:true});
+    await mkdir(directory, {mode:0o700});
+    await assert.rejects(f.fx.commitRound(), /Missing or mismatched FX audit manifests/);
+    await assert.rejects(openAnchoredForwardGameFx(f.config), /Missing or mismatched FX audit manifests/);
+    assert.deepEqual(await readdir(directory), []);
+    for (const [name, bytes] of files) await writeFile(join(directory, name), bytes, {mode:0o600});
+  }
+  assert.ok((await f.fx.commitRound()).commitment);
+});
+
+function stopAtLink(prefix, after) {
+  return `
+    const fs = (await import('node:fs/promises')).default;
+    const {syncBuiltinESMExports} = await import('node:module');
+    const originalLink = fs.link;
+    fs.link = async (source, destination) => {
+      const stop = destination.split('/').at(-1).startsWith(${JSON.stringify(prefix)});
+      if (stop && !${after}) process.exit(0);
+      await originalLink(source, destination);
+      if (stop) process.exit(0);
+    };
+    syncBuiltinESMExports();
+  `;
+}
+
+test('P9c restarts safely before any settlement witness, blocks orphaned witnesses, and replays a completed pair', async t => {
+  for (const phase of ['before-anchor', 'after-anchor', 'after-journal']) {
+    const f = await setup(t, {anchored:true});
+    const id = await readyForFxSettlement(f);
+    const p4 = await p4Bytes(f);
+    const prefix = phase === 'after-journal' ? 'p9c-journal-settlement-' : 'p9c-anchor-settlement-';
+    const command = `await fx.settle(${JSON.stringify(id)}); process.exit(42);`;
+    await runChild(f, command, target, stopAtLink(prefix, phase !== 'before-anchor'));
+    const paths = await journalPaths(f, 'settlement');
+    if (phase === 'after-anchor') {
+      assert.equal(paths.length, 0);
+      const path = await auditPath(f, 'settlement');
+      const witness = await readFile(path);
+      await assert.rejects(openAnchoredForwardGameFx(f.config), auditMismatch);
+      await assert.rejects(f.fx.settle(id), auditMismatch);
+      assert.deepEqual(await readFile(path), witness);
+      assert.equal((await journalPaths(f, 'settlement')).length, 0);
+    } else {
+      assert.equal(paths.length, Number(phase === 'after-journal'));
+      const existing = paths.length ? await readFile(paths[0]) : null;
+      const restarted = await openAnchoredForwardGameFx(f.config);
+      const result = await restarted.settle(id);
+      assert.equal(result.forecastId, id);
+      assert.equal((await journalPaths(f, 'settlement')).length, 1);
+      if (existing) assert.deepEqual(await readFile(paths[0]), existing);
+      assert.deepEqual(await f.fx.settle(id), result);
+    }
+    assert.deepEqual(await p4Bytes(f), p4);
+  }
+});
+
+async function raceAuditWriter(f, prefix, body, now, parent) {
+  const staged = join(f.root, prefix + 'staged');
+  const release = join(f.root, prefix + 'release');
+  const intercept = `
+    const fs = (await import('node:fs/promises')).default;
+    const {syncBuiltinESMExports} = await import('node:module');
+    const originalLink = fs.link;
+    fs.link = async (source, destination) => {
+      if (destination.split('/').at(-1).startsWith(${JSON.stringify(prefix)})) {
+        await fs.writeFile(${JSON.stringify(staged)}, '');
+        for (;;) {
+          try { await fs.access(${JSON.stringify(release)}); break; }
+          catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
+        }
+      }
+      await originalLink(source, destination);
+    };
+    syncBuiltinESMExports();
+  `;
+  const child = runChild(f, body, now, intercept);
+  let waiting = true;
+  let expected;
+  try {
+    await Promise.race([
+      child.then(() => assert.fail('Writer did not reach the selected audit link')),
+      (async () => {
+        while (waiting && !(await readdir(f.root)).includes(staged.split('/').at(-1))) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      })(),
+    ]);
+    expected = await parent();
+  } finally {
+    waiting = false;
+    await writeFile(release, '');
+    const {stdout} = await child;
+    assert.deepEqual(JSON.parse(stdout), expected);
+  }
+  return expected;
+}
+
+test('P9c cross-process races keep one matched pair, even with different boundAt and confirmedAt candidates', async t => {
+  const f = await setup(t, {anchored:true});
+  const commitment = await raceAuditWriter(f, 'p9c-anchor-round-', 'console.log(JSON.stringify(await fx.commitRound()));',
+    issue + 13, async () => (await Promise.all(Array.from({length:6}, () => f.fx.commitRound())))[0]);
+  assert.equal(commitment.confirmedAt, iso(issue));
+  const [draft] = await journalPaths(f, 'round');
+  assert.equal(JSON.parse(await readFile(draft)).payload.boundAt, iso(issue));
+  assert.equal((await journalPaths(f, 'round')).length, 1);
+  assert.equal((await journalPaths(f, 'round-confirmed')).length, 1);
+  const id = await f.openPosition();
+  await f.fx.reserve(id);
+  await f.closePosition(id);
+  const result = await raceAuditWriter(f, 'p9c-anchor-settlement-',
+    `console.log(JSON.stringify(await fx.settle(${JSON.stringify(id)})));`, target + 13,
+    async () => (await Promise.all(Array.from({length:6}, () => f.fx.settle(id))))[0]);
+  assert.equal((await journalPaths(f, 'settlement')).length, 1);
+  assert.deepEqual(await (await openAnchoredForwardGameFx(f.config)).settle(id), result);
+
+  const g = await setup(t, {anchored:true});
+  g.state.now = issue + 26;
+  const confirmed = await raceAuditWriter(g, 'p9c-anchor-round-confirmed-',
+    'console.log(JSON.stringify(await fx.commitRound()));', issue + 13, () => g.fx.commitRound());
+  const [earlierDraft] = await journalPaths(g, 'round');
+  assert.equal(JSON.parse(await readFile(earlierDraft)).payload.boundAt, iso(issue + 13));
+  assert.equal(confirmed.confirmedAt, iso(issue + 26));
+  assert.equal((await journalPaths(g, 'round-confirmed')).length, 1);
+});
+
+test('P9c record projection is opt-in, score gated, read-only, and restricted to the exact P4 source', async t => {
+  const f = await setup(t, {anchored:true});
+  const {recordSource:source} = f.config;
+  const id = await f.freeze();
+  const fxSource = f.fx.fxSource;
+  const legacy = createForwardRecordReader({forecastId:id, source});
+  const optIn = createForwardRecordReader({forecastId:id, source, fxSource});
+  assert.throws(() => createForwardRecordReader({forecastId:id, source, fxSource:{read:() => ({})}}),
+    /trusted FX source/);
+  const alternate = await openForwardMockLifecycle(f.options);
+  assert.throws(() => createForwardRecordReader({forecastId:id, source:alternate.recordSource, fxSource}),
+    /this P4 source/);
+
+  async function compare(expected) {
+    const view = await optIn();
+    const {fx, ...rest} = view.records[0];
+    assert.deepEqual(fx, expected);
+    assert.deepEqual({...view, records:[rest]}, await legacy());
+    return view;
+  }
+
+  await compare(null);
+  const commitment = await f.fx.commitRound();
+  await f.lifecycle.reserveOpen(id);
+  await f.batch(entry, 100);
+  await f.fx.reserve(id);
+  await f.lifecycle.reserveClose(id);
+  await f.batch(target, 125);
+  await compare(null);
+  await f.lifecycle.score(id);
+  await compare(null);
+
+  const {rawPnl, gamePnl, basisPoints} = await f.fx.settle(id);
+  const expected = {rawPnl, gamePnl, basisPoints, commitment:commitment.commitment};
+  const p4 = await p4Bytes(f);
+  const fxNames = await readdir(f.config.journalDirectory);
+  const anchorNames = await readdir(f.config.auditAnchorDirectory);
+  const view = await compare(expected);
+  assert.deepEqual([rawPnl, gamePnl, basisPoints], [-50, -51, 10200]);
+  assert.equal(view.records[0].realizedPnl, rawPnl);
+  assert.equal(view.records[0].score.directionCorrect, false);
+  assert.doesNotMatch(JSON.stringify(view), /nonce|modelHash|forecastSha|referenceSha|receiptSha|accountId|\/tmp\//);
+
+  const child = await runChild(f, `
+    const fs = await import('node:fs/promises');
+    const handle = await fs.open(${JSON.stringify(f.options.walletFile)}, 'r');
+    const proto = Object.getPrototypeOf(handle);
+    await handle.close();
+    proto.sync = () => { throw new Error('Read-only projection called fsync'); };
+    const {createForwardRecordReader} = await import(${JSON.stringify(new URL('../../game_runtime/forward-records.mjs', import.meta.url).href)});
+    const read = createForwardRecordReader({forecastId:${JSON.stringify(id)}, source:recordSource, fxSource:fx.fxSource});
+    console.log(JSON.stringify(await read()));
+  `, target);
+  assert.deepEqual(JSON.parse(child.stdout), view);
+  assert.deepEqual(await p4Bytes(f), p4);
+  assert.deepEqual(await readdir(f.config.journalDirectory), fxNames);
+  assert.deepEqual(await readdir(f.config.auditAnchorDirectory), anchorNames);
+
+  const scorePath = join(f.options.directory, id + '.outcome.json');
+  await writeFile(scorePath, '{}');
+  await assert.rejects(optIn(), {code:'FORWARD_FORECAST_CORRUPT'});
 });

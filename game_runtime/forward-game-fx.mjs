@@ -1,7 +1,9 @@
-import {createHash, createHmac, randomUUID, timingSafeEqual} from 'node:crypto';
-import {constants} from 'node:fs';
-import {link, lstat, open, realpath, unlink} from 'node:fs/promises';
-import {dirname, join, resolve} from 'node:path';
+import {lstat, realpath} from 'node:fs/promises';
+import {dirname, resolve} from 'node:path';
+import {
+  containsFxPath, fxHash as sha256, fxMac, fxRecordStore, openFxAudit, provisionFxAudit,
+  requireLegacyFxDirectory, syncDirectory,
+} from './forward-game-fx-audit.mjs';
 import {mockReferenceSha256} from './forward-market-adapter.mjs';
 import {MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
 import {getForwardMockRecordContext, mockForecastOrderId} from './forward-mock-lifecycle.mjs';
@@ -11,90 +13,41 @@ import {readForwardSnapshot} from './forward-store.mjs';
 
 const RATES = [9800, 9900, 10000, 10100, 10200];
 const HASH = /^[a-f0-9]{64}$/;
-const MAX_RECORD_BYTES = 8192;
 const json = JSON.stringify;
-const sha256 = value => createHash('sha256').update(json(value)).digest('hex');
 const matches = (value, pattern) => typeof value === 'string' && pattern.test(value);
 const fail = message => { throw new RangeError(message); };
+const fxReaders = new WeakMap();
 
-async function syncDirectory(directory) {
-  const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
+function requireSeparateP4Paths({journalDirectory, auditAnchorDirectory}, context) {
+  for (const directory of [journalDirectory, auditAnchorDirectory]) {
+    if (typeof directory !== 'string' || !directory.trim()) continue;
+    const path = resolve(directory);
+    for (const p4 of [dirname(context.walletFile), context.directory]) {
+      if (containsFxPath(path, p4) || containsFxPath(p4, path)) {
+        fail('FX audit directories must be separate from P4 data');
+      }
+    }
   }
 }
 
-function journal(directory, mac) {
-  const pathFor = (kind, id) => join(directory, `p9b-${kind}-${id}.json`);
-  const encode = (kind, id, payload) => Buffer.from(json({
-    payload, mac:mac(['record', kind, id, payload]),
-  }));
+export async function initializeForwardGameFxAudit(config) {
+  const context = getForwardMockRecordContext(config?.recordSource);
+  if (!context) fail('FX audit setup requires a trusted P4 record source');
+  requireSeparateP4Paths(config, context);
+  return provisionFxAudit(config);
+}
 
-  async function read(kind, id) {
-    let handle;
-    try {
-      handle = await open(pathFor(kind, id), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    }
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size < 1 || stat.size > MAX_RECORD_BYTES) fail('Invalid P9b journal file');
-      const bytes = Buffer.alloc(stat.size + 1);
-      let length = 0;
-      while (length < bytes.length) {
-        const {bytesRead} = await handle.read(bytes, length, bytes.length - length, null);
-        if (!bytesRead) break;
-        length += bytesRead;
-      }
-      const {payload} = JSON.parse(bytes.subarray(0, length).toString('utf8'));
-      const expected = encode(kind, id, payload);
-      if (!payload || length !== stat.size || expected.length !== length ||
-          !timingSafeEqual(bytes.subarray(0, length), expected)) fail('Invalid P9b journal authentication');
-      return payload;
-    } finally {
-      await handle.close();
-    }
+export async function openAnchoredForwardGameFx(config) {
+  if (typeof config?.auditAnchorDirectory !== 'string' || !config.auditAnchorDirectory.trim()) {
+    fail('P9c requires an explicit FX audit anchor directory');
   }
+  return openForwardGameFx(config);
+}
 
-  async function append(kind, id, payload) {
-    let saved = await read(kind, id);
-    if (saved === null) {
-      const path = join(directory, '.p9b-' + randomUUID() + '.tmp');
-      const handle = await open(path, 'wx', 0o600);
-      try {
-        try {
-          await handle.writeFile(encode(kind, id, payload));
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
-        // The final name is never replaced. A stop after link may leave a
-        // second name for the same authenticated, fully synced inode.
-        await link(path, pathFor(kind, id)).catch(error => {
-          if (error.code !== 'EEXIST') throw error;
-        });
-      } finally {
-        await unlink(path);
-      }
-      saved = await read(kind, id);
-    }
-    // Also make a competing publisher's link durable before acknowledging it.
-    await syncDirectory(directory);
-    if (saved === null) fail('P9b journal record disappeared');
-    return saved;
-  }
-
-  async function appendExact(kind, id, payload) {
-    const saved = await append(kind, id, payload);
-    if (json(saved) !== json(payload)) fail('Conflicting P9b journal record');
-    return saved;
-  }
-
-  return {read, append, appendExact};
+export function getForwardGameFxReader(fxSource, recordSource) {
+  const trusted = fxReaders.get(fxSource);
+  if (!trusted || trusted.recordSource !== recordSource) fail('Expected a trusted FX source for this P4 source');
+  return trusted.read;
 }
 
 /**
@@ -109,7 +62,7 @@ function journal(directory, mac) {
  * projection of virtual medal proceeds. It has no spendable balance.
  */
 export async function openForwardGameFx({
-  journalDirectory, signingKey, accountId, recordSource, symbol, targetAt, deriveRoundBytes,
+  journalDirectory, signingKey, accountId, recordSource, symbol, targetAt, deriveRoundBytes, auditAnchorDirectory,
 } = {}) {
   const context = getForwardMockRecordContext(recordSource);
   const cutoff = utcTime(targetAt);
@@ -138,9 +91,22 @@ export async function openForwardGameFx({
     return ledger;
   }
   await readWallet();
-  const key = Buffer.from(signingKey);
-  const mac = value => createHmac('sha256', key).update(json(['P9b/v1', value])).digest('hex');
-  const store = journal(journalDirectory, mac);
+  const mac = fxMac(signingKey);
+  if (auditAnchorDirectory !== undefined) requireSeparateP4Paths({journalDirectory, auditAnchorDirectory}, context);
+  const audit = auditAnchorDirectory === undefined ? null :
+    await openFxAudit({journalDirectory, auditAnchorDirectory, signingKey});
+  const store = audit ?? fxRecordStore(journalDirectory, mac);
+  if (!audit) await requireLegacyFxDirectory(journalDirectory);
+
+  function checked(action) {
+    return async (...args) => {
+      if (audit) await audit.verify();
+      else await requireLegacyFxDirectory(journalDirectory);
+      const result = await action(...args);
+      if (audit) await audit.verify();
+      return result;
+    };
+  }
   const wallet = sha256(context.walletFile);
   const forecasts = sha256(context.directory);
   const owner = {accountId, wallet, forecasts};
@@ -150,6 +116,7 @@ export async function openForwardGameFx({
   }
   await store.appendExact('wallet-owner', wallet, owner);
   await store.appendExact('forecast-owner', forecasts, owner);
+  if (audit) await audit.verify();
 
   const round = {sourceMode:MOCK_MARKET_SOURCE, market:referenceTrade.market, symbol, targetAt};
   const roundId = sha256(round);
@@ -253,8 +220,39 @@ export async function openForwardGameFx({
     return {...record, confirmedAt:proof.confirmedAt};
   }
 
-  return Object.freeze({
-    async commitRound(...extra) {
+  async function settlementFor(forecastId, id) {
+    const roundProof = await requireRound();
+    const {ledger, outcome, opened, index, binding} = await load(forecastId);
+    const {record:reservation, proof} = await readAttestation('reservation', id,
+      () => readReservation(id, binding, roundProof));
+    if (!proof) {
+      fail('P9b requires a margin reservation confirmed before cutoff');
+    }
+
+    const closed = ledger.journal.slice(index + 1).find(event =>
+      event.aiId === binding.aiId && event.kind !== 'CANCELLED');
+    if (outcome?.status !== 'SCORED_MOCK_NONLIVE' || outcome.sourceMode !== MOCK_MARKET_SOURCE ||
+        !closed || closed.orderId !== mockForecastOrderId(forecastId, 'close') || closed.kind !== 'CLOSED' ||
+        outcome.observation.evidence !== 'MOCK_NONLIVE:sha256:' + sha256([opened, closed]) ||
+        utcTime(adapter.stamp()) < utcTime(outcome.scoredAt)) {
+      fail('P9b requires a verified P4 settlement and score');
+    }
+    const {realizedPnl:rawPnl} = closed;
+    const {position} = reservation;
+    if (rawPnl !== positionPnl(position, closed.price)) fail('P9b raw PnL differs from the reserved position');
+    const {basisPoints, nonce, commitment} = roundProof;
+    const reservedMargin = position.margin;
+    const rounded = Math.sign(rawPnl) * Math.round(Math.abs(rawPnl) * (basisPoints / 10_000));
+    const gamePnl = Math.max(-reservedMargin, rounded || 0);
+    return {
+      ...binding, sourceMode:MOCK_MARKET_SOURCE, basisPoints, nonce, commitment,
+      reservedMargin, rawPnl, gamePnl, virtualProceeds:reservedMargin + gamePnl,
+      reservationSha256:sha256(reservation), outcomeSha256:sha256(outcome),
+    };
+  }
+
+  const operations = {
+    commitRound:checked(async (...extra) => {
       if (extra.length) fail('The P9b rate is server-owned');
       adapter.authorize();
       const {record:prior, proof} = await readAttestation('round', roundId, readRound);
@@ -272,9 +270,9 @@ export async function openForwardGameFx({
       const record = await readRound();
       const {confirmedAt} = await confirm('round', roundId, record);
       return {...roundBinding, commitment:record.commitment, confirmedAt};
-    },
+    }),
 
-    async reserve(forecastId, ...extra) {
+    reserve:checked(async (forecastId, ...extra) => {
       if (extra.length) fail('P9b reservation uses only verified wallet margin');
       const roundProof = await requireRound();
       const {ledger, forecast, outcome, opened, index, binding} = await load(forecastId);
@@ -302,39 +300,30 @@ export async function openForwardGameFx({
       const record = await readDraft();
       const {confirmedAt} = await confirm('reservation', id, record);
       return {forecastId, roundId, reservedMargin:record.position.margin, confirmedAt};
-    },
+    }),
 
-    async settle(forecastId, ...extra) {
-      if (extra.length) fail('P9b settlement uses only verified P4 results');
-      const roundProof = await requireRound();
-      const {ledger, outcome, opened, index, binding} = await load(forecastId);
+    settle:checked(async (forecastId, ...extra) => {
+      if (extra.length || !matches(forecastId, HASH)) fail('P9b settlement uses only verified P4 results');
       const id = sha256([wallet, forecastId]);
-      const {record:reservation, proof} = await readAttestation('reservation', id,
-        () => readReservation(id, binding, roundProof));
-      if (!proof) {
-        fail('P9b requires a margin reservation confirmed before cutoff');
-      }
+      return store.appendExact('settlement', id, await settlementFor(forecastId, id));
+    }),
+  };
 
-      const closed = ledger.journal.slice(index + 1).find(event =>
-        event.aiId === binding.aiId && event.kind !== 'CANCELLED');
-      if (outcome?.status !== 'SCORED_MOCK_NONLIVE' || outcome.sourceMode !== MOCK_MARKET_SOURCE ||
-          !closed || closed.orderId !== mockForecastOrderId(forecastId, 'close') || closed.kind !== 'CLOSED' ||
-          outcome.observation.evidence !== 'MOCK_NONLIVE:sha256:' + sha256([opened, closed]) ||
-          utcTime(adapter.stamp()) < utcTime(outcome.scoredAt)) {
-        fail('P9b requires a verified P4 settlement and score');
+  if (audit) {
+    const fxSource = Object.freeze({});
+    fxReaders.set(fxSource, {recordSource, read:checked(async (forecastId, outcome) => {
+      if (!matches(forecastId, HASH) || outcome?.status !== 'SCORED_MOCK_NONLIVE') return null;
+      const id = sha256([wallet, forecastId]);
+      const saved = await store.read('settlement', id);
+      if (!saved) return null;
+      const expected = await settlementFor(forecastId, id);
+      if (json(saved) !== json(expected) || saved.outcomeSha256 !== sha256(outcome)) {
+        fail('FX settlement does not match the verified P4 outcome');
       }
-      const {realizedPnl:rawPnl} = closed;
-      const {position} = reservation;
-      if (rawPnl !== positionPnl(position, closed.price)) fail('P9b raw PnL differs from the reserved position');
-      const {basisPoints, nonce, commitment} = roundProof;
-      const reservedMargin = position.margin;
-      const rounded = Math.sign(rawPnl) * Math.round(Math.abs(rawPnl) * (basisPoints / 10_000));
-      const gamePnl = Math.max(-reservedMargin, rounded || 0);
-      return store.appendExact('settlement', id, {
-        ...binding, sourceMode:MOCK_MARKET_SOURCE, basisPoints, nonce, commitment,
-        reservedMargin, rawPnl, gamePnl, virtualProceeds:reservedMargin + gamePnl,
-        reservationSha256:sha256(reservation), outcomeSha256:sha256(outcome),
-      });
-    },
-  });
+      const {rawPnl, gamePnl, basisPoints, commitment} = saved;
+      return {rawPnl, gamePnl, basisPoints, commitment};
+    })});
+    operations.fxSource = fxSource;
+  }
+  return Object.freeze(operations);
 }

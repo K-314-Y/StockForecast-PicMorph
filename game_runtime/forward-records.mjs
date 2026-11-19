@@ -1,3 +1,4 @@
+import {getForwardGameFxReader} from './forward-game-fx.mjs';
 import {isForwardModelVersion} from './forward-model.mjs';
 import {MARKET_SYMBOL, MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE, utcTime} from './forward-market-guard.mjs';
 import {mockForecastOrderId} from './forward-mock-lifecycle.mjs';
@@ -54,11 +55,12 @@ function readScore(outcome, receipt, open, close) {
 /** Test-only dependency. The source verifies saved evidence and exposes a read-only wallet snapshot. */
 export function createForwardRecordReader(config) {
   if (config === undefined) return unconnected;
-  const {forecastId, source} = config;
+  const {forecastId, source, fxSource} = config;
   if (typeof forecastId !== 'string' || !hash.test(forecastId) ||
       typeof source?.read !== 'function' || typeof source.snapshot !== 'function') {
     throw new TypeError('Expected a fixed forecast ID and a read-only P4 source');
   }
+  const readFx = fxSource === undefined ? null : getForwardGameFxReader(fxSource, source);
   return async () => {
     const saved = await source.read(forecastId);
     if (saved === null) return unconnected();
@@ -84,6 +86,8 @@ export function createForwardRecordReader(config) {
     const realizedPnl = close.status === 'CLOSED' ?
       ledger.journal.find(item => item.orderId === mockForecastOrderId(forecastId, 'close')).realizedPnl : null;
     if (close.status === 'CLOSED' && !Number.isFinite(realizedPnl)) throw Error('Invalid realized medal result');
+    const fx = readFx && score ? await readFx(forecastId, outcome) : null;
+    if (fx && fx.rawPnl !== realizedPnl) throw Error('FX settlement does not match the P4 realized result');
     return {status:'MOCK_NONLIVE', records:[{
       aiId, model_version, symbol, sourceMode:'MOCK_NONLIVE',
       confirmedAt:new Date(utcTime(receipt.confirmedAt)).toISOString(),
@@ -91,6 +95,7 @@ export function createForwardRecordReader(config) {
       direction:forecastDirection(forecast),
       predictedChangePct:forecast.predictedChangePct ?? null,
       open, close, realizedPnl, score,
+      ...(readFx ? {fx} : {}),
       status:score ? 'SCORED_MOCK_NONLIVE' : 'PENDING',
     }]};
   };
