@@ -608,9 +608,21 @@ function showLinkedZip() {
   panel.style.display=record?'flex':'none';
   if(record)portrait.src=record.image_url;
   else portrait.removeAttribute('src');
-  element('quickZipDetails').textContent=record?
-    record.name+' ／ 専用AI '+record.ai_id.slice(0,12)+'… ／ '+record.model_version+
-    '。ZIPの外見と同じIDで登録されています。新規設定・未学習・架空練習専用。':'';
+  const accessoryLabel={star:'星',glasses:'眼鏡',ribbon:'リボン',none:'なし'};
+  const weights=record?.model?.plugin_weights;
+  const appearance=record?.appearance;
+  const traits=appearance && record.model_origin==='appearance_features' ?
+    'アクセサリー：'+(accessoryLabel[appearance.look?.accessory]??'未設定')+' ／ ' :
+    '';
+  const strategy=weights&&Number.isFinite(record.model.risk_fraction) ?
+    '流れ'+weights.trend+'%・勢い'+weights.momentum+
+    '%・反転'+weights.reversion+'%・変動'+weights.volatility+
+    '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+'%。' : '';
+  element('quickZipDetails').textContent=record ?
+    record.name+' ／ '+traits+strategy+
+    '専用AI '+record.ai_id.slice(0,12)+'…。'+
+    (appearance ? '外見の特徴から予測設定を作成。' : '以前の手動設定。')+
+    '未学習・架空練習専用。':'';
 }
 const leverageField = element('quickLeverage');
 const errorField = element('quickError');

@@ -20,6 +20,7 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_FRAME_SIDE = 1024;
 let pack = null;
 let currentZipFiles = null;
+const zipLookFields=['zipAccessory','zipHairStyle','zipExpression'];
 let epoch = 0;
 let busy = false;
 let paused = false;
@@ -62,7 +63,9 @@ function setBusy(value) {
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
-  $('registerZip').disabled = value || !currentZipFiles;
+  for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood','faceX','faceY'])$(id).disabled=value;
+  $('registerZip').disabled = value || !currentZipFiles ||
+    zipLookFields.some(id=>!$(id).value);
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
 }
@@ -309,8 +312,37 @@ async function loadGeneratedSheets(){
 }
 $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 
-// Users select ONE archive; file change automatically loads the four atlases.
-// The archive never leaves this browser and no extracted files are saved.
+// The ZIP is unpacked in this browser. Its optional manifest supplies declared
+// appearance metadata; a visual AI classifier is NOT run.
+function refreshZipTraitStatus() {
+  const missing=zipLookFields.filter(id=>!$(id).value)
+    .map(id=>({zipAccessory:'アクセサリー',zipHairStyle:'髪型',zipExpression:'性格・表情'}[id]));
+  $('registerZip').disabled=busy || !currentZipFiles || missing.length>0;
+  if(!currentZipFiles)return;
+  $('zipTraitsStatus').textContent=missing.length ?
+    '未指定：'+missing.join('・')+'。ZIPの情報にない特徴は選択してください。' :
+    '外見の特徴が揃いました。アクセサリー・髪型・色は予測の分析比率、表情は資金使用率に反映します。';
+}
+function applyZipAppearance(files) {
+  const traits=files.appearance ?? {};
+  for(const [field,id] of [
+    ['accessory','zipAccessory'],['hair_style','zipHairStyle'],
+    ['expression','zipExpression'],['hair_color','zipHairColor'],
+    ['clothing_color','zipClothingColor']]) {
+    $(id).value=traits[field]??(field.endsWith('_color')?'#808080':'');
+  }
+  $('zipName').value=traits.name??'新しい相棒';
+  const fromZip=['accessory','hair_style','expression','hair_color','clothing_color']
+    .filter(key=>Object.hasOwn(traits,key));
+  $('zipTraitsStatus').textContent=fromZip.length ?
+    'ZIPのmanifest.jsonから取得：'+fromZip.join('・')+
+    '。ない特徴は選択してください。' :
+    'ZIPには登録済みの外見情報がありません。画像を見ながら選択してください。';
+}
+for(const id of [...zipLookFields,'zipHairColor','zipClothingColor']) {
+  $(id).addEventListener('change',refreshZipTraitStatus);
+}
+// Users select ONE archive; registration is a separate explicit disk write.
 async function importCharacterZip(file){
   if(!file || busy)return;
   currentZipFiles=null;
@@ -336,8 +368,9 @@ async function importCharacterZip(file){
     displayLoaded(next,6);
     for(const key of Object.keys(temp))delete temp[key];
     currentZipFiles=files;
-    $('registerZip').disabled=false;
-    $('zipRegisterStatus').textContent='読み込み成功。名前と予測ルールを確認して登録できます。';
+    applyZipAppearance(files);
+    refreshZipTraitStatus();
+    $('zipRegisterStatus').textContent='読み込み成功。外見の特徴を確認して登録できます。';
     status('ZIPのキャラを自動で再生しています。体＋表情を読み込みました。表情を変えて確認してください。');
   }catch(error){
     if(myEpoch===epoch)status(error.message||'ZIPを読み込めませんでした。',true);
@@ -390,19 +423,30 @@ $('registerZip').addEventListener('click',async()=>{
     if(chosenEpoch!==epoch)return;
     const response=await fetch('/api/imported-characters/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name,approach:$('zipApproach').value,
-        risk_percent:Number($('zipRisk').value),images}),
+      body:JSON.stringify({name,look:{
+          accessory:$('zipAccessory').value,
+          hair_style:$('zipHairStyle').value,
+          expression:$('zipExpression').value,
+        },colors:{
+          hair_color:$('zipHairColor').value,
+          clothing_color:$('zipClothingColor').value,
+        },images}),
       cache:'no-store',credentials:'same-origin',
     });
     const record=await response.json();
     if(!response.ok||!/^zip_[0-9a-f]{32}$/.test(record.id)||record.ai_id!==record.id||
-       record.source!=='ZIP_LOCAL'||record.trained!==false||!record.model_version)
-      throw Error(record.error||'登録結果を確認できません。');
+       record.source!=='ZIP_LOCAL'||record.model_origin!=='appearance_features'||
+       record.trained!==false||!/^appearance-v1_/.test(record.model_version)||
+       !record.model?.plugin_weights||!Number.isFinite(record.model.risk_fraction))
+      throw Error(record.error||'外見からのAI作成結果を確認できません。');
     currentZipFiles=null; // one explicit registration per ZIP selection
     $('zipGameLink').hidden=false;
-    $('zipRegisterStatus').textContent=name+'を登録しました。キャラIDと専用AI ID：'+
-      record.id+' ／ モデル版：'+record.model_version+
-      '。新規設定です（未学習・実株価未対応）。';
+    const w=record.model.plugin_weights;
+    $('zipRegisterStatus').textContent=name+'を登録しました。キャラID＝AI ID：'+
+      record.id+' ／ 流れ'+w.trend+'%・勢い'+w.momentum+
+      '%・反転'+w.reversion+'%・変動'+w.volatility+
+      '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+
+      '%。外見の特徴で決まる新規モデルです（未学習・実株価未対応）。';
     status('ZIPの外見と予測AI設定が同じIDで登録されました。');
   }catch(error){
     $('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;

@@ -58,7 +58,7 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
     assert.match(html,new RegExp('id="'+id+'"'),id);
   }
   assert.match(html,/accept="image\/png,image\/webp"/);
-  assert.match(html,/画像はブラウザ内だけで使い、アップロードも保存もしません/);
+  assert.match(html,/ZIPからキャラを登録した場合のみ.*画像と予測設定を保存します/);
   assert.match(html,/体と同じサイズ/);
   assert.match(html,/6コマなら6枚を横一列に並べ/);
   assert.match(html,/href="\/game"/);

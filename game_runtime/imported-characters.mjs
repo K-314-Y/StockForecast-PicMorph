@@ -6,7 +6,9 @@ import {constants} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {deriveForwardCompanionModel,identifyForwardModel} from './forward-model.mjs';
-import {APPROACHES} from './companion.mjs';
+import {APPROACHES,normalizeCompanionColor} from './companion.mjs';
+import {validateLook} from './looks.mjs';
+import {deriveForwardAppearanceModel,identifyForwardAppearanceModel} from './appearance-model.mjs';
 import {validateImageStructure} from './image-validation.mjs';
 
 export const IMPORTED_CHARACTER_ROOT=fileURLToPath(new URL('../local_state/node_game/imported-characters',import.meta.url));
@@ -32,30 +34,47 @@ function decodeImage(value,part) {
   return {mime:value.mime,base64:encoded,size:bytes.length};
 }
 function validateRegistration(payload) {
-  if(!exact(payload,['name','approach','risk_percent','images']) ||
+  const usingAppearance=exact(payload,['name','look','colors','images']);
+  const legacy=exact(payload,['name','approach','risk_percent','images']);
+  if((!usingAppearance && !legacy) ||
      typeof payload.name!=='string'|| !payload.name.trim()||[...payload.name].length>16||
      /[\u0000-\u001f\u007f-\u009f]/u.test(payload.name))
     throw fail('キャラ名は1〜16文字で入力してください');
   if(!object(payload.images)||!Object.keys(payload.images).every(k=>IMAGE_KEYS.includes(k))||
      !['body','ready','portrait'].every(k=>Object.hasOwn(payload.images,k)))
     throw fail('体・通常顔・合成プレビューの画像が必要です');
-  if(!APPROACHES.includes(payload.approach)||!Number.isInteger(payload.risk_percent)||
-     payload.risk_percent<5||payload.risk_percent>100||payload.risk_percent%5!==0)
-    throw fail('予測ルールまたは使用率が不正です');
-  const generation=deriveForwardCompanionModel({approach:payload.approach,risk_percent:payload.risk_percent});
+  let generation, appearance=null;
+  if(usingAppearance) {
+    const look=validateLook(payload.look);
+    if(!exact(payload.colors,['hair_color','clothing_color']))
+      throw fail('髪と服の色を指定してください');
+    const colors={hair_color:normalizeCompanionColor(payload.colors.hair_color),
+      clothing_color:normalizeCompanionColor(payload.colors.clothing_color)};
+    // Existing appearance rules govern the real numerical model, not a character ID.
+    generation=identifyForwardAppearanceModel(deriveForwardAppearanceModel(look,colors));
+    appearance={look,colors};
+  }else {
+    if(!APPROACHES.includes(payload.approach)||!Number.isInteger(payload.risk_percent)||
+       payload.risk_percent<5||payload.risk_percent>100||payload.risk_percent%5!==0)
+      throw fail('予測ルールまたは使用率が不正です');
+    generation=deriveForwardCompanionModel({
+      approach:payload.approach,risk_percent:payload.risk_percent});
+  }
   const images={};let total=0;
   for(const [kind,item] of Object.entries(payload.images)) {
     images[kind]=decodeImage(item,kind);
     total+=images[kind].size;
     if(total>MAX_TOTAL)throw fail('ZIP画像の合計サイズが大きすぎます',413);
   }
-  return {name:payload.name.trim(),images,generation};
+  return {name:payload.name.trim(),images,generation,appearance};
 }
 function summary(record) {
   return {id:record.id,name:record.name,ai_id:record.ai_id,
     model_version:record.generation.model_version,
     model:record.generation.model,model_revision:record.model_revision,
     image_url:'/api/imported-characters/image/'+record.id,
+    appearance:record.appearance??null,
+    model_origin:record.appearance?'appearance_features':'legacy_manual',
     frames:6,source:'ZIP_LOCAL',trained:false,live_market:false};
 }
 export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) {
@@ -89,17 +108,25 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
     try {
       const validated=identifyForwardModel(item.generation);
       if(validated.modelHash!==item.generation.modelHash)throw Error('model hash mismatch');
+      if(item.appearance!==undefined&&item.appearance!==null) {
+        const look=validateLook(item.appearance.look);
+        if(!exact(item.appearance.colors,['hair_color','clothing_color']))throw Error('colors mismatch');
+        const fromLook=identifyForwardAppearanceModel(deriveForwardAppearanceModel(
+          look,item.appearance.colors));
+        if(fromLook.model_version!==validated.model_version||
+           fromLook.modelHash!==validated.modelHash)throw Error('appearance/model mismatch');
+      }
     }catch{throw fail('保存済みモデル設定を検証できません',503);}
     return item;
   }
   return {
     async register(payload) {
-      const {name,images,generation}=validateRegistration(payload);
+      const {name,images,generation,appearance}=validateRegistration(payload);
       await ensureRoot();
       const id='zip_'+randomUUID().replaceAll('-','');
       const record={schema:1,id,ai_id:id,name,model_revision:1,
         generation:{model_version:generation.model_version,model:generation.model,modelHash:generation.modelHash},
-        images};
+        ...(appearance?{appearance}:{}),images};
       const file=join(root,id+'.json');
       const handle=await open(file,'wx',0o600);
       try {await handle.writeFile(JSON.stringify(record)+'\n');await handle.sync();}

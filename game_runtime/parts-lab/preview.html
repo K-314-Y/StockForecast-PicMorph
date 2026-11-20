@@ -57,7 +57,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <main>
 <p><a href="/game">Creature Labの外見づくりに戻る</a></p>
 <h1>PNGパーツ実験室</h1>
-<p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて、待機中の動きと表情の切替を試せます。画像はブラウザ内だけで使い、アップロードも保存もしません。</p>
+<p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて、待機中の動きと表情の切替を試せます。画像はプレビューだけなら保存しません。ZIPからキャラを登録した場合のみ、このPCのゲーム用保存先に画像と予測設定を保存します。</p>
 <div class="layout">
 <section class="panel" aria-labelledby="fileTitle">
 <h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
@@ -69,14 +69,22 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <small>プレビューだけなら保存しません。「登録」を押すとこのPCに画像と専用AI設定を保存します。</small>
 <label for="zipName">登録するキャラの名前
 <input id="zipName" type="text" maxlength="16" value="新しい相棒" autocomplete="off"></label>
+<p class="hint"><strong>外見の特徴からAIを作成</strong>：ZIPのmanifest.jsonに登録されたアクセサリー・髪色・服色を自動取得します。記録のない特徴は下の項目で指定してください。画像そのものをAI認識した結果ではありません。</p>
 <div class="controls">
-<label for="zipApproach">最初の予測ルール
-<select id="zipApproach"><option value="trend">流れを重視</option><option value="momentum">勢いを重視</option><option value="reversion">反転を重視</option><option value="volatility">値動きの大きさを重視</option></select></label>
-<label for="zipRisk">仮想資金の使用率
-<select id="zipRisk"><option value="25">25%</option><option value="50" selected>50%</option><option value="75">75%</option><option value="100">100%</option></select></label>
+<label for="zipAccessory">アクセサリー（予測の特徴が変わります）
+<select id="zipAccessory"><option value="">選択してください</option><option value="star">⭐ 星：値動きの大きさ</option><option value="glasses">👓 眼鏡：反転</option><option value="ribbon">🎀 リボン：勢い</option><option value="none">なし：基本の特徴</option></select></label>
+<label for="zipHairStyle">髪型（分析の比率が変わります）
+<select id="zipHairStyle"><option value="">選択してください</option><option value="bob">ボブ：流れ</option><option value="long">ロング：反転</option><option value="twintails">ツインテール：勢い</option></select></label>
+<label for="zipExpression">性格・基本表情（資金の使用率に反映）
+<select id="zipExpression"><option value="">選択してください</option><option value="cheerful">明るい</option><option value="calm">慎重</option><option value="determined">積極的</option></select></label>
+<label for="zipHairColor">髪色
+<input id="zipHairColor" type="color" value="#808080"></label>
+<label for="zipClothingColor">服色
+<input id="zipClothingColor" type="color" value="#808080"></label>
 </div>
-<button id="registerZip" type="button" class="primary" disabled>このZIPキャラと専用AIを登録</button>
-<p id="zipRegisterStatus" role="status" aria-live="polite">ZIPでプレビューした後、登録できます。AIは新規設定で、学習済みではありません。</p>
+<p id="zipTraitsStatus" role="status" aria-live="polite">ZIPの外見情報を読み込むと、予測AIの特徴を確認できます。色情報がないときは灰色の仮値になります。</p>
+<button id="registerZip" type="button" class="primary" disabled>この外見から専用AIを新規作成して登録</button>
+<p id="zipRegisterStatus" role="status" aria-live="polite">ZIPを読み込んで、必要な特徴を指定してください。AIは実株価で学習したモデルではありません。</p>
 <p id="zipGameLink" hidden><a href="/game">登録したキャラで架空練習をする</a></p>
 </div>
 
