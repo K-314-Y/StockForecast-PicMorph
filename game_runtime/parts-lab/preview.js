@@ -2,7 +2,7 @@
  * Files are saved locally only after explicit ZIP character registration. */
 import {BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition} from './accessory-options.mjs';
 import {checkOverlayHeader,hasOverlayAlpha,OVERLAY_MAX_SIDE,OVERLAY_POSITION,
-  OVERLAY_SCALE,overlayRect,overlayValue} from './accessory-overlay.mjs';
+  OVERLAY_SCALE,canvasPoint,overlayPosition,overlayRect,overlayValue} from './accessory-overlay.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('previewCanvas');
@@ -41,6 +41,8 @@ let paused = false;
 let frame = 0;
 let lastChange = 0;
 let handle = 0;
+let overlayDrag = null;
+let hitContext;
 
 function status(message, isError = false) {
   $('status').textContent = message;
@@ -56,9 +58,11 @@ function release(bundle) {
   for (const bitmap of new Set(Object.values(bundle.images))) bitmap.close();
 }
 function resetPack() {
+  endOverlayDrag();
   stopClock();
   if (pack) release(pack);
   pack = null;
+  updateOverlayDragAvailability();
   frame = 0;
   paused = false;
   $('pause').setAttribute('aria-pressed','false');
@@ -73,6 +77,8 @@ function resetPack() {
 }
 function setBusy(value) {
   busy = value;
+  if (busy) endOverlayDrag();
+  updateOverlayDragAvailability();
   $('loadOwn').disabled = value;
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
@@ -120,6 +126,77 @@ function paint() {
   $('frameInfo').textContent = String(frame+1) + ' / ' + String(pack.frames) +
     ' コマ｜' + String(pack.width) + ' × ' + String(pack.height) + ' px' +
     (reduced.matches ? '｜静止表示（動きを減らす設定）' : '');
+}
+function updateOverlayDragAvailability() {
+  const editable=Boolean(pack && currentZipFiles && !busy &&
+    equippedIds.some(id=>accessoryOverlays.get(id)?.bitmap));
+  canvas.toggleAttribute('data-overlay-editable',editable);
+}
+function hitOverlay(x,y) {
+  for (let index=equippedIds.length-1;index>=0;index--) {
+    const overlay=accessoryOverlays.get(equippedIds[index]);
+    if (!overlay?.bitmap) continue;
+    const rect=overlayRect(pack.width,pack.height,overlay);
+    const [left,top,width,height]=rect;
+    const px=Math.floor(x-left), py=Math.floor(y-top);
+    if (px<0 || py<0 || px>=width || py>=height) continue;
+    // Read the alpha after resampling with the same settings as the portrait.
+    hitContext??=document.createElement('canvas').getContext('2d',{willReadFrequently:true});
+    hitContext.canvas.width=width;
+    hitContext.canvas.height=height;
+    hitContext.imageSmoothingQuality='high';
+    hitContext.drawImage(overlay.bitmap,0,0,width,height);
+    if (hitContext.getImageData(px,py,1,1).data[3]) return {overlay,rect};
+  }
+  return null;
+}
+function endOverlayDrag() {
+  if (!overlayDrag) return;
+  const {pointerId}=overlayDrag;
+  overlayDrag=null;
+  canvas.removeAttribute('data-overlay-dragging');
+  if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+}
+function moveOverlay(event) {
+  if (overlayDrag?.pointerId!==event.pointerId) return;
+  const {overlay,rect:[left,top,width,height],startPoint,startX,startY}=overlayDrag;
+  const bounds=canvas.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+  const point=canvasPoint(event,bounds,canvas.width,canvas.height);
+  const x=overlayPosition(left+point[0]-startPoint[0],canvas.width-width,left,startX);
+  const y=overlayPosition(top+point[1]-startPoint[1],canvas.height-height,top,startY);
+  if (overlay.x===x && overlay.y===y) return;
+  overlay.x=x;
+  overlay.y=y;
+  for (const input of overlay.adjustments) {
+    if (input.dataset.overlay!=='scale') input.value=overlay[input.dataset.overlay];
+  }
+  paint();
+}
+canvas.addEventListener('pointerdown',event=>{
+  if (!event.isPrimary || event.button!==0 || overlayDrag ||
+      !canvas.hasAttribute('data-overlay-editable')) return;
+  const bounds=canvas.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+  const startPoint=canvasPoint(event,bounds,canvas.width,canvas.height);
+  const hit=hitOverlay(...startPoint);
+  if (!hit) return;
+  const {overlay}=hit;
+  canvas.setPointerCapture(event.pointerId);
+  overlayDrag={...hit,pointerId:event.pointerId,startPoint,startX:overlay.x,startY:overlay.y};
+  canvas.setAttribute('data-overlay-dragging','');
+  event.preventDefault();
+});
+canvas.addEventListener('pointermove',moveOverlay);
+canvas.addEventListener('pointerup',event=>{
+  if (overlayDrag?.pointerId!==event.pointerId) return;
+  moveOverlay(event);
+  endOverlayDrag();
+});
+for (const type of ['pointercancel','lostpointercapture']) {
+  canvas.addEventListener(type,event=>{
+    if (overlayDrag?.pointerId===event.pointerId) endOverlayDrag();
+  });
 }
 function nextFrame(time) {
   handle = 0;
@@ -356,9 +433,11 @@ function overlayStatus(overlay,message,isError=false) {
   for (const input of overlay.adjustments) input.disabled=!overlay.bitmap;
 }
 function releaseOverlay(overlay) {
+  if (overlayDrag?.overlay===overlay) endOverlayDrag();
   overlay.pending=null;
   overlay.bitmap?.close();
   overlay.bitmap=null;
+  updateOverlayDragAvailability();
 }
 async function loadOverlay(id,overlay,file) {
   if (!file || busy || !currentZipFiles || accessoryOverlays.get(id)!==overlay) return;
@@ -385,10 +464,12 @@ async function loadOverlay(id,overlay,file) {
     target.drawImage(bitmap,0,0);
     if (!hasOverlayAlpha(target.getImageData(0,0,check.width,check.height).data))
       throw Error('透明な背景が画像の1割以上あり、絵が描かれている素材を選んでください。');
+    if (overlayDrag?.overlay===overlay) endOverlayDrag();
     overlay.bitmap?.close();
     overlay.bitmap=bitmap;
     bitmap=null;
     overlayStatus(overlay,'表示中：'+file.name);
+    updateOverlayDragAvailability();
     paint();
   } catch (error) {
     if (isCurrent()) {
@@ -421,6 +502,7 @@ function createOverlayRow(id) {
     input.value=overlay[key];
     input.addEventListener('input',()=>{
       if (busy || !currentZipFiles || !overlay.bitmap) return;
+      if (overlayDrag?.overlay===overlay) endOverlayDrag();
       overlay[key]=overlayValue(input.valueAsNumber,bounds);
       paint();
     });
@@ -639,6 +721,7 @@ $('zipFile').addEventListener('change',()=>{
   const file=$('zipFile').files?.[0];
   if(file)void importCharacterZip(file);
 });
+$('zipFrames').addEventListener('change',endOverlayDrag);
 
 async function encodeImage(file) {
   const bytes=new Uint8Array(await file.arrayBuffer());
@@ -740,6 +823,7 @@ $('clear').addEventListener('click',()=>{
 });
 $('pause').addEventListener('click',()=>{
   if (!pack || registering) return;
+  endOverlayDrag();
   paused=!paused;
   $('pause').setAttribute('aria-pressed',String(paused));
   $('pause').textContent=paused?'再生する':'停止する';
@@ -761,8 +845,12 @@ $('frames').addEventListener('change',()=>{
 for (const [,input] of keys) $(input).addEventListener('change',()=>{
   if (pack) status('新しい画像を選びました。「選んだPNGで試す」で反映されます。');
 });
-document.addEventListener('visibilitychange',startClock);
-reduced.addEventListener('change',startClock);
+function restartPreview() {
+  endOverlayDrag();
+  startClock();
+}
+document.addEventListener('visibilitychange',restartPreview);
+reduced.addEventListener('change',restartPreview);
 window.addEventListener('pagehide',()=>{
   ++epoch;currentZipFiles=null;resetPack();clearZipEquipment();setRegistering(false);
 });

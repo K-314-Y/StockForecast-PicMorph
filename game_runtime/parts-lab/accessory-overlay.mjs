@@ -78,3 +78,17 @@ export function overlayRect(frameWidth,frameHeight,{bitmap,x,y,scale}) {
   const top=Math.round((frameHeight-height)*(100+overlayValue(y,OVERLAY_POSITION))/200);
   return [left,top,width,height];
 }
+
+export function canvasPoint({clientX,clientY},rect,width,height) {
+  // The canvas has no padding or border and uses object-fit: contain.
+  const fit=Math.min(rect.width/width,rect.height/height);
+  return [
+    (clientX-rect.left-(rect.width-width*fit)/2)/fit,
+    (clientY-rect.top-(rect.height-height*fit)/2)/fit,
+  ];
+}
+
+export function overlayPosition(offset,travel,startOffset,startValue) {
+  if (travel<=0 || Math.round(offset)===startOffset) return startValue;
+  return overlayValue(200*offset/travel-100,OVERLAY_POSITION);
+}

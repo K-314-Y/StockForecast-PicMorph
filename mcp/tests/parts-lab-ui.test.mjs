@@ -11,9 +11,22 @@ import {createGrowthStore} from '../../game_runtime/growth.mjs';
 import {createLookStore} from '../../game_runtime/looks.mjs';
 import {createArtworkStore} from '../../game_runtime/artwork.mjs';
 import {createArtworkExpressionStore} from '../../game_runtime/artwork-expressions.mjs';
+import {canvasPoint,overlayPosition,overlayRect} from '../../game_runtime/parts-lab/accessory-overlay.mjs';
 import {archive} from './zip-fixture.mjs';
 
-test('Chrome previews ZIP accessory pixels and bakes them into the 12-day character portrait',
+test('drag geometry projects a letterboxed frame and preserves fixed axes',()=>{
+  const box={left:10,top:20,width:300,height:200};
+  assert.deepEqual(canvasPoint({clientX:60,clientY:20},box,400,400),[0,0]);
+  assert.deepEqual(canvasPoint({clientX:59,clientY:220},box,400,400),[-2,400]);
+  const overlay={bitmap:{width:400,height:80},x:37,y:0,scale:100};
+  assert.deepEqual(overlayRect(400,400,overlay),[0,160,400,80]);
+  assert.equal(overlayPosition(175,0,0,overlay.x),37);
+  assert.equal(overlayPosition(240,320,160,0),50);
+  assert.equal(overlayPosition(-20,320,160,0),-100);
+  assert.equal(overlayPosition(400,320,160,0),100);
+});
+
+test('Chrome drags ZIP accessories and bakes them into the 12-day character portrait',
   {timeout:45_000},async t=>{
     let playwright;
     try {
@@ -53,7 +66,8 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
       });
       const origin='http://127.0.0.1:'+server.address().port;
       browser=await playwright.chromium.launch({executablePath:process.env.FRIEND_UI_CHROME});
-      const page=await browser.newPage({viewport:{width:390,height:844},reducedMotion:'reduce'});
+      const page=await browser.newPage({viewport:{width:390,height:844},reducedMotion:'reduce',
+        deviceScaleFactor:2,hasTouch:true});
       page.setDefaultTimeout(5000);
       const pageErrors=[];
       const external=[];
@@ -95,21 +109,22 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
           draw(canvas.getContext('2d'));
           return canvas.toDataURL(mime).split(',')[1];
         };
-        const atlas=frames=>({
-          body:image(64*frames,64,ctx=>{
+        const atlas=(frames,side=64)=>({
+          body:image(side*frames,side,ctx=>{
             for (let i=0;i<frames;i++) {
               ctx.fillStyle=i===0?'#15304b':'#305a72';
-              ctx.fillRect(i*64,0,64,64);
+              ctx.fillRect(i*side,0,side,side);
             }
           }),
-          ready:image(64*frames,64,ctx=>{
+          ready:image(side*frames,side,ctx=>{
             ctx.fillStyle='#eeeeee';ctx.fillRect(14,3,4,4);
           }),
-          happy:image(64*frames,64,ctx=>{
+          happy:image(side*frames,side,ctx=>{
             ctx.fillStyle='#ffff00';ctx.fillRect(14,3,4,4);
           }),
         });
-        return {one:atlas(1),six:atlas(6),
+        return {one:atlas(1,400),six:atlas(6),
+          largeRed:image(80,80,ctx=>{ctx.fillStyle='#ff0000';ctx.fillRect(16,16,48,48);}),
           red:image(12,12,ctx=>{ctx.fillStyle='#ff0000';ctx.fillRect(2,2,8,8);}),
           green:image(12,12,ctx=>{ctx.fillStyle='#00ff00';ctx.fillRect(2,2,8,8);},'image/webp'),
           opaque:image(12,12,ctx=>ctx.fillRect(0,0,12,12)),
@@ -131,6 +146,22 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
       const multiZip=await zip(6,fixture.six,{...traits,name:'重ね絵テスト',
         accessories:['star','glasses',{name:'<b>手作り</b>',method:'macd_momentum'}]});
       const row=index=>page.locator('#zipEquipped li').nth(index);
+      const adjustment=(index,key)=>row(index).locator('[data-overlay='+key+']');
+      const position=async index=>Promise.all(['x','y'].map(async key=>
+        Number(await adjustment(index,key).inputValue())));
+      const preview=page.locator('#previewCanvas');
+      const point=async (x,y)=>{
+        const box=await preview.boundingBox();
+        const side=await preview.evaluate(node=>node.width);
+        const size=Math.min(box.width,box.height);
+        return [box.x+(box.width-size)/2+x*size/side,
+          box.y+(box.height-size)/2+y*size/side];
+      };
+      const down=async(x,y)=>{
+        await page.mouse.move(...await point(x,y));
+        await page.mouse.down();
+      };
+      const dragging=()=>preview.getAttribute('data-overlay-dragging');
       const upload=(index,name,data,mimeType='image/png')=>row(index).locator('input[type=file]')
         .setInputFiles({name,mimeType,buffer:bytes(data)});
       const pixels=(selector,x=0,y=0,width=1,height=1)=>page.locator(selector)
@@ -163,12 +194,59 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
       await zipInput.setInputFiles(legacyZip);
       await waitEnabled();
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 1/);
-      assert.deepEqual(await pixel(32,32),bg);
-      await upload(0,'overlay-one.png','red');
+      assert.deepEqual(await pixel(200,200),bg);
+      await upload(0,'overlay-one.png','largeRed');
       await waitEnabled();
-      assert.deepEqual(await pixel(32,32),red);
+      assert.deepEqual(await pixel(200,200),red);
+      await preview.evaluate(node=>{
+        node.style.width='280px';
+        node.style.height='210px';
+      });
+      await preview.scrollIntoViewIfNeeded();
+      const box=await preview.boundingBox();
+      assert.ok(box.width>box.height && box.width<400);
+      assert.equal(await page.evaluate(()=>window.devicePixelRatio),2);
+      for (const [x,y] of [[-20,200],[162,162],[100,100]]) {
+        await down(x,y);
+        assert.equal(await dragging(),null);
+        await page.mouse.move(...await point(250,250),{steps:3});
+        await page.mouse.up();
+        assert.deepEqual(await position(0),[0,0]);
+      }
+
+      // Use Chrome touch input on the running single-frame animation.
+      await page.emulateMedia({reducedMotion:'no-preference'});
+      const cdp=await page.context().newCDPSession(page);
+      const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{
+        type,touchPoints:x===undefined?[]:[{x,y}],
+      });
+      const [touchX,touchY]=await point(195,195);
+      await touch('touchStart',touchX,touchY);
+      assert.equal(await dragging(),'');
+      assert.deepEqual(await preview.evaluate(node=>{
+        const style=getComputedStyle(node);
+        return [style.cursor,style.touchAction,style.animationPlayState];
+      }),['grabbing','none','paused']);
+      const frozen=await preview.boundingBox();
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert.deepEqual(await preview.boundingBox(),frozen);
+      assert.deepEqual(await position(0),[0,0]);
+      await touch('touchMove',touchX+42,touchY-42);
+      await page.waitForFunction(()=>Number(document.querySelector('[data-overlay=x]').value)>45);
+      const [touchPositionX,touchPositionY]=await position(0);
+      assert.ok(Math.abs(touchPositionX-50)<=2 && Math.abs(touchPositionY+50)<=2);
+      assert.deepEqual(await pixel(200,200),bg);
+      assert.deepEqual(await pixel(280,120),red);
+      await touch('touchCancel');
+      assert.equal(await dragging(),null);
+      assert.deepEqual(await position(0),[touchPositionX,touchPositionY]);
+      assert.equal(await preview.evaluate(node=>getComputedStyle(node).animationPlayState),'running');
+      await cdp.detach();
+      await page.emulateMedia({reducedMotion:'reduce'});
+      await preview.evaluate(node=>{node.style.width='';node.style.height='';});
       await row(0).getByRole('button',{name:'重ね絵だけ外す'}).click();
-      assert.deepEqual(await pixel(32,32),bg);
+      assert.deepEqual(await pixel(200,200),bg);
+      assert.equal(await preview.evaluate(node=>getComputedStyle(node).touchAction),'auto');
       assert.equal(await row(0).count(),1);
       assert.deepEqual(writes,[]);
       const legacy=await registerNow();
@@ -196,6 +274,29 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
       const green=await pixel(32,32);
       assert.ok(green[0]<10 && green[1]>245 && green[2]<10 && green[3]===255);
 
+      // Both overlays have a visible pixel here. Only the front one moves.
+      await preview.scrollIntoViewIfNeeded();
+      await preview.evaluate(node=>node.addEventListener('pointerdown',event=>{
+        node.dataset.testPointerId=event.pointerId;
+      },{once:true}));
+      await down(32,32);
+      assert.equal(await dragging(),'');
+      await page.mouse.move(...await point(45,19),{steps:3});
+      assert.deepEqual(await position(0),[0,0]);
+      assert.deepEqual(await position(1),[50,-50]);
+      assert.deepEqual(await pixel(32,32),red);
+      assert.deepEqual(await pixel(45,19),green);
+      await preview.evaluate(node=>node.releasePointerCapture(Number(node.dataset.testPointerId)));
+      await page.mouse.move(...await point(50,15));
+      assert.equal(await dragging(),null);
+      await page.mouse.up();
+      assert.deepEqual(await position(1),[50,-50]);
+      await adjustment(1,'x').fill('0');
+      await adjustment(1,'y').fill('0');
+      await adjustment(1,'y').press('ArrowUp');
+      assert.deepEqual(await position(1),[0,1]);
+      await adjustment(1,'y').fill('0');
+
       await row(0).locator('[data-overlay=x]').fill('100');
       await row(0).locator('[data-overlay=y]').fill('-100');
       await row(0).locator('[data-overlay=scale]').fill('200');
@@ -215,8 +316,14 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
       await upload(2,'overlay-stale.png','red');
       await page.waitForFunction(()=>window.finishOverlay);
       assert.equal(await register.isDisabled(),true);
+      await preview.scrollIntoViewIfNeeded();
+      await down(52,12);
+      assert.equal(await dragging(),'');
       await zipInput.setInputFiles(multiZip);
       await waitEnabled();
+      assert.equal(await dragging(),null);
+      await page.mouse.up();
+      assert.deepEqual(await position(0),[0,0]);
       await page.evaluate(()=>window.finishOverlay());
       await page.waitForFunction(()=>window.closedOverlays.includes('overlay-stale.png'));
       assert.deepEqual(await pixel(32,32),bg);
@@ -226,9 +333,14 @@ test('Chrome previews ZIP accessory pixels and bakes them into the 12-day charac
 
       await upload(0,'overlay-final.png','red');
       await waitEnabled();
-      await row(0).locator('[data-overlay=x]').fill('100');
-      await row(0).locator('[data-overlay=y]').fill('-100');
       await row(0).locator('[data-overlay=scale]').fill('200');
+      await preview.scrollIntoViewIfNeeded();
+      await down(32,32);
+      await page.mouse.move(...await point(80,-10),{steps:4});
+      assert.deepEqual(await position(0),[100,-100]);
+      assert.deepEqual(await pixel(52,12),red);
+      await page.mouse.up();
+      assert.equal(await dragging(),null);
       await upload(1,'overlay-final.webp','green','image/webp');
       await waitEnabled();
       await page.locator('#mood').selectOption('happy');

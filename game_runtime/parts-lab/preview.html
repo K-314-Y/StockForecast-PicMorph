@@ -34,8 +34,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 #stage[data-has-preview=false] #previewCanvas{display:none}
 #stagePlaceholder{text-align:center;color:#d6e2f0;padding:22px}
 #stage[data-has-preview=true] #stagePlaceholder{display:none}
-@keyframes gentle-bob{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-4px) rotate(.4deg)}}
-#stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite}
+@keyframes gentle-bob{0%,100%{transform:translateY(0) rotate(var(--bob-start,-.4deg))}50%{transform:translateY(-4px) rotate(var(--bob-end,.4deg))}}
+#stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite var(--bob-play-state,running)}
+#previewCanvas[data-overlay-editable]{touch-action:none;--bob-start:0deg;--bob-end:0deg}
+#previewCanvas[data-overlay-dragging]{--bob-play-state:paused;cursor:grabbing;-webkit-user-select:none;user-select:none}
 .metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
 .caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
 .generated-import{margin:16px 0;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
@@ -104,7 +106,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
     </fieldset>
   </li>
 </template>
-<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。横・縦位置は中央が0%、端が±100%です。重ね絵は各コマの同じ位置に表示され、登録時に選択中の表情の最初のコマへ合成します。元のアニメーション素材はそのまま保存します。重ね絵なしでも分析装備は登録できます。</p>
+<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。プレビューで重ね絵の見える部分をドラッグして移動できます。横・縦位置は数値欄でも調整でき、中央が0%、端が±100%です。重ね絵は各コマの同じ位置に表示され、登録時に選択中の表情の最初のコマへ合成します。元のアニメーション素材はそのまま保存します。重ね絵なしでも分析装備は登録できます。</p>
 <details>
 <summary>新しいアクセサリーを作る</summary>
 <div class="controls">
