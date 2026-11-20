@@ -255,6 +255,15 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 .lab-table-container tr[data-different="true"]{background:#283851}
 .simple-home{max-width:750px;margin:18px auto}.simple-home .simple-balance{font-size:26px;color:var(--mint);font-weight:800;margin:7px 0}.simple-fields{display:grid;gap:12px;margin:17px 0}.simple-fields label{display:grid;gap:7px;font-weight:750}.simple-fields select,.simple-fields input{width:100%;min-height:50px;background:#101a2e;border:1px solid #7590af;border-radius:12px;padding:12px;color:#f6fbff;font:inherit;font-size:17px}.simple-fields input:focus-visible,.simple-fields select:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-fields .amount-entry{display:flex;align-items:center;gap:8px}.simple-fields .amount-entry input{flex:1;min-width:0}.simple-fields .amount-entry button{flex:none}.simple-home .simple-hint{font-size:13px;color:var(--soft);margin:4px 0}.simple-home .simple-error{color:#ffc8c8;min-height:1.4em}.simple-home .simple-confirm{border:1px solid #58758f;background:#101d31;border-radius:13px;padding:14px;margin:15px 0}.simple-home .simple-result{border:1px solid #638f81;background:#152b31;border-radius:13px;padding:14px;margin-top:18px}.quick-pre-option{display:block;min-block-size:48px;line-height:1.6;overflow-wrap:anywhere}.quick-pre-option input{width:auto;accent-color:var(--mint)}#quickPreReveal{overflow-wrap:anywhere}#quickPreReveal button{max-width:100%;white-space:normal}.quick-replay{margin-top:12px;padding:12px;border:1px solid #638f81;border-radius:12px}.quick-replay nav,.quick-replay [role="group"]{display:flex;flex-wrap:wrap;gap:10px}.quick-replay [role="group"]{margin-top:10px}.quick-replay button{min-height:44px}.quick-replay button:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.quick-replay button:disabled{opacity:.5;cursor:default}.advanced-entry{max-width:1024px;margin:16px auto}.advanced-entry>summary{display:list-item;cursor:pointer;font-weight:750;padding:16px 18px;background:#243653;border:1px solid var(--line);border-radius:13px}.advanced-entry[open]>summary{margin-bottom:18px}.advanced-entry>.panel{margin-left:0;margin-right:0}
 .simple-home .simple-risk{font-size:14px;line-height:1.8;border-left:3px solid #58758f;padding:8px 12px;margin:4px 0;background:#101d31}
+#quickCompare{overflow-wrap:anywhere}
+#quickCompare h3,#quickCompare h4{margin:0 0 8px}
+#quickCompareModel{display:block;width:100%;min-width:0;margin:5px 0 8px;font:inherit}
+#quickCompareModel:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
+#quickCompareResults{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#quickCompareResults article{min-width:0;padding:8px;border:1px solid var(--line);border-radius:10px;background:#101d31}
+#quickCompareResults p{margin:4px 0}
+@media(max-width:550px){#quickCompareResults{grid-template-columns:1fr}}
+.quick-status-announcement{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
 #quickChatGPT button,#quickChatGPTConnection button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 #quickHumanNote{box-sizing:border-box;max-width:100%;min-width:0}
@@ -409,6 +418,15 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  </section>
  <p id="quickPreSummary" class="simple-hint" role="status" aria-live="polite" tabindex="-1" hidden></p>
  <div id="quickResult" class="simple-result" role="status" aria-live="polite" hidden></div>
+ <section id="quickCompare" class="quick-replay" hidden>
+  <h3>別のAIと同じ架空相場で比較</h3>
+  <p class="simple-hint">同じ架空相場の1例を、結果を見た後で振り返ります。初見の予測勝負ではなく、実際の運用成績とは無関係です。</p>
+  <label for="quickCompareModel">比較するAI</label>
+  <select id="quickCompareModel" disabled></select>
+  <button id="quickCompareRun" type="button" aria-controls="quickCompareResults" disabled>比較する</button>
+  <p id="quickCompareStatus" class="simple-hint"></p>
+  <div id="quickCompareResults" hidden></div>
+ </section>
  <section id="quickReplay" class="quick-replay" aria-labelledby="quickReplayTitle" hidden>
   <h3 id="quickReplayTitle">12日間を振り返る</h3>
   <p id="quickReplayDay" role="status" aria-live="polite" aria-atomic="true"></p>

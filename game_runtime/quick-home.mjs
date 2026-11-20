@@ -518,6 +518,7 @@ function findReplayHighlights(balances,liquidatedAt) {
 }
 const signedMoney = value => (value>=0?'+':'')+money(value);
 function clearReplay() {
+  clearCompare();
   clearPreReveal();
   clearSceneVoice();
   replayIsSelf=false;
@@ -734,17 +735,22 @@ async function returnHome() {
   scrollAndFocus('simpleHome','quickModel');
   await loadModels();
 }
-async function request(url,body) {
+async function request(url,body,signal) {
   const response=await fetch(url,body ? {
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
+    ...(signal ? {signal} : {}),
   }:undefined);
   const value=await response.json();
   if(!response.ok)throw Error(value?.error||'サーバーの処理に失敗しました');
   return value;
 }
+let modelListEpoch=0;
+let compareChoices=new Map();
 async function loadModels() {
+  const epoch=++modelListEpoch;
   try {
     const data=await request('/api/model-shop');
+    if(epoch!==modelListEpoch)return;
     const importedWarning=!!data.imported_characters_error;
     const imported=Array.isArray(data.imported_characters)?data.imported_characters:[];
     zipCharacters=imported.filter(item=>
@@ -754,9 +760,12 @@ async function loadModels() {
     for(const character of zipCharacters)
       next.push({id:character.id,name:character.name+'（ZIP専用AI・未学習）'});
     for(const model of data.models || []) {
-      if(model.owned && typeof model.id==='string' && typeof model.name==='string')
+      if(model.owned===true && typeof model.id==='string' && typeof model.name==='string')
         next.push({id:model.id,name:model.name+'（解放済み）'});
     }
+    const registeredIds=new Set(zipCharacters.map(({id})=>id));
+    compareChoices=new Map(next.filter(({id})=>id==='self' ||
+      /^demo_[a-z_]{1,40}$/.test(id) || registeredIds.has(id)).map(({id,name})=>[id,name]));
     const prior=modelField.value;
     modelField.replaceChildren();
     for(const item of next){
@@ -768,11 +777,13 @@ async function loadModels() {
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
     showLinkedZip();
     if(prior && prior!==modelField.value)clearReplay();
+    if(compareBase)refreshCompareModels();
     statusField.textContent=(next.length>1 ?
       '自作AIと、登録済み・解放済みのAIから選べます。' :
       '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。')+
       (importedWarning ? ' ZIPキャラ一覧の読み込みには失敗しました。' : '');
   } catch {
+    if(epoch!==modelListEpoch)return;
     clearFreeChatGPT();
     statusField.textContent='モデル一覧を読み込めません。自分のAIで練習できます。';
   }
@@ -844,6 +855,171 @@ element('quickAgain').addEventListener('click',()=>{
   resetReview();
   scrollAndFocus('simpleHome','quickAmount');
 });
+function validPracticeResult(value,ordered) {
+  return value?.mode==='SIMPLE_SYNTHETIC_PRACTICE_ONLY' &&
+    value.real_market===false && value.persisted===false &&
+    value.invested_coins===ordered.amount && value.leverage===ordered.leverage &&
+    Array.isArray(value.daily_ai_signals) && value.daily_ai_signals.length===12 &&
+    Array.from(value.daily_ai_signals).every(signal=>signal==='LONG'||signal==='CASH') &&
+    Array.isArray(value.daily_synthetic_prices) && value.daily_synthetic_prices.length===13 &&
+    Array.from(value.daily_synthetic_prices).every(price=>Number.isFinite(price)&&price>0&&price<=1e12) &&
+    Array.isArray(value.daily_balances) && value.daily_balances.length===13 &&
+    Array.from(value.daily_balances).every(balance=>
+      Number.isFinite(balance)&&balance>=0&&balance<=Number.MAX_SAFE_INTEGER) &&
+    value.daily_balances[0]===BALANCE && Number.isFinite(value.final_balance) &&
+    Math.abs(value.daily_balances[12]-value.final_balance)<=0.01 &&
+    Number.isFinite(value.profit_coins) && value.final_balance>=0 && value.profit_coins>=-ordered.amount &&
+    (value.liquidated_at_step===null || (Number.isInteger(value.liquidated_at_step) &&
+      value.liquidated_at_step>=1 && value.liquidated_at_step<=12));
+}
+function validCompareOutcome(value,modelId) {
+  return value.model_id===modelId && value.order_placed===false && value.xp_awarded===false &&
+    Number.isFinite(value.max_drawdown_pct) && value.max_drawdown_pct>=0 && value.max_drawdown_pct<=100;
+}
+function practiceModelName(value,ordered) {
+  return ordered.model_id==='self' && (value.model_id===undefined || value.model_id==='self') &&
+    typeof value.companion_name==='string' && value.companion_name.trim() ?
+    '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
+}
+
+const compareModel = element('quickCompareModel');
+const compareRun = element('quickCompareRun');
+const compareStatus = element('quickCompareStatus');
+const compareResults = element('quickCompareResults');
+const compareAnnouncement = document.createElement('span');
+compareAnnouncement.className='quick-status-announcement';
+let compareBase = null;
+let compareEpoch = 0;
+let compareController = null;
+let compareBusy = false;
+
+function resetCompareResult() {
+  compareEpoch++;
+  compareController?.abort();
+  compareController=null;
+  compareBusy=false;
+  compareResults.hidden=true;
+  compareResults.replaceChildren();
+  compareStatus.textContent='';
+  compareAnnouncement.textContent='';
+}
+function clearCompare() {
+  compareBase=null;
+  element('quickCompare').hidden=true;
+  resetCompareResult();
+  compareModel.replaceChildren();
+  compareModel.disabled=compareRun.disabled=true;
+}
+function selectedCompareModel() {
+  const id=compareModel.value;
+  return id!==compareBase?.model_id && compareChoices.has(id) ? id : null;
+}
+function updateCompareControls() {
+  compareModel.disabled=!compareBase || compareBusy || compareModel.children.length<=1;
+  compareRun.disabled=compareModel.disabled || !selectedCompareModel();
+}
+function refreshCompareModels() {
+  const prior=compareModel.value;
+  const choices=[...compareChoices].filter(([id])=>id!==compareBase.model_id);
+  const options=compareModel.children;
+  if(options.length===choices.length+1 && choices.every(([id,name],index)=>
+    options[index+1].value===id && options[index+1].textContent===name))return;
+  const placeholder=document.createElement('option');
+  placeholder.value='';
+  placeholder.textContent='AIを選択';
+  compareModel.replaceChildren(placeholder,...choices.map(([id,name])=>{
+    const option=document.createElement('option');
+    option.value=id;
+    option.textContent=name;
+    return option;
+  }));
+  compareModel.value=choices.some(([id])=>id===prior) ? prior : '';
+  if(prior && !compareModel.value) {
+    resetCompareResult();
+    compareStatus.textContent='選んだAIは現在利用できません。別のAIを選んでください。';
+  } else if(compareBusy || !compareResults.hidden) {
+    resetCompareResult();
+    compareStatus.textContent='AI一覧を更新しました。もう一度比較できます。';
+  }
+  if(!choices.length)compareStatus.textContent='選べるAIが1種類のため、比較できません。';
+  else if(!prior)compareStatus.textContent='';
+  updateCompareControls();
+}
+function setCompareMessage(message) {
+  compareStatus.textContent=message;
+  if(compareAnnouncement.parentNode!==statusField)statusField.append(compareAnnouncement);
+  compareAnnouncement.textContent=message;
+}
+function showCompare(value,ordered,modelName) {
+  if(!validCompareOutcome(value,ordered.model_id))return;
+  compareBase={model_id:ordered.model_id,model_name:modelName,
+    amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,
+    daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
+    max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step};
+  refreshCompareModels();
+  element('quickCompare').hidden=false;
+}
+function compareCard(label,name,value) {
+  const card=document.createElement('article');
+  const heading=document.createElement('h4');
+  heading.textContent=label+'：'+name;
+  card.append(heading);
+  for(const text of [
+    '架空の損益：'+signedMoney(value.profit_coins)+' C',
+    '最大下落率：'+money(value.max_drawdown_pct)+'%',
+    '強制終了：'+(value.liquidated_at_step===null ? 'なし' : '第'+value.liquidated_at_step+'日'),
+  ]) {
+    const line=document.createElement('p');
+    line.textContent=text;
+    card.append(line);
+  }
+  return card;
+}
+compareModel.addEventListener('change',()=>{
+  if(!compareBase || compareModel.disabled)return;
+  resetCompareResult();
+  updateCompareControls();
+});
+compareRun.addEventListener('click',async()=>{
+  const base=compareBase,modelId=selectedCompareModel();
+  if(busy || compareBusy || !base || !modelId)return;
+  resetCompareResult();
+  const controller=new AbortController();
+  compareController=controller;
+  compareBusy=true;
+  const baseEpoch=practiceEpoch,reqEpoch=compareEpoch;
+  const ordered={model_id:modelId,amount:base.amount,leverage:base.leverage,
+    scenario_token:base.scenario_token};
+  const modelName=compareChoices.get(modelId);
+  const current=()=>practiceEpoch===baseEpoch && compareEpoch===reqEpoch &&
+    selectedCompareModel()===modelId;
+  updateCompareControls();
+  compareStatus.textContent='比較を計算しています…';
+  try {
+    const value=await request('/api/quick-practice',ordered,controller.signal);
+    if(!current())return;
+    if(!value || typeof value!=='object' || Object.getPrototypeOf(value)!==Object.prototype ||
+       !validPracticeResult(value,ordered) || !validCompareOutcome(value,modelId) ||
+       value.scenario_kind!=='replay' || value.scenario_token!==base.scenario_token ||
+       value.initial_balance!==BALANCE || value.cash_held!==BALANCE-base.amount ||
+       !base.daily_synthetic_prices.every((price,index)=>Object.hasOwn(value.daily_synthetic_prices,index) &&
+         Object.is(price,value.daily_synthetic_prices[index]))) {
+      throw Error('比較条件を確認できませんでした');
+    }
+    compareResults.replaceChildren(compareCard('A',base.model_name,base),
+      compareCard('B',practiceModelName(value,{...ordered,model_name:modelName}),value));
+    compareResults.hidden=false;
+    setCompareMessage('架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）');
+  } catch {
+    if(current())setCompareMessage('比較できませんでした。もう一度お試しください。');
+  } finally {
+    if(compareEpoch===reqEpoch) {
+      compareController=null;
+      compareBusy=false;
+      updateCompareControls();
+    }
+  }
+});
 function revealResult(value,ordered) {
   const panel=element('quickResult');
   panel.replaceChildren();
@@ -851,9 +1027,7 @@ function revealResult(value,ordered) {
   heading.textContent='12日間の試算結果';
   const summary=document.createElement('p');
   const isSelf=ordered.model_id==='self' && (value.model_id===undefined || value.model_id==='self');
-  const resultModelName=isSelf &&
-    typeof value.companion_name==='string' && value.companion_name.trim() ?
-    '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
+  const resultModelName=practiceModelName(value,ordered);
   summary.textContent='今回のAI：'+resultModelName+' ／ 試算額：'+money(ordered.amount)+' C ／ '+
     (ordered.leverage===1 ? '損益倍率：×1 ／ 損益：' :
       '同じAI・同じ相場・同じ試算額で、通常（×1）の損益：'+
@@ -893,9 +1067,10 @@ function revealResult(value,ordered) {
   panel.hidden=false;
   element('quickNext').hidden=false;
   statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
+  showCompare(value,ordered,resultModelName);
 }
 element('quickRun').addEventListener('click',async()=>{
-  if(busy||!pending)return;
+  if(busy||compareBusy||!pending)return;
   const beforeReveal=element('quickPreOptIn').checked;
   clearReplay();
   element('quickResult').replaceChildren();
@@ -913,30 +1088,13 @@ element('quickRun').addEventListener('click',async()=>{
     const value=await request('/api/quick-practice',{
       model_id:ordered.model_id,amount:ordered.amount,leverage:ordered.leverage,
       ...(ordered.scenario_token ? {scenario_token:ordered.scenario_token} : {})});
-    if(!validScenarioToken(value.scenario_token)||
+    if(!validPracticeResult(value,ordered)||
+       !validScenarioToken(value.scenario_token)||
        value.scenario_kind!==(ordered.scenario_token ? 'replay' : 'new')||
        (ordered.scenario_token && value.scenario_token!==ordered.scenario_token)||
-       value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY'||value.real_market!==false||
-       value.persisted!==false||value.invested_coins!==ordered.amount||
-       value.leverage!==ordered.leverage ||
-       !Array.isArray(value.daily_ai_signals)||value.daily_ai_signals.length!==12||
-       !Array.from(value.daily_ai_signals).every(signal=>signal==='LONG'||signal==='CASH')||
-       !Array.isArray(value.daily_synthetic_prices)||value.daily_synthetic_prices.length!==13||
-       !Array.from(value.daily_synthetic_prices).every(price=>
-         Number.isFinite(price)&&price>0&&price<=1e12)||
-       !Array.isArray(value.daily_balances)||value.daily_balances.length!==13||
-       !Array.from(value.daily_balances).every(balance=>
-         Number.isFinite(balance)&&balance>=0&&balance<=Number.MAX_SAFE_INTEGER)||
-       value.daily_balances[0]!==BALANCE||
-       Math.abs(value.daily_balances[12]-value.final_balance)>0.01||
-       !Number.isFinite(value.final_balance)||!Number.isFinite(value.profit_coins)||
        !Number.isFinite(value.normal_profit_coins)||
        !Number.isFinite(value.normal_final_balance)||
-       !Number.isFinite(value.normal_max_drawdown_pct)||
-       value.final_balance<0 || value.profit_coins < -ordered.amount ||
-       !(value.liquidated_at_step===null ||
-         (Number.isInteger(value.liquidated_at_step) && value.liquidated_at_step>=1 &&
-          value.liquidated_at_step<=12)))
+       !Number.isFinite(value.normal_max_drawdown_pct))
       throw Error('練習結果の形式が不正です');
     if(epoch!==practiceEpoch)return;
     if(beforeReveal) {

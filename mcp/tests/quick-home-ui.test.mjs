@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {runInNewContext} from 'node:vm';
+import {createContext,runInContext} from 'node:vm';
 
 const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.meta.url),'utf8');
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
@@ -33,7 +33,10 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     removeAttribute(key){delete this.attributes[key];if(key==='src'){this.complete=false;this.naturalWidth=0;}}
     addEventListener(name,handler){this.handlers[name]=handler;}
     replaceChildren(...children){this.children=children;if(this.tagName==='SELECT')this.value='';}
-    append(...children){this.children.push(...children);}
+    append(...children){
+      this.children.push(...children);
+      for(const child of children)child.parentNode=this;
+    }
     focus(options){document.activeElement=this;this.focusOptions=options;}
     blur(){if(document.activeElement===this)document.activeElement=null;}
     scrollIntoView(){scrolls.push(this);}
@@ -55,9 +58,10 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
   const state={models,imported,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
-    mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
+    mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,order_placed:false,xp_awarded:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
     scenario_kind:body.scenario_token?'replay':'new',
+    model_id:body.model_id,initial_balance:10000,cash_held:10000-body.amount,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
     daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
@@ -80,8 +84,11 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     }
     assert.equal(path,'/api/quick-practice');
     assert.equal(options.method,'POST');
-    const value=await state.practice(body);
-    return {ok:!value.error,json:async()=>value};
+    const value=await state.practice(body,options);
+    return {ok:!value?.error && !state.practiceHttpError,json:async()=>{
+      if(state.practiceNonJson)throw SyntaxError('invalid JSON');
+      return parseJson(JSON.stringify(value));
+    }};
   };
   const storage={
     getItem:()=>null,
@@ -101,11 +108,13 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   const windowHandlers={};
   context.addEventListener=(event,handler)=>{windowHandlers[event]=handler;};
   context.window=context;
-  runInNewContext(script,context);
+  createContext(context);
+  const parseJson=runInContext('source=>JSON.parse(source)',context);
+  runInContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
   return {get,calls,scrolls,storageWrites,copies,document,state,sourceChanged:()=>observeSource(),
-    pagehide:()=>windowHandlers.pagehide?.(),
+    pagehide:()=>windowHandlers.pagehide?.(),focus:()=>windowHandlers.focus?.(),
     fire:(id,event)=>get(id).fire(event)};
 }
 
@@ -2277,7 +2286,7 @@ function assertPreCue(get,reaction,owner='冒険ガイド') {
   assert.equal(get('quickPreCueText').textContent,reaction ? owner+'：'+label : '');
 }
 function assertFinalHidden(get) {
-  for(const id of ['quickResult','quickReplay','quickNext'])assert.equal(get(id).hidden,true,id);
+  for(const id of ['quickResult','quickReplay','quickNext','quickCompare'])assert.equal(get(id).hidden,true,id);
   assert.equal(get('quickResult').children.length,0);
   for(const id of ['quickReplayDay','quickReplayContext','quickCompanionStrategy'])assert.equal(get(id).textContent,'');
   for(const id of ['quickBestDay','quickWorstDay']) {
@@ -2899,4 +2908,312 @@ test('sprint75: abandoning a blind run and pagehide in flight never unlock a tok
   await resolve();await running;
   await fire('quickForm','submit');
   assert.equal(get('quickScenarioOption').hidden,true);
+});
+
+const compareDemo={id:'demo_trend',name:'流れを見るAI',owned:true};
+
+async function runQuickPractice(ui) {
+  await ui.fire('quickForm','submit');
+  await ui.fire('quickRun');
+}
+async function chooseCompareModel(ui,id=compareDemo.id) {
+  ui.get('quickCompareModel').value=id;
+  await ui.fire('quickCompareModel','change');
+}
+
+test('same-scenario comparison is separate from the original result and uses labelled native controls',()=>{
+  const nodes=htmlNodes();
+  const section=nodes.find(node=>node.id==='quickCompare');
+  assert.equal(section.tag,'section');
+  assert.match(section.attributes,/\bhidden\b/);
+  assert.ok(section.parents.includes('simpleHome'));
+  assert.ok(!section.parents.includes('quickResult'));
+  assert.match(html,/<label for="quickCompareModel">比較するAI<\/label>/);
+  assert.match(html,/<button id="quickCompareRun" type="button"/);
+  assert.match(html,/同じ架空相場の1例.*初見の予測勝負ではなく.*実際の運用成績とは無関係/);
+  assert.doesNotMatch(nodes.find(node=>node.id==='quickCompareStatus').attributes,/role=|aria-live=/);
+});
+
+test('A then ZIP B shares the exact scenario, amount and leverage without changing the original practice',async()=>{
+  const zipId='zip_'+'a'.repeat(32);
+  const zipName='<img src=x onerror=alert(1)>ラベンダー';
+  const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:zipName,model_version:'v1'}]);
+  const {get,fire,state,calls,storageWrites}=ui;
+  const practice=state.practice;
+  state.practice=async body=>{
+    const value=await practice(body);
+    return body.model_id==='self' ? {...value,companion_name:'相棒<&>'} : {
+      ...value,profit_coins:-1250,max_drawdown_pct:100,liquidated_at_step:3,final_balance:8750,
+      daily_balances:[10000,9980,9900,...Array(10).fill(8750)],companion_name:'応答内の別名',
+    };
+  };
+  get('quickAmount').value='1250';
+  get('quickLeverage').value='7';
+  assertFinalHidden(get);
+  await runQuickPractice(ui);
+  assert.equal(get('quickCompare').hidden,false);
+  assert.equal(get('quickCompareRun').disabled,true);
+  assert.deepEqual(get('quickCompareModel').children.map(option=>option.value),['',zipId,compareDemo.id]);
+  await fire('quickFollowing');
+  await shareReflection(get,fire);
+  const originalResult=get('quickResult').children;
+  const originalDay=get('quickReplayDay').textContent;
+  const originalReflection=get('quickFreePrompt').value;
+  const originalMood=get('scene').dataset.mood;
+  await chooseCompareModel(ui,zipId);
+  assert.equal(get('quickCompareRun').disabled,false);
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareResults').hidden,false);
+  assert.deepEqual(get('quickCompareResults').children.map(card=>card.children.map(row=>row.textContent)),[
+    ['A：自分のAI（相棒：相棒<&>）','架空の損益：+25 C','最大下落率：1%','強制終了：なし'],
+    ['B：'+zipName+'（ZIP専用AI・未学習）','架空の損益：-1,250 C','最大下落率：100%','強制終了：第3日'],
+  ]);
+  assert.match(get('quickCompareStatus').textContent,/架空価格13点共通／投入額・倍率共通（1,250 C・×7）/);
+  assert.equal(get('quickResult').children,originalResult);
+  assert.equal(get('quickReplayDay').textContent,originalDay);
+  assert.equal(get('quickFreePrompt').value,originalReflection);
+  assert.equal(get('scene').dataset.mood,originalMood);
+  assert.equal(get('quickModel').value,'self');
+  assert.equal(get('quickSameScenario').checked,false);
+  assert.deepEqual(calls,[
+    {path:'/api/model-shop',body:undefined},
+    {path:'/api/quick-practice',body:{model_id:'self',amount:1250,leverage:7}},
+    {path:'/api/quick-practice',body:{model_id:zipId,amount:1250,leverage:7,scenario_token:'v1_0123456789abcdef'}},
+  ]);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('comparison rejects the same model, unowned demo IDs and unregistered ZIP IDs',async()=>{
+  const unregistered='zip_'+'b'.repeat(32);
+  const ui=await mount([
+    {id:'demo_locked',name:'未解放',owned:false},
+    {id:'demo_malformed',name:'所有フラグ不正',owned:'true'},
+    {id:unregistered,name:'未登録',owned:true},
+  ]);
+  const {get,fire,calls}=ui;
+  await runQuickPractice(ui);
+  assert.equal(get('quickCompareModel').disabled,true);
+  assert.equal(get('quickCompareRun').disabled,true);
+  assert.match(get('quickCompareStatus').textContent,/1種類のため、比較できません/);
+  for(const id of ['self','demo_locked','demo_malformed',unregistered]) {
+    await chooseCompareModel(ui,id);
+    await fire('quickCompareRun');
+  }
+  assert.equal(calls.length,2);
+  assert.equal(get('quickCompareResults').hidden,true);
+});
+
+test('legacy self responses reveal normal practice while comparison requires the newer safety fields',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state,calls}=ui;
+  const practice=state.practice;
+  state.practice=async body=>{
+    const legacy=await practice(body);
+    for(const key of ['model_id','order_placed','xp_awarded'])delete legacy[key];
+    return legacy;
+  };
+  await runQuickPractice(ui);
+  assert.equal(get('quickResult').hidden,false);
+  assert.equal(get('quickReplay').hidden,false);
+  assert.match(get('quickResult').children[1].textContent,/自分のAI.*損益：\+25 C/);
+  assert.equal(get('quickCompare').hidden,true);
+  assert.equal(get('quickCompareRun').disabled,true);
+  await chooseCompareModel(ui);
+  await fire('quickCompareRun');
+  assert.equal(calls.length,2);
+});
+
+test('B only renders a plain synthetic result with matching inputs and all 13 exact prices',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui;
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  const practice=state.practice;
+  const base=get('quickResult').children;
+  const valid=await practice({model_id:compareDemo.id,amount:1000,leverage:1,scenario_token:'v1_0123456789abcdef'});
+  const patches=[
+    {scenario_token:'v1_ffffffffffffffff'},{scenario_kind:'new'},{model_id:'self'},
+    {invested_coins:'1000'},{leverage:2},{initial_balance:9999},{cash_held:0},
+    {mode:'FX_MOCK_PAPER_ONLY'},{real_market:true},{persisted:true},
+    {order_placed:true},{xp_awarded:undefined},
+    {daily_synthetic_prices:valid.daily_synthetic_prices.slice(1)},
+    {daily_synthetic_prices:valid.daily_synthetic_prices.map((price,i)=>i===12?price+1e-12:price)},
+    // JSON represents a hole as null, which must also be rejected as a price.
+    {daily_synthetic_prices:[null,...valid.daily_synthetic_prices.slice(1)]},
+    {daily_ai_signals:Array(12).fill('SHORT')},{daily_ai_signals:Array(11).fill('CASH')},
+    {daily_balances:Array(13).fill(Infinity)},{daily_balances:[]},
+    {profit_coins:-1001},{profit_coins:Infinity},{max_drawdown_pct:Infinity},{max_drawdown_pct:101},
+    {liquidated_at_step:0},{liquidated_at_step:1.5},{liquidated_at_step:13},
+    null,[],
+  ];
+  for(const patch of patches) {
+    state.practice=async body=>patch===null || Array.isArray(patch) ? patch : {...await practice(body),...patch};
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareResults').hidden,true,JSON.stringify(patch));
+    assert.equal(get('quickCompareResults').children.length,0);
+    assert.match(get('quickCompareStatus').textContent,/比較できませんでした。もう一度/);
+    assert.equal(get('quickResult').children,base);
+    assert.equal(get('quickReplay').hidden,false);
+    assert.equal(get('quickCompareRun').disabled,false);
+  }
+  state.practice=practice;
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareResults').hidden,false);
+});
+
+test('B HTTP errors and invalid JSON clear a prior B while preserving A and allowing retry',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui;
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  const base=get('quickResult').children;
+  for(const failure of [403,404,409,429,503,'non-JSON']) {
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareResults').hidden,false);
+    state.practiceHttpError=Number.isInteger(failure) ? failure : null;
+    state.practiceNonJson=failure==='non-JSON';
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareResults').hidden,true);
+    assert.equal(get('quickCompareResults').children.length,0);
+    assert.match(get('quickCompareStatus').textContent,/比較できませんでした/);
+    assert.equal(get('quickResult').children,base);
+    assert.equal(get('quickResult').hidden,false);
+    assert.equal(get('quickCompareRun').disabled,false);
+    state.practiceHttpError=null;
+    state.practiceNonJson=false;
+  }
+});
+
+test('comparison only unlocks after the optional three-decision result is revealed',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,calls}=ui;
+  await startPreReveal(ui);
+  for(let i=0;i<3;i++) {
+    assertFinalHidden(get);
+    await chooseCompareModel(ui);
+    await fire('quickCompareRun');
+    assert.equal(calls.length,2);
+    await fire('quickPreBuy');
+    assertFinalHidden(get);
+    await fire('quickPreNext');
+  }
+  assert.equal(get('quickCompare').hidden,false);
+  assert.equal(get('quickCompareResults').hidden,true);
+});
+
+test('comparison aborts on pagehide, retry, model changes and updates to the comparison choices',async()=>{
+  for(const event of ['pagehide','quickAgain','switch','rename','remove']) {
+    const ui=await mount([compareDemo]);
+    const {get,fire,state,calls,pagehide}=ui;
+    await runQuickPractice(ui);
+    await chooseCompareModel(ui);
+    const practice=state.practice;
+    let complete,signal;
+    state.practice=(body,options)=>{
+      signal=options.signal;
+      return new Promise(resolve=>{complete=async()=>resolve(await practice(body));});
+    };
+    const running=fire('quickCompareRun');
+    assert.equal(get('quickCompareRun').disabled,true);
+    await fire('quickCompareRun');
+    await fire('quickRun');
+    assert.equal(calls.length,3,'only one B request');
+    if(event==='pagehide')pagehide();
+    else if(event==='switch'){
+      get('quickModel').value=compareDemo.id;
+      await fire('quickModel','change');
+    } else if(event==='rename' || event==='remove') {
+      state.models=event==='remove' ? [] : [{...compareDemo,name:'改名したAI'}];
+      await fire('shopReturn');
+      assert.equal(get('quickResult').hidden,false);
+    } else await fire(event);
+    assert.equal(signal.aborted,true,event);
+    await complete();await running;
+    assert.equal(get('quickCompareResults').hidden,true,event);
+    assert.equal(get('quickCompareResults').children.length,0,event);
+    if(event==='rename')assert.equal(get('quickCompareRun').disabled,false);
+    else assert.equal(get('quickCompareRun').disabled,true);
+  }
+});
+
+test('focus refresh preserves pending and displayed B for an identical list and clears B when removed',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state,calls,focus}=ui;
+  const refresh=async()=>{
+    focus();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(calls.at(-1),{path:'/api/model-shop',body:undefined});
+  };
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  const original=state.practice;
+  const {promise,resolve}=Promise.withResolvers();
+  let signal;
+  state.practice=(body,options)=>{
+    signal=options.signal;
+    return promise.then(()=>original(body));
+  };
+  const running=fire('quickCompareRun');
+  const options=get('quickCompareModel').children;
+  state.models=[{...compareDemo}];
+  await refresh();
+  assert.equal(get('quickCompareModel').children,options);
+  assert.equal(signal.aborted,false);
+  assert.equal(get('quickCompareRun').disabled,true);
+  resolve();
+  await running;
+  const cards=get('quickCompareResults').children;
+  assert.equal(cards.length,2);
+  await refresh();
+  assert.equal(get('quickCompareResults').hidden,false);
+  assert.equal(get('quickCompareResults').children,cards);
+  assert.equal(get('quickCompareModel').value,compareDemo.id);
+  state.models=[];
+  await refresh();
+  assert.equal(get('quickCompareResults').hidden,true);
+  assert.equal(get('quickCompareResults').children.length,0);
+  assert.equal(get('quickCompareRun').disabled,true);
+  assert.equal(get('quickResult').hidden,false);
+  assert.equal(calls.filter(({path})=>path==='/api/quick-practice').length,2);
+});
+
+test('late B cannot clear the busy state or render over B for a newer A',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui;
+  const practice=state.practice;
+  let oldComplete,newComplete;
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  state.practice=body=>new Promise(resolve=>{oldComplete=async()=>resolve(await practice(body));});
+  const old=fire('quickCompareRun');
+  await fire('quickAgain');
+  state.practice=async body=>({...await practice(body),scenario_token:'v1_ffffffffffffffff'});
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  state.practice=body=>new Promise(resolve=>{newComplete=async()=>resolve(await practice(body));});
+  const current=fire('quickCompareRun');
+  await oldComplete();await old;
+  assert.equal(get('quickCompareResults').hidden,true);
+  assert.equal(get('quickCompareRun').disabled,true);
+  await newComplete();await current;
+  assert.equal(get('quickCompareResults').hidden,false);
+  assert.equal(get('quickCompareRun').disabled,false);
+});
+
+test('model refresh invalidates completed comparison if either model disappears',async()=>{
+  for(const removed of ['A','B']) {
+    const ui=await mount([compareDemo]);
+    const {get,fire,state}=ui;
+    if(removed==='A')get('quickModel').value=compareDemo.id;
+    await runQuickPractice(ui);
+    await chooseCompareModel(ui,removed==='A'?'self':compareDemo.id);
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareResults').hidden,false);
+    state.models=[];
+    await fire('shopReturn');
+    assert.equal(get('quickCompare').hidden,removed==='A');
+    assert.equal(get('quickCompareResults').hidden,true);
+    assert.equal(get('quickCompareResults').children.length,0);
+    assert.equal(get('quickCompareRun').disabled,true);
+  }
 });
