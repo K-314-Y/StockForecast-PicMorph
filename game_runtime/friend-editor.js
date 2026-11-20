@@ -78,6 +78,10 @@ const logout = byId('logout');
 const logoutDialog = byId('logout-dialog');
 const retryReads = byId('retry-reads');
 const refreshMock = byId('refresh-mock');
+const practiceRefresh = byId('practice-refresh');
+const practiceStart = byId('practice-start');
+const practiceReveal = byId('practice-reveal');
+const practiceRequirement = byId('practice-requirement');
 const wallet = byId('wallet');
 const forecast = byId('forecast');
 const savedCompanion = byId('saved-companion');
@@ -111,6 +115,7 @@ function previewEdits() {
 let session;
 let operation;
 let failedReads = [];
+let practiceState = null;
 
 function draftValues(group) {
   return Object.fromEntries(Object.entries(group.inputs).map(([key, input]) =>
@@ -151,6 +156,7 @@ function syncControls() {
   retryReads.disabled = busy;
   retryReads.hidden = failedReads.length === 0;
   refreshMock.disabled = busy;
+  practiceRefresh.disabled = busy;
   for (const group of Object.values(groups)) {
     const dirty = isDirty(group);
     const hasConflict = Boolean(group.pendingDraft);
@@ -161,7 +167,14 @@ function syncControls() {
     const text = hasConflict ? '未保存の下書きあり' : dirty ? '未保存の変更あり' : '';
     if (group.dirtyStatus.textContent !== text) group.dirtyStatus.textContent = text;
   }
-  if (hasUnsaved()) window.addEventListener('beforeunload', warnBeforeLeaving);
+  const unsaved = hasUnsaved();
+  const practiceBlocked = unsaved || !groups.companion.saved?.created || failedReads.includes(profileRead);
+  practiceStart.disabled = busy || practiceBlocked;
+  practiceReveal.disabled = busy;
+  practiceRequirement.hidden = practiceState?.status !== 'ready' || !practiceBlocked;
+  practiceRequirement.textContent = practiceRequirement.hidden ? '' :
+    '相棒と戦略を保存し、両方のフォームの未保存の変更を解消すると開始できます。';
+  if (unsaved) window.addEventListener('beforeunload', warnBeforeLeaving);
   else window.removeEventListener('beforeunload', warnBeforeLeaving);
 }
 
@@ -174,6 +187,7 @@ function clearAccount() {
   for (const element of [accountId, wallet, forecast, savedCompanion, editableVersion, previewName,
     predictionStep, resultStep, profileError, groups.companion.revision, groups.look.revision]) element.textContent = '';
   clearRecord();
+  renderPractice(null);
   for (const group of Object.values(groups)) {
     group.saved = group.pendingDraft = undefined;
     group.form.reset();
@@ -404,6 +418,91 @@ function renderForecast(record, failed = false) {
   recordPanel.hidden = false;
 }
 
+const practiceIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const practiceLabels = {
+  unconfigured:'架空練習は未接続です。',
+  ready:'この口座で1ラウンド練習できます。',
+  starting:'予測を確定しています。練習状態を再取得できます。',
+  frozen:'予測を確定しました。結果を公開すると採点します。',
+  exhausted:'結果を公開しました。このサーバーでの1ラウンドは終了です。',
+};
+
+function validatePractice(data) {
+  checked(isObject(data) && Object.hasOwn(practiceLabels, data.status));
+  if (['unconfigured', 'ready', 'starting'].includes(data.status)) {
+    checked(exact(data, ['status']));
+    return data;
+  }
+  const fields = ['status', 'round_id', 'companion_revision', 'model_version', 'risk_percent',
+    'issuedAt', 'targetAt', 'probabilities', 'direction'];
+  const revealed = data.status === 'exhausted';
+  if (revealed) fields.push('result');
+  const {probabilities, direction, result} = data;
+  checked(exact(data, fields) && matches(practiceIdPattern, data.round_id) &&
+    Number.isSafeInteger(data.companion_revision) && data.companion_revision > 0 &&
+    matches(modelPattern, data.model_version) && Number.isInteger(data.risk_percent) &&
+    data.risk_percent >= 5 && data.risk_percent <= 100 && data.risk_percent % 5 === 0 &&
+    validTimestamp(data.issuedAt) && validTimestamp(data.targetAt) && data.issuedAt < data.targetAt &&
+    exact(probabilities, directions) && directions.every(key =>
+      Number.isFinite(probabilities[key]) && probabilities[key] >= 0 && probabilities[key] <= 1) &&
+    Math.abs(probabilities.UP + probabilities.FLAT + probabilities.DOWN - 1) <= 1e-12);
+  const top = Math.max(...Object.values(probabilities));
+  const leaders = directions.filter(key => probabilities[key] === top);
+  checked(direction === (leaders.length === 1 ? leaders[0] : null));
+  if (revealed) {
+    checked(exact(result, ['referencePrice', 'targetPrice', 'scoredAt', 'actualChangePct',
+      'actualDirection', 'brier', 'directionCorrect']) &&
+      [result.referencePrice, result.targetPrice].every(price =>
+        Number.isFinite(price) && price >= .000001 && price <= 1_000_000_000) &&
+      result.scoredAt === data.targetAt && Number.isFinite(result.actualChangePct) &&
+      directions.includes(result.actualDirection) &&
+      result.directionCorrect === (direction === null ? null : direction === result.actualDirection) &&
+      Number.isFinite(result.brier) && result.brier >= 0 && result.brier <= 2);
+  }
+  return data;
+}
+
+const practicePrediction = byId('practice-prediction');
+const practiceResult = byId('practice-result');
+const practiceValues = document.querySelectorAll('.practice dd');
+
+function renderPractice(state, failed = false) {
+  practiceState = state;
+  const status = state?.status;
+  byId('practice-status').textContent = failed ? '練習状態を取得できませんでした。' : practiceLabels[status] ?? '';
+  practiceRefresh.hidden = !status || status === 'unconfigured';
+  practiceStart.hidden = status !== 'ready';
+  practiceReveal.hidden = status !== 'frozen';
+  practicePrediction.hidden = status !== 'frozen' && status !== 'exhausted';
+  practiceResult.hidden = status !== 'exhausted';
+  for (const value of practiceValues) value.textContent = '';
+  if (!practicePrediction.hidden) fillRecord({
+    'practice-model':state.model_version,
+    'practice-revision':String(state.companion_revision),
+    'practice-risk':state.risk_percent + '%',
+    'practice-issued':japanTime.format(new Date(state.issuedAt)),
+    'practice-target':japanTime.format(new Date(state.targetAt)),
+    'practice-direction':state.direction ?? '方向未判定',
+    'practice-probabilities':directions.map(key => key + ' ' + number.format(state.probabilities[key] * 100) + '%').join(' ／ '),
+  });
+  if (state?.result) {
+    const {targetPrice, referencePrice, actualChangePct, actualDirection, directionCorrect, brier} = state.result;
+    fillRecord({
+      'practice-reference-price':number.format(referencePrice),
+      'practice-target-price':number.format(targetPrice),
+      'practice-actual':actualDirection,
+      'practice-change':signedNumber.format(actualChangePct) + '%',
+      'practice-correct':directionCorrect === null ? '判定なし' : directionCorrect ? '的中' : '不的中',
+      'practice-brier':number.format(brier),
+    });
+  }
+}
+
+const practiceRead = {
+  path:'/friend/practice', validate:validatePractice, render:renderPractice,
+  fail() { renderPractice(null, true); },
+};
+
 const profileRead = {
   path:'/friend/character', validate:validateProfile, render:renderProfile,
   fail() {
@@ -464,6 +563,59 @@ retryReads.addEventListener('click', () => {
   });
 });
 
+practiceRefresh.addEventListener('click', () => {
+  if (!session || operation) return;
+  void run('練習状態を取得中…', '練習状態を取得できませんでした。', async controller => {
+    const ok = await readPanels(controller, [practiceRead]);
+    controller.signal.throwIfAborted();
+    feedback(ok ? '練習状態を再取得しました。' : '練習状態を取得できませんでした。', !ok);
+    return practiceRefresh.hidden ? retryReads : practiceRefresh;
+  });
+});
+
+practiceStart.addEventListener('click', () => {
+  if (!session || operation || practiceStart.disabled || practiceState?.status !== 'ready' || hasUnsaved()) return;
+  const expected = groups.companion.saved.revision;
+  void run('架空の予測を計算中…', '練習を開始できませんでした。練習状態を再取得してください。', async controller => {
+    let data;
+    try {
+      data = validatePractice(await request('/friend/practice/start', controller, {
+        method:'POST', auth:session, body:{expected_companion_revision:expected},
+      }));
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      await readPanels(controller, [practiceRead]);
+      controller.signal.throwIfAborted();
+      if (practiceState?.status === 'ready') {
+        await readPanels(controller, [profileRead]);
+        controller.signal.throwIfAborted();
+        feedback('保存版を確認し直しました。相棒の設定を確認して開始してください。', true);
+      } else {
+        feedback('練習の進行状態を確認してください。', true);
+      }
+      return practiceRefresh.hidden ? retryReads : practiceRefresh;
+    }
+    checked(data.status === 'frozen' && data.companion_revision === expected);
+    renderPractice(data);
+    feedback('架空の予測を確定しました。');
+    return practiceReveal;
+  });
+});
+
+practiceReveal.addEventListener('click', () => {
+  if (!session || operation || practiceState?.status !== 'frozen') return;
+  const {round_id} = practiceState;
+  void run('架空の結果を採点中…', '結果を公開できませんでした。練習状態を再取得してください。', async controller => {
+    const data = validatePractice(await request('/friend/practice/reveal', controller, {
+      method:'POST', auth:session, body:{round_id},
+    }));
+    checked(data.status === 'exhausted' && data.round_id === round_id);
+    renderPractice(data);
+    feedback('架空の結果を公開しました。');
+    return practiceRefresh;
+  });
+});
+
 login.addEventListener('submit', event => {
   event.preventDefault();
   if (operation || !login.reportValidity()) return;
@@ -485,7 +637,7 @@ login.addEventListener('submit', event => {
       matches(accountPattern, info.accountId) && matches(tokenPattern, info.csrfToken) &&
       Number.isSafeInteger(info.expiresAt) && info.expiresAt > 0);
     session = {token, csrf:info.csrfToken};
-    await readPanels(controller, [profileRead, ...mockReads]);
+    await readPanels(controller, [profileRead, ...mockReads, practiceRead]);
     controller.signal.throwIfAborted();
     accountId.textContent = info.accountId;
     login.hidden = true;

@@ -54,6 +54,8 @@ h2 { font-size: 1.15rem; }
 .record-panel h3 { margin: 0 0 .7rem; font-size: 1rem; }
 .record-panel dl { gap: .65rem 1rem; }
 .record-pnl { background: #faf6fc; }
+.practice-status { margin: .8rem 0; font-weight: 700; }
+.practice .actions:has(> :not([hidden])) { margin-top: .85rem; }
 .revision {
   color: #58426b;
   font-size: .82rem;

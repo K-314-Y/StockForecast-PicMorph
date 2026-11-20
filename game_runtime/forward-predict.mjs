@@ -13,7 +13,8 @@ const python = '/usr/bin/python3';
 const bridge = fileURLToPath(new URL('./forward_predict_bridge.py', import.meta.url));
 const cwd = fileURLToPath(new URL('../', import.meta.url));
 
-function calculate(model, prices) {
+/** Run the isolated model bridge using only the supplied historical prices. */
+export function calculateForwardProbabilities(model, prices) {
   const input = JSON.stringify({model, prices});
   if (Buffer.byteLength(input) > 16 * 1024) throw new RangeError('Prediction input too large');
   return new Promise((resolve, reject) => {
@@ -84,7 +85,7 @@ export async function openForwardPredictor({
     const {prices, reference} = adapter.verifyMockHistory(rows, symbol, startedAt);
     if (prices.length < model.slow_window) throw new RangeError('Insufficient history for the saved model');
     const checkedAt = requireWindow(clock(), startedAt);
-    const probabilities = await calculate(model, prices);
+    const probabilities = await calculateForwardProbabilities(model, prices);
     const completedAt = requireWindow(clock(), checkedAt);
     function verifyMockReference(at) {
       requireWindow(at, completedAt);

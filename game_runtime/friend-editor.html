@@ -159,12 +159,52 @@
         </div>
       </div>
 
+      <section class="card mock practice" aria-labelledby="practice-title">
+        <div class="mock-heading">
+          <h2 id="practice-title">架空練習 · 1ラウンド</h2>
+          <button id="practice-refresh" type="button" class="secondary" hidden>練習状態を再取得</button>
+        </div>
+        <p class="hint">保存済みの戦略で予測を先に確定し、別の操作で結果を公開します。架空の成績で、財布への反映はありません。サーバーを再起動すると練習結果は消えます。</p>
+        <p id="practice-status" class="practice-status" role="status"></p>
+        <p id="practice-requirement" class="hint" hidden></p>
+        <div class="record-grid">
+          <section id="practice-prediction" class="record-panel" aria-labelledby="practice-prediction-title" hidden>
+            <h3 id="practice-prediction-title">練習で確定した予測</h3>
+            <dl>
+              <div class="record-model"><dt>モデル版</dt><dd id="practice-model"></dd></div>
+              <div><dt>相棒の保存版</dt><dd id="practice-revision"></dd></div>
+              <div><dt>保存済みリスク設定</dt><dd id="practice-risk"></dd></div>
+              <div><dt>確定日時（架空・日本時間）</dt><dd id="practice-issued"></dd></div>
+              <div><dt>予測先日時（架空・日本時間）</dt><dd id="practice-target"></dd></div>
+              <div><dt>予測方向</dt><dd id="practice-direction"></dd></div>
+              <div><dt>方向の確率</dt><dd id="practice-probabilities"></dd></div>
+            </dl>
+            <p class="hint">リスク設定は記録用です。既存モデルの方向確率は戦略と履歴で決まります。</p>
+          </section>
+          <section id="practice-result" class="record-panel" aria-labelledby="practice-result-title" hidden>
+            <h3 id="practice-result-title">公開した架空結果</h3>
+            <dl>
+              <div><dt>基準価格（架空）</dt><dd id="practice-reference-price"></dd></div>
+              <div><dt>未来価格（架空）</dt><dd id="practice-target-price"></dd></div>
+              <div><dt>実際の方向（架空）</dt><dd id="practice-actual"></dd></div>
+              <div><dt>変化率（架空）</dt><dd id="practice-change"></dd></div>
+              <div><dt>方向の当否</dt><dd id="practice-correct"></dd></div>
+              <div><dt>Brier スコア</dt><dd id="practice-brier"></dd></div>
+            </dl>
+          </section>
+        </div>
+        <div class="actions">
+          <button id="practice-start" type="button" hidden>架空練習を開始</button>
+          <button id="practice-reveal" type="button" hidden>結果を公開</button>
+        </div>
+      </section>
+
       <section class="card mock" aria-labelledby="mock-title">
         <div class="mock-heading">
           <h2 id="mock-title">模擬記録</h2>
           <button id="refresh-mock" type="button" class="secondary">模擬記録を再取得</button>
         </div>
-        <p class="hint">検証済みの架空記録を読み取り専用で表示します。予測の新規実行・確定、自動売買は準備中です。</p>
+        <p class="hint">保存済みの P4 模擬記録です。ここでは検証済みの記録を読み取れます。P4 の新規実行・確定や自動売買は準備中です。</p>
         <dl class="mock-summary">
           <div><dt>ポケット財布（模擬）</dt><dd id="wallet"></dd></div>
           <div><dt>模擬予測の状態</dt><dd id="forecast"></dd></div>

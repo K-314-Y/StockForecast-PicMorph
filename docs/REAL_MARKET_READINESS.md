@@ -137,6 +137,54 @@ Gemini Web版との設計レビュー後、公式のデータ利用条件も照�
 
 - 相棒の保存状態、次回向けモデル候補版、確定済みの架空予測、結果・成績を4ステップで表示する。候補版と確定予測のモデル版は個別に表示し、編集中の下書きは候補版の表示に反映しない。
 - 詳細は本人の検証済み `MOCK_NONLIVE` 記録だけを表示する。日時は日本時間。採点待ち、採点済み、未接続、取得失敗を区別し、損益やFX情報は API に値がある場合だけ表示する。FX後の仮想損益は財布に反映しない。
-- 「模擬記録を再取得」は既存セッションで財布と予測記録だけを読み込み、編集中の入力を保持する。401 では記録詳細も消去する。ローカル専用の試作で、予測の新規実行・確定、自動売買、実相場、本番公開は準備中。
+- 「模擬記録を再取得」は既存セッションで財布と予測記録だけを読み込み、編集中の入力を保持する。401 では記録詳細も消去する。ローカル専用の試作で、P4 の新規実行・確定、自動売買、実相場、本番公開は準備中。
+
+### P9k 架空練習の1ラウンド
+
+- 管理者が `startFriendMockServer({practiceScenarios})` に口座ごとに1本の固定シナリオを設定する。既定は未接続。シナリオは `accountId`、`sourceMode: 'MOCK_NONLIVE'`、9〜200件の時系列 `history: [{at, price}]`、`issuedAt`、`targetAt`、`targetPrice` を持つ。日時は UTC で、履歴は狭義の昇順、最終履歴時刻は確定時刻以前、目標時刻は確定時刻より後とする。
+- `GET /friend/practice` は同一口座の状態を読む。`POST /friend/practice/start` は `{expected_companion_revision}` で本人の保存版を照合し、既存モデルに履歴価格だけを渡して予測を確定する。`POST /friend/practice/reveal` は `{round_id}` でその確定済みラウンドを指定し、架空の未来価格を公開して採点する。両 POST は Bearer、CSRF、同一オリジンが必須。
+- 口座当たり1ラウンドをサーバープロセスのメモリーに保持する。同じプロセスではログインし直しても結果を再取得でき、公開をやり直しても同じ結果が返る。サーバー再起動で消失する。保存済みリスク値はモデル版と一緒に記録する。既存の方向確率は戦略と履歴で決まり、練習は現実の実績や売買、P4・FX・財布の更新を伴わない。
+
+#### ローカルデモ
+
+Linux のリポジトリルートで実行する。一時領域に架空の1ラウンドを用意し、招待コードを端末に一度だけ表示する。URL を Linux 側のブラウザーで開き、相棒と戦略を保存して「架空練習を開始」、続けて「結果を公開」を押す。Ctrl+C または SIGTERM で一時領域を削除する。
+
+```sh
+node --input-type=module <<'NODE'
+import {mkdir, mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {startFriendMockServer} from './game_runtime/friend-mock-server.mjs';
+
+const walletRoot = await mkdtemp(join(tmpdir(), 'friend-practice-demo-'));
+const stop = new Promise(resolve => {
+  process.once('SIGINT', resolve);
+  process.once('SIGTERM', resolve);
+});
+let server;
+try {
+  const accounts = new Map();
+  for (const accountId of ['Demo', 'Guest']) {
+    const directory = join(walletRoot, accountId);
+    await mkdir(directory, {mode:0o700});
+    accounts.set(accountId, join(directory, 'wallet.json'));
+  }
+  const history = [100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120]
+    .map((price, i) => ({at:new Date(Date.UTC(2030, 0, 7, 1, i)).toISOString(), price}));
+  server = await startFriendMockServer({accounts, walletRoot, practiceScenarios:[{
+    accountId:'Demo', sourceMode:'MOCK_NONLIVE', history,
+    issuedAt:'2030-01-07T01:12:00Z', targetAt:'2030-01-07T01:18:00Z', targetPrice:129,
+  }]});
+  console.log(server.origin + '/friend/');
+  console.log('一度限りの招待コード ' + server.issueInvite('Demo').token);
+  await stop;
+} finally {
+  try { await server?.close(); }
+  finally { await rm(walletRoot, {recursive:true, force:true}); }
+}
+NODE
+```
+
+表示 URL は Linux のループバック専用。別の Windows PC から操作するときは、Windows 側の SSH で `ssh -N -L 127.0.0.1:PORT:127.0.0.1:PORT USER@LINUX_HOST` として両側の `PORT` を表示された同じ番号に置き換え、表示された `friend.localhost` の URL を開く。公開リスナーやプロキシは不要。
 
 回帰テストは `node --test mcp/tests/friend-mock-auth.test.mjs mcp/tests/friend-mock-ui.test.mjs`。Playwright が既にある環境では Chromium の操作テストも実行できる。必要に応じて `FRIEND_UI_PLAYWRIGHT` に Playwright のモジュールファイル、`FRIEND_UI_CHROME` に Chrome の実行ファイルを設定する。テストは一時ディレクトリとランダムなローカルポートを使う。

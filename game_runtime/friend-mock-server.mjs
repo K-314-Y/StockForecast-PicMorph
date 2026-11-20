@@ -3,6 +3,8 @@ import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {configureFriendData, parseFriendProfileJson} from './friend-account-data.mjs';
 import {createFriendAuth, FRIEND_LOGIN_WINDOW_SECONDS} from './friend-auth.mjs';
+import {configureFriendPractice} from './friend-practice.mjs';
+import {hasFields} from './forward-score.mjs';
 
 const BIND = '127.0.0.1';
 const HOST = 'friend.localhost';
@@ -18,6 +20,17 @@ const ROUTES = new Set([
   'POST /friend/character/companion', 'POST /friend/character/look',
   'GET /friend/character', 'GET /friend/forward/records',
   'POST /friend/invite/redeem', 'GET /friend/session', 'POST /friend/logout', 'GET /friend/forward/summary',
+]);
+const PRACTICE_ROUTES = new Map([
+  ['GET /friend/practice', 'read'],
+  ['POST /friend/practice/start', 'start'],
+  ['POST /friend/practice/reveal', 'reveal'],
+]);
+const roundIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const practiceConflicts = new Map([
+  ['PRACTICE_UNCONFIGURED', 'practice_unconfigured'],
+  ['PRACTICE_STATE', 'practice_state_conflict'],
+  ['PRACTICE_REVISION', 'practice_revision_conflict'],
 ]);
 
 function send(res, status, body, type, csp, headers = {}) {
@@ -58,6 +71,11 @@ function sessionToken(req) {
   return /^Bearer ([A-Za-z0-9_-]{43})$/.exec(headers[0])?.[1];
 }
 
+function hasRequestBody(req) {
+  return req.headers['transfer-encoding'] ||
+    (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0');
+}
+
 function bodyError(status) {
   return Object.assign(new Error('Invalid friend request body'), {status});
 }
@@ -92,13 +110,16 @@ async function readInvite(req) {
 }
 
 /** Explicit loopback-only local prototype. All account configuration is server-owned. */
-export async function startFriendMockServer({accounts, walletRoot, accountRecordSources, port = 0, clock, randomBytes} = {}) {
+export async function startFriendMockServer({
+  accounts, walletRoot, accountRecordSources, practiceScenarios = [], port = 0, clock, randomBytes,
+} = {}) {
   if (!(accounts instanceof Map) || !Number.isInteger(port) || port < 0 || port > 65535) {
     throw new TypeError('Explicit friend account map and a valid local port are required');
   }
   accounts = new Map(accounts);
   const auth = createFriendAuth({accountIds:[...accounts.keys()], clock, randomBytes});
   const accessAccount = await configureFriendData(walletRoot, accounts, accountRecordSources);
+  const practice = configureFriendPractice(practiceScenarios, accounts, accessAccount);
   let authority;
   const limit = res => error(res, 429, 'login_limited', {'Retry-After':String(FRIEND_LOGIN_WINDOW_SECONDS)});
 
@@ -109,7 +130,8 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
         const [path] = req.url.split('?');
         const route = req.method + ' ' + path;
         const asset = STATIC_ROUTES.get(route);
-        if (!asset && !ROUTES.has(route)) return error(res, 404, 'not_found', {Connection:'close'});
+        const practiceAction = PRACTICE_ROUTES.get(route);
+        if (!asset && !practiceAction && !ROUTES.has(route)) return error(res, 404, 'not_found', {Connection:'close'});
         if (req.url !== path) return error(res, 400, 'query_not_allowed', {Connection:'close'});
 
         if (route === 'POST /friend/invite/redeem') {
@@ -126,6 +148,41 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
         }
 
         const token = sessionToken(req);
+        if (practiceAction) {
+          const session = auth.readSession(token);
+          if (!session) return error(res, 401, 'authentication_required', {Connection:'close'});
+          const {accountId} = session;
+          if (practiceAction === 'read') {
+            if (hasRequestBody(req)) return error(res, 400, 'body_not_allowed', {Connection:'close'});
+            return respond(res, 200, practice.read(accountId));
+          }
+          const csrf = req.headersDistinct['x-csrf-token'];
+          if (csrf?.length !== 1 || !auth.canEdit(token, csrf[0])) {
+            return error(res, 403, 'csrf_required', {Connection:'close'});
+          }
+          const authorize = () => {
+            if (!auth.canEdit(token, csrf[0])) {
+              throw Object.assign(Error('Session expired or revoked'), {code:'FRIEND_SESSION_EXPIRED'});
+            }
+          };
+          let payload;
+          try { payload = await readJsonBody(req, MAX_BODY, parseFriendProfileJson); }
+          catch (err) { return error(res, err.status ?? 400, 'invalid_request', {Connection:'close'}); }
+          authorize();
+          if (practiceAction === 'start') {
+            if (!hasFields(payload, ['expected_companion_revision']) ||
+                !Number.isSafeInteger(payload.expected_companion_revision) || payload.expected_companion_revision < 0) {
+              return error(res, 400, 'invalid_request');
+            }
+            const data = await practice.start(accountId, payload.expected_companion_revision, authorize);
+            authorize();
+            return respond(res, 200, data);
+          }
+          if (!hasFields(payload, ['round_id']) || typeof payload.round_id !== 'string' ||
+              !roundIdPattern.test(payload.round_id)) return error(res, 400, 'invalid_request');
+          return respond(res, 200, practice.reveal(accountId, payload.round_id, authorize));
+        }
+
         if (route === 'POST /friend/character/companion' || route === 'POST /friend/character/look') {
           const session = auth.readSession(token);
           if (!session) return error(res, 401, 'authentication_required', {Connection:'close'});
@@ -147,8 +204,7 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
           return respond(res, 200, data);
         }
 
-        if (req.headers['transfer-encoding'] ||
-            (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')) {
+        if (hasRequestBody(req)) {
           return error(res, 400, 'body_not_allowed', {Connection:'close'});
         }
         if (asset) return send(res, 200, await readFile(asset.file), asset.type, asset.csp);
@@ -175,6 +231,8 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
         if (err.code === 'FRIEND_INVALID_EDIT') return error(res, 400, 'invalid_request');
         if (err.code === 'FRIEND_CONFLICT') return error(res, 409, 'profile_conflict');
         if (err.code === 'FRIEND_SESSION_EXPIRED') return error(res, 401, 'authentication_required');
+        const practiceConflict = practiceConflicts.get(err.code);
+        if (practiceConflict) return error(res, 409, practiceConflict);
         error(res, 503, 'unavailable', {Connection:'close'});
       });
     });

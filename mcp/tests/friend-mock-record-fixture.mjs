@@ -50,12 +50,23 @@ export async function provisionFriendMockRound(walletFile, {
     await lifecycle.applyBatch();
   }
   await lifecycle.reserveOpen(forecastId);
-  async function finish() {
+  async function finish(afterOpen) {
     await fill(issue + 5 * 60_000, 100);
+    await afterOpen?.(forecastId);
     await lifecycle.reserveClose(forecastId);
     await fill(target, targetPrice);
     await lifecycle.score(forecastId);
   }
   if (!pending) await finish();
   return {state, options, config:{forecastId, source:lifecycle.recordSource}, finish};
+}
+
+export function friendPracticeScenario(accountId, targetPrice = 129) {
+  return {
+    accountId, sourceMode:MOCK_MARKET_SOURCE,
+    history:[100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120].map((price, i) => ({
+      at:new Date(Date.UTC(2030, 0, 7, 1, i)).toISOString(), price,
+    })),
+    issuedAt:'2030-01-07T01:12:00.000Z', targetAt:'2030-01-07T01:18:00.000Z', targetPrice,
+  };
 }
