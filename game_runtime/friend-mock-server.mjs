@@ -1,4 +1,5 @@
 import {once} from 'node:events';
+import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {configureFriendData, parseFriendProfileJson} from './friend-account-data.mjs';
 import {createFriendAuth, FRIEND_LOGIN_WINDOW_SECONDS} from './friend-auth.mjs';
@@ -6,25 +7,35 @@ import {createFriendAuth, FRIEND_LOGIN_WINDOW_SECONDS} from './friend-auth.mjs';
 const BIND = '127.0.0.1';
 const HOST = 'friend.localhost';
 const MAX_BODY = 256;
+const LOCKDOWN = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const EDITOR_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const STATIC_ROUTES = new Map([
+  ['GET /friend/', {file:new URL('./friend-editor.html', import.meta.url), type:'text/html', csp:EDITOR_CSP}],
+  ['GET /friend/editor.js', {file:new URL('./friend-editor.js', import.meta.url), type:'text/javascript', csp:LOCKDOWN}],
+  ['GET /friend/editor.css', {file:new URL('./friend-editor.css', import.meta.url), type:'text/css', csp:LOCKDOWN}],
+]);
 const ROUTES = new Set([
   'POST /friend/character/companion', 'POST /friend/character/look',
   'GET /friend/character', 'GET /friend/forward/records',
   'POST /friend/invite/redeem', 'GET /friend/session', 'POST /friend/logout', 'GET /friend/forward/summary',
 ]);
 
-function respond(res, status, data, headers = {}) {
-  const body = Buffer.from(JSON.stringify(data));
+function send(res, status, body, type, csp, headers = {}) {
   res.writeHead(status, {
-    'Content-Type':'application/json; charset=utf-8',
+    'Content-Type':type + '; charset=utf-8',
     'Content-Length':body.length,
     'Cache-Control':'no-store',
-    'Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    'Content-Security-Policy':csp,
     'Referrer-Policy':'no-referrer',
     'X-Content-Type-Options':'nosniff',
     'Cross-Origin-Resource-Policy':'same-origin',
     ...headers,
   });
   res.end(body);
+}
+
+function respond(res, status, data, headers) {
+  send(res, status, Buffer.from(JSON.stringify(data)), 'application/json', LOCKDOWN, headers);
 }
 
 const error = (res, status, code, headers) => respond(res, status, {error:code}, headers);
@@ -97,7 +108,8 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
         if (!trustedRequest(req, authority)) return error(res, 403, 'local_origin_required', {Connection:'close'});
         const [path] = req.url.split('?');
         const route = req.method + ' ' + path;
-        if (!ROUTES.has(route)) return error(res, 404, 'not_found', {Connection:'close'});
+        const asset = STATIC_ROUTES.get(route);
+        if (!asset && !ROUTES.has(route)) return error(res, 404, 'not_found', {Connection:'close'});
         if (req.url !== path) return error(res, 400, 'query_not_allowed', {Connection:'close'});
 
         if (route === 'POST /friend/invite/redeem') {
@@ -139,6 +151,7 @@ export async function startFriendMockServer({accounts, walletRoot, accountRecord
             (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')) {
           return error(res, 400, 'body_not_allowed', {Connection:'close'});
         }
+        if (asset) return send(res, 200, await readFile(asset.file), asset.type, asset.csp);
         const session = auth.readSession(token);
         if (!session) return error(res, 401, 'authentication_required');
         if (route === 'POST /friend/logout') {

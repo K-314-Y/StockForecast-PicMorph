@@ -1,0 +1,126 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #30253d;
+  background: #f9f4fb;
+  --muted: #63536c;
+  --border: #ded0e6;
+  --accent: #643d85;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+main { max-width: 72rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
+h1, h2, p, dl, dd { margin: 0; }
+h1 { font-size: clamp(1.9rem, 5vw, 3.25rem); line-height: 1.15; letter-spacing: -.04em; }
+h2 { font-size: 1.15rem; }
+.masthead, .account, .mock-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem 1.25rem; }
+.masthead p { margin-top: .5rem; color: var(--muted); }
+.account { overflow-wrap: anywhere; }
+.card {
+  padding: clamp(1rem, 2.5vw, 1.55rem);
+  border: 1px solid var(--border);
+  border-radius: 1.3rem;
+  background: white;
+  box-shadow: 0 5px 16px #3f245609;
+}
+#login { display: grid; gap: .75rem; max-width: 31rem; }
+#login p { color: var(--muted); }
+#login label { margin-bottom: -.55rem; }
+.workspace { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(0, 2.4fr); align-items: start; gap: 1rem; }
+.forms, .mock dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.forms { align-items: start; }
+.mock { grid-column: 1 / -1; }
+.mock dl { margin-top: .75rem; }
+.mock dt { font-weight: 700; }
+.mock dd { color: var(--muted); }
+.mock-heading span, .revision {
+  color: #58426b;
+  font-size: .82rem;
+  background: #f4ebfa;
+  padding: .2rem .6rem;
+  border-radius: .55rem;
+}
+.revision { width: fit-content; margin: .4rem 0 .8rem; }
+.preview { background: linear-gradient(155deg, #f3e8fb, #e9f7f4); text-align: center; }
+.preview svg { display: block; width: min(100%, 17rem); margin: .5rem auto 0; }
+.preview p { color: var(--muted); }
+.preview .preview-name { font-size: 1.15rem; font-weight: 750; color: #30253d; overflow-wrap: anywhere; }
+.ink, .face { stroke: #493953; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.face { fill: none; stroke-width: 3.5; }
+.sparkle { fill: #a57ebe; }
+.part { display: none; }
+.part.selected { display: inline; }
+.chibi { animation: bob 2.2s ease-in-out 2 alternate; }
+@keyframes bob { from { transform: translateY(0); } to { transform: translateY(-6px); } }
+
+fieldset { min-width: 0; border: 0; padding: 0; margin: 0; display: grid; gap: .3rem; }
+label { font-weight: 650; }
+fieldset label:not(:first-child), .colors { margin-top: .45rem; }
+.colors { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
+.colors label { display: block; }
+input, select, button { font: inherit; color: inherit; }
+input:not([type="range"]), select {
+  min-height: 2.65rem;
+  width: 100%;
+  border: 1px solid #b7a2c4;
+  background: #fcf9ff;
+  border-radius: .65rem;
+  padding: .4rem .65rem;
+}
+input[type="color"] { width: 4rem; }
+input[type="range"] { width: 100%; min-height: 2rem; margin: 0; accent-color: var(--accent); }
+output { margin-inline-start: .25rem; color: var(--accent); }
+button {
+  border: 1px solid transparent;
+  border-radius: .65rem;
+  padding: .52rem .85rem;
+  min-height: 2.65rem;
+  font-weight: 700;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+fieldset button { margin-top: .65rem; }
+button.secondary { color: var(--accent); background: white; border-color: var(--border); }
+button:disabled { opacity: .64; cursor: default; }
+:focus-visible { outline: 3px solid #59337b; outline-offset: 3px; }
+.feedback {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  min-height: 3rem;
+  padding: .4rem 0;
+  background: #f9f4fb;
+}
+.feedback.error, .panel-error { color: #84294d; }
+.hint, .model { font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+fieldset + .hint, .hint + .model { margin-top: .55rem; }
+#spinner {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 56rem) { .forms { grid-template-columns: 1fr; } }
+@media (max-width: 39rem) {
+  .workspace, .mock dl { grid-template-columns: 1fr; }
+  .preview {
+    display: grid;
+    grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+    column-gap: 1rem;
+    align-content: center;
+    align-items: center;
+    text-align: start;
+  }
+  .preview svg { grid-area: 1 / 1 / span 3; margin: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .chibi, #spinner { animation: none; } }
