@@ -189,6 +189,30 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 @media(prefers-reduced-motion:reduce){#generatedAvatarPause{display:none}}
 #generatedAvatarOptions{min-inline-size:0}
 #generatedAvatarSelect{max-inline-size:100%}
+/* Temporary appearance manager: a visible current mode and two reversible choices. */
+.avatar-manager{margin-block:10px 17px}
+.avatar-manager legend{font-size:1.04rem;font-weight:780;color:#ffe0ec;padding:0 7px}
+.avatar-current{display:grid;gap:3px;padding:12px 15px;border-radius:12px;background:#243c4b;border:1px solid #7dbaa4}
+.avatar-current-label{font-size:12px;font-weight:750;color:#b8f6dc}
+#avatarCurrentName{font-size:clamp(17px,3vw,21px);overflow-wrap:anywhere}
+#avatarCurrentDescription{color:#dde9f1}
+#generatedAvatarHelp{margin:11px 0}
+.avatar-choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.avatar-choice{display:flex;flex-direction:column;align-items:stretch;gap:9px;min-width:0;padding:13px;border-radius:12px;background:#1b2b42;border:1px solid #526b84}
+.avatar-choice[data-current="true"]{border:2px solid #9df0c8;background:#223b3d;padding:12px}
+.avatar-choice[data-current="true"] h4::after{content:"　● 表示中";color:#adf1ce;font-size:12px}
+.avatar-choice h4{margin:0;font-size:17px}
+.avatar-choice p{margin:0;font-size:13px;line-height:1.65;color:#d4e2ed;flex:1}
+.avatar-choice label{font-size:13px;font-weight:720}
+.avatar-choice select{width:100%;min-width:0;min-height:46px}
+.avatar-choice button{width:100%;white-space:normal;margin:0}
+.avatar-choice button:not(:disabled){background:#b9ecdc;color:#153632;font-weight:750}
+.avatar-choice small{min-height:2.4em;color:#c0d0e0}
+#generatedAvatarStatus{margin:12px 0 6px;min-height:1.35em;overflow-wrap:anywhere}
+#avatarEditNotice:not([hidden]){margin:10px 0;padding:10px 12px;border-left:3px solid #f3ce8f;border-radius:8px;background:#373146;color:#fff0d1;font-size:14px;line-height:1.6}
+.avatar-show-preview{display:inline-flex;align-items:center;min-height:44px;padding:7px 0;color:#b8f6dc;font-size:14px;text-underline-offset:3px}
+@media(max-width:560px){.avatar-choice-grid{grid-template-columns:minmax(0,1fr)}}
+
 #artworkStage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
 #artworkSteps{font-size:15px;line-height:1.55;font-weight:600;color:#edf7fb}
 #artworkPendingNotice[data-pending='true']{font-weight:800;color:#ffdc94;border-left:3px solid #ffdc94;padding-left:10px}
@@ -344,8 +368,8 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <button id="generatedAvatarPause" type="button" aria-pressed="false" hidden>アバターの動きを止める</button>
   <div class="studio-launchers">
    <div class="studio-launch appearance-palette">
-    <button id="quickArtwork" type="button" aria-controls="appearanceStudio" aria-describedby="quickArtworkHelp">外見からキャラを作る</button>
-    <small id="quickArtworkHelp">名前や髪・服の色を決めたり、自分の絵を使ったりできます。</small>
+    <button id="quickArtwork" type="button" aria-controls="appearanceStudio" aria-describedby="quickArtworkHelp">外見を選ぶ・作る</button>
+    <small id="quickArtworkHelp">登録キャラの切替や、自分の外見の編集ができます。</small>
    </div>
    <div class="studio-launch prediction-palette">
     <button id="quickCustomize" type="button" aria-controls="predictionStudio" aria-describedby="quickCustomizeHelp">株価予測のAIを作る</button>
@@ -504,20 +528,36 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <summary id="appearanceStudioTitle" class="simple-target">外見スタジオ</summary>
  <div class="studio-body">
   <div class="actions"><button id="switchToPrediction" type="button" aria-controls="predictionStudio">予測スタジオへ</button></div>
-  <fieldset id="generatedAvatarOptions" class="appearance-controls" aria-describedby="generatedAvatarHelp">
-   <legend>登録済みキャラ一覧</legend>
-   <p id="generatedAvatarHelp" class="creator-note">手続き描画キャラをゲームの外見として選べます。このPCに選択だけを保存します。元のイラストや予測モデルはそのままです。</p>
-   <label for="generatedAvatarSelect">登録キャラ</label>
-   <select id="generatedAvatarSelect" disabled><option value="">読み込んでいます…</option></select>
-   <div class="actions">
-    <button id="useGeneratedAvatar" type="button" disabled>このキャラをゲームで使う</button>
-    <button id="resetGeneratedAvatar" type="button" disabled>元の外見に戻す</button>
+  <fieldset id="generatedAvatarOptions" class="appearance-controls avatar-manager" aria-describedby="generatedAvatarHelp">
+   <legend>外見を切り替える（試作）</legend>
+   <div class="avatar-current" role="status" aria-live="polite" aria-atomic="true">
+    <span class="avatar-current-label">今ゲームに表示中</span>
+    <strong id="avatarCurrentName">確認しています…</strong>
+    <small id="avatarCurrentDescription">現在の外見を読み込んでいます。</small>
    </div>
-   <p id="generatedAvatarStatus" role="status"></p>
+   <p id="generatedAvatarHelp" class="creator-note">ここでは<strong>表示するキャラだけ</strong>を選びます。自分のイラストや色・髪型の保存データは消えません。株価予測AIも変わりません。</p>
+   <div class="avatar-choice-grid">
+    <section id="avatarOwnChoice" class="avatar-choice" data-current="false" aria-labelledby="avatarOwnTitle">
+     <h4 id="avatarOwnTitle">自分の外見</h4>
+     <p>今までのイラストや、髪色・髪型を設定した2Dキャラです。<strong>保存データを元に戻す操作ではありません。</strong></p>
+     <button id="resetGeneratedAvatar" type="button" disabled>自分の外見を表示</button>
+    </section>
+    <section id="avatarDemoChoice" class="avatar-choice" data-current="false" aria-labelledby="avatarDemoTitle">
+     <h4 id="avatarDemoTitle">登録したキャラ</h4>
+     <p>生成・登録したキャラを、動く見た目として使います。</p>
+     <label for="generatedAvatarSelect">表示するキャラ</label>
+     <select id="generatedAvatarSelect" disabled><option value="">読み込んでいます…</option></select>
+     <button id="useGeneratedAvatar" type="button" disabled aria-describedby="avatarSelectionHint">このキャラに切り替える</button>
+     <small id="avatarSelectionHint">選ぶだけでは変更されません。ボタンで適用します。</small>
+    </section>
+   </div>
+   <p id="generatedAvatarStatus" role="status" aria-live="polite"></p>
+   <a class="avatar-show-preview" href="#scene">上のゲーム画面で見た目を確認</a>
   </fieldset>
+  <p id="avatarEditNotice" class="avatar-edit-notice" hidden>登録キャラを表示中です。下の髪色・髪型・イラストの編集は「自分の外見」用です。表示を確認するには、自分の外見に切り替えてください。</p>
   <form id="appearanceBasicsForm" class="studio-basics" aria-labelledby="appearanceBasicsTitle">
    <h3 id="appearanceBasicsTitle">名前・髪色・服色</h3>
-   <p class="creator-note">上のキャラクターに変更が表示されます。気に入ったら外見を保存しましょう。</p>
+   <p class="creator-note">名前は相棒の名前です。髪色と服色は「自分の外見」に反映されます。登録キャラの画像は変わりません。</p>
    <div class="creator-grid">
     <label for="creatorName">名前（1〜16文字）<input id="creatorName" value="私の相棒" pattern="(?=[\s\S]*\S)[^\u0000-\u001f\u007f-\u009f]{1,16}" title="空白だけの名前は使えません。" required></label>
     <label for="creatorHair">髪色<input id="creatorHair" type="color" value="#8882db"></label>
@@ -526,9 +566,9 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    <div class="actions"><button id="saveAppearanceBasics" type="submit" class="primary" disabled>名前と色を保存（SAVE）</button><button id="reloadAppearanceBasics" type="button">外見と予測を再取得</button></div>
    <p id="appearanceBasicsStatus" role="status">名前と色を読み込んでいます…</p>
   </form>
-  <details class="appearance-controls" id="lookControls" open>
+  <details class="appearance-controls" id="lookControls">
    <summary>✂️ 自分で髪型・表情・飾りを組み立てる</summary>
-   <p class="creator-note">ゲーム内の2Dパーツがすぐ切り替わります。保存するまで仮の見た目です。予測方法・XP・コインは変わりません。</p>
+   <p class="creator-note">「自分の外見」の2Dパーツを編集します。登録キャラ表示中は、その画像は変わりません。保存までは仮表示で、予測方法・XP・コインも変わりません。</p>
    <form id="lookForm">
     <div class="look-grid">
      <label for="lookHair">髪型<select id="lookHair"><option value="bob">ボブ</option><option value="long">ロング</option><option value="twintails">ツインテール</option></select></label>
@@ -539,10 +579,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <p id="lookStatus" role="status" aria-live="polite">外見パーツを読み込んでいます…</p>
    </form>
   </details>
-  <details id="artworkControls" class="appearance-controls" open>
+  <details id="artworkControls" class="appearance-controls">
    <summary id="artworkTitle" class="simple-target">私のイラストを重ねる</summary>
    <p id="artworkSteps" class="creator-note">①完成イラストを選ぶ → ② SAVE → ③ 練習へ戻る。これだけで自作キャラで遊べます。<br>髪・顔・服の分割や画像工房は、あとからこだわりたい人向けの任意機能です。評価用の正解データとは別です。画像はこのPCで使い、外部転送・自動反映はありません。</p>
-   <p>自分で制作した完成イラストを1枚選ぶだけで、上のゲーム画面に表示できます。選んだ直後は未保存です。各画像の <strong>SAVE</strong> を押すと、このPCに保存して再読込後も使えます。</p>
+   <p>自分で制作した完成イラストを1枚選ぶだけで、「自分の外見」としてプレビューできます。登録キャラを表示中の場合は「自分の外見」を選ぶと確認できます。各画像の <strong>SAVE</strong> で、このPCに保存して再読込後も使えます。</p>
    <p class="creator-note">自動切り抜き・自動分割は行いません。髪・顔・服は任意です。人や別アプリであらかじめ切り抜いた、完成イラストと同じサイズの透明キャンバスのPNG/WebPを使うと位置がそろいます。重なる順は完成イラスト→服→顔→髪です。元の画像データは加工しません。</p>
    <small>1枚450KB、4枚で合計2MBまで。完成イラスト：PNG/JPEG/WebP。任意レイヤー：透明PNG/WebP。</small>
    <div class="artwork-slot">

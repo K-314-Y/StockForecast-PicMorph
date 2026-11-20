@@ -49,6 +49,12 @@ export function mountGeneratedAvatar() {
   const reset=element('resetGeneratedAvatar');
   const pause=element('generatedAvatarPause');
   const caption=element('generatedAvatarCaption');
+  const currentName=element('avatarCurrentName');
+  const currentDescription=element('avatarCurrentDescription');
+  const ownCard=element('avatarOwnChoice');
+  const demoCard=element('avatarDemoChoice');
+  const selectionHint=element('avatarSelectionHint');
+  const editNotice=element('avatarEditNotice');
   const status=message=>{element('generatedAvatarStatus').textContent=message;};
   const warning=message=>{element('generatedAvatarWarning').textContent=message;};
   let catalog=new Map();
@@ -59,10 +65,29 @@ export function mountGeneratedAvatar() {
 
   function controls() {
     const locked=!record || work?.phase==='refresh' || work?.phase==='save';
+    const showingDemo=Boolean(record?.active_demo_id && !sprite.hidden);
+    const pendingDemo=Boolean(catalog.has(select.value) && select.value!==record?.active_demo_id);
     select.disabled=locked || !catalog.size;
     use.disabled=locked || Boolean(work) || !catalog.has(select.value) ||
       (record.active_demo_id===select.value && !sprite.hidden);
     reset.disabled=locked || (record.active_demo_id===null && work?.phase!=='decode');
+    ownCard.dataset.current=String(Boolean(record && !showingDemo));
+    demoCard.dataset.current=String(showingDemo);
+    editNotice.hidden=!showingDemo;
+    currentName.textContent=!record ? '確認しています…' :
+      showingDemo ? '登録キャラ：'+(catalog.get(record.active_demo_id)||'名前未取得') : '自分の外見';
+    currentDescription.textContent=!record ? '保存状況を読み込んでいます。' :
+      showingDemo ? '生成キャラを表示中。あなたのイラストや色の設定は残っています。' :
+      record.active_demo_id!==null ?
+        '保存された登録キャラが見つからないため、今は自分の外見を表示中です。' :
+        '保存済みイラストや、髪色・髪型を設定した2Dキャラの表示です。';
+    use.textContent=showingDemo && select.value===record.active_demo_id ?
+      'このキャラを表示中' : 'このキャラに切り替える';
+    reset.textContent=record?.active_demo_id===null ? '自分の外見を表示中' : '自分の外見を表示';
+    selectionHint.textContent=!catalog.size ? '登録キャラがまだありません。PNGパーツ実験室から確認できます。' :
+      showingDemo && select.value===record.active_demo_id ? 'このキャラを表示しています。' :
+      pendingDemo ? 'まだ画面には反映していません。切り替えボタンを押すと保存されます。' :
+      '選ぶだけでは変更されません。ボタンで適用します。';
   }
 
   function stopWork() {
@@ -142,11 +167,11 @@ export function mountGeneratedAvatar() {
         if(request.epoch!==epoch) return;
         display(record.active_demo_id,parts);
       }
-      status(message || (record.active_demo_id ? '保存した登録キャラを表示しています。' : '元の外見を表示しています。'));
+      status(message || (record.active_demo_id ? '保存した登録キャラを表示しています。' : '自分の外見を表示しています。'));
     } catch {
       if(request.epoch!==epoch) return;
       display(null);
-      warning('登録キャラを表示できないため、元の外見を表示しています。');
+      warning('登録キャラを表示できないため、自分の外見を表示しています。');
       status(message || (record?.active_demo_id ?
         '保存した登録キャラを読み込めません。外見の選択は保持されています。' :
         '登録キャラの外見設定を読み込めません。'));
@@ -163,7 +188,7 @@ export function mountGeneratedAvatar() {
     }
     const request=begin(id===null ? 'save' : 'decode');
     const {signal}=request.controller;
-    status(id===null ? '元の外見に戻しています…' : '登録キャラを読み込んでいます…');
+    status(id===null ? '自分の外見に切り替えています…' : '登録キャラを読み込んでいます…');
     try {
       const parts=id===null ? null : await loadParts(id,signal);
       if(request.epoch!==epoch) return;
@@ -176,7 +201,7 @@ export function mountGeneratedAvatar() {
       record=checkedRecord(saved);
       display(id,parts);
       warning('');
-      status(id===null ? '元の外見に戻しました。' : 'ゲームで使う外見をこのPCに保存しました。');
+      status(id===null ? '自分の外見を表示しています。' : 'ゲームで使う外見をこのPCに保存しました。');
     } catch(error) {
       if(request.epoch!==epoch) return;
       if(error.status===409 || request.phase==='save' && signal.aborted) {

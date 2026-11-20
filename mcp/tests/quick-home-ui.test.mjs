@@ -242,15 +242,19 @@ test('front actions reuse editor and artwork navigation, focus without saves or 
   const before=calls.slice();
   for(const [button,target,studio,closed,children] of [
     ['quickCustomize','companionEditorTitle','predictionStudio','appearanceStudio',['companionControls']],
-    ['quickArtwork','appearanceStudioTitle','appearanceStudio','predictionStudio',['lookControls','artworkControls']],
+    ['quickArtwork','appearanceStudioTitle','appearanceStudio','predictionStudio',[]],
     ['switchToPrediction','companionEditorTitle','predictionStudio','appearanceStudio',['companionControls']],
-    ['switchToAppearance','appearanceStudioTitle','appearanceStudio','predictionStudio',['lookControls','artworkControls']],
+    ['switchToAppearance','appearanceStudioTitle','appearanceStudio','predictionStudio',[]],
   ]) {
     const opened=['advancedEntry',studio,...children];
     for(const id of opened)get(id).open=false;
     get(closed).open=true;
     await fire(button);
     for(const id of opened)assert.equal(get(id).open,true);
+    if(studio==='appearanceStudio') {
+      assert.equal(get('lookControls').open,false,'look edit stays collapsed until requested');
+      assert.equal(get('artworkControls').open,false,'artwork edit stays collapsed until requested');
+    }
     assert.equal(get(closed).open,false);
     assert.equal(get('artworkWorkshop').open,false);
     assert.equal(document.activeElement,get(target));
@@ -332,7 +336,7 @@ test('shop and editor navigation opens details, scrolls and focuses the destinat
 
 test('artwork shortcut opens only the top-level artwork tools and returns without requests or form changes',async()=>{
   const {get,fire,calls,scrolls,document}=await mount();
-  assert.match(html,/<button id="quickArtwork" type="button"[^>]*>外見からキャラを作る<\/button>/);
+  assert.match(html,/<button id="quickArtwork" type="button"[^>]*>外見を選ぶ・作る<\/button>/);
   assert.match(html,/id="quickCustomize"[^>]*>株価予測のAIを作る/);
   get('quickAmount').value='2345';
   get('quickLeverage').value='3';
@@ -341,10 +345,12 @@ test('artwork shortcut opens only the top-level artwork tools and returns withou
   await fire('quickForm','submit');
   const priorCalls=calls.length;
   for(let attempt=0;attempt<2;attempt++) {
-    const opened=['advancedEntry','appearanceStudio','lookControls','artworkControls'];
-    for(const id of opened)get(id).open=false;
+    const opened=['advancedEntry','appearanceStudio'];
+    for(const id of [...opened,'lookControls','artworkControls'])get(id).open=false;
     await fire('quickArtwork');
     for(const id of opened)assert.equal(get(id).open,true);
+    assert.equal(get('lookControls').open,false);
+    assert.equal(get('artworkControls').open,false);
     assert.equal(get('artworkWorkshop').open,false);
     assert.equal(scrolls.at(-1),get('appearanceStudio'));
     assert.equal(document.activeElement,get('appearanceStudioTitle'));

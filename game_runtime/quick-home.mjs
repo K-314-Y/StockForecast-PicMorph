@@ -666,8 +666,9 @@ function openArtwork() {
   element('advancedEntry').open=true;
   element('predictionStudio').open=false;
   element('appearanceStudio').open=true;
-  element('lookControls').open=true;
-  element('artworkControls').open=true;
+  // Keep detailed editors closed; choosing an avatar should not open a huge form.
+  element('lookControls').open=false;
+  element('artworkControls').open=false;
   scrollAndFocus('appearanceStudio','appearanceStudioTitle');
 }
 if(typeof HTMLDetailsElement!=='undefined' && !('name' in HTMLDetailsElement.prototype)) {

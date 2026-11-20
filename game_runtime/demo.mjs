@@ -1230,7 +1230,7 @@ if ($('generatedAvatarOptions')?.tagName === 'FIELDSET') {
     .then(({mountGeneratedAvatar})=>mountGeneratedAvatar())
     .catch(()=>{
       $('generatedAvatarStatus').textContent='登録キャラの外見を読み込めません。';
-      $('generatedAvatarWarning').textContent='登録キャラの外見を読み込めません。元の外見を表示しています。';
+      $('generatedAvatarWarning').textContent='登録キャラの外見を読み込めません。自分の外見を表示しています。';
     });
 }
 

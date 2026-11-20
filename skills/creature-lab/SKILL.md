@@ -31,9 +31,14 @@ private local Creature Lab Node game. It has no real-trading capability.
    and a seed. Describe the results as original procedural template artwork
    (`engine=original-template`). Call `package_character_parts` with the
    generated ID and give the user the local ZIP path to select in Parts Lab.
-   For one-click preview, call `register_demo_character`, then open or refresh
-   Parts Lab and select the character in Registered Demo Gallery. This local
-   preview does not change the permanent game avatar.
+   For one-click preview, call register_demo_character, then open or refresh
+   Parts Lab and select the character in Registered Demo Gallery. Registration
+   alone never changes the game's avatar. On the game's appearance manager,
+   the user can explicitly click 「このキャラに切り替える」 to save only the
+   registered visual ID, or 「自分の外見を表示」 to stop displaying that
+   registered visual. The latter never deletes or rolls back saved artwork,
+   looks, colors, prediction settings or XP. Both controls are in the
+   appearance studio and the user can check the current visual at the top.
    Existing artwork uploads and manual crop actions belong in the local web
    game. Image data must not be sent to arbitrary destinations.
 6. Never expose private images publicly, automate account approvals, modify
