@@ -1,6 +1,6 @@
 /* User-supplied PNG composition. Preview is browser-only.
  * Files are saved locally only after explicit ZIP character registration. */
-'use strict';
+import {BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition} from './accessory-options.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('previewCanvas');
@@ -20,7 +20,17 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_FRAME_SIDE = 1024;
 let pack = null;
 let currentZipFiles = null;
-const zipLookFields=['zipAccessory','zipHairStyle','zipExpression'];
+const zipLookFields=['zipHairStyle','zipExpression'];
+const accessoryEndpoint='/api/imported-characters/accessories';
+const methodLabels={
+  bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',
+  macd_momentum:'MACD',moving_average_trend:'移動平均',
+};
+const builtinAccessories=new Map(BUILTIN_ACCESSORIES.map(item=>[item.id,item]));
+const accessoryCatalog=new Map(builtinAccessories);
+const manifestAccessories=new Map();
+let equippedIds=[];
+let savingAccessory=false;
 let epoch = 0;
 let busy = false;
 let paused = false;
@@ -64,8 +74,8 @@ function setBusy(value) {
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
   for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood','faceX','faceY'])$(id).disabled=value;
-  $('registerZip').disabled = value || !currentZipFiles ||
-    zipLookFields.some(id=>!$(id).value);
+  $('zipEquipment').disabled=value;
+  refreshZipTraitStatus();
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
 }
@@ -175,6 +185,7 @@ function inspect(images, frames) {
 async function loadPack(isSample) {
   if (busy) return;
   currentZipFiles = null;
+  clearZipEquipment();
   $('registerZip').disabled = true;
   const myEpoch=++epoch;
   const temp={};
@@ -272,6 +283,7 @@ function displayLoaded(next,frames,isSample=false){
 async function loadGeneratedSheets(){
   if(busy)return;
   currentZipFiles=null;
+  clearZipEquipment();
   $('registerZip').disabled=true;
   const myEpoch=++epoch;
   const raw={};const transformed={};
@@ -314,25 +326,141 @@ $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 
 // The ZIP is unpacked in this browser. Its optional manifest supplies declared
 // appearance metadata; a visual AI classifier is NOT run.
+function accessoryLabel({name,method}) {
+  return name+'（'+methodLabels[method]+'）';
+}
+function renderEquipment(preferred=$('zipAccessory').value) {
+  const picker=$('zipAccessory');
+  $('zipEquip').disabled=!currentZipFiles;
+  const available=new Map([...accessoryCatalog,...manifestAccessories]);
+  const empty=new Option('選択してください','');
+  const options=[...available.values()].map(item=>new Option(accessoryLabel(item),item.id));
+  picker.replaceChildren(empty,...options);
+  picker.value=available.has(preferred)?preferred:'';
+  const rows=equippedIds.map(id=>{
+    const label=accessoryLabel(available.get(id));
+    const row=document.createElement('li');
+    row.textContent=label;
+    const remove=document.createElement('button');
+    remove.type='button';
+    remove.disabled=!currentZipFiles;
+    remove.textContent='外す';
+    remove.setAttribute('aria-label',label+'を外す');
+    remove.addEventListener('click',()=>{
+      equippedIds=equippedIds.filter(item=>item!==id);
+      renderEquipment(id);
+      picker.focus();
+      $('zipEquipmentStatus').textContent=label+'を外しました。';
+    });
+    row.append(remove);
+    return row;
+  });
+  $('zipEquipped').replaceChildren(...rows);
+}
+function accessoryById(id) {
+  return accessoryCatalog.get(id)??manifestAccessories.get(id);
+}
+function clearZipEquipment() {
+  equippedIds=[];
+  manifestAccessories.clear();
+  renderEquipment('');
+  $('zipEquipmentStatus').textContent='';
+}
+async function loadAccessoryCatalog() {
+  try {
+    const response=await fetch(accessoryEndpoint,{cache:'no-store',credentials:'same-origin'});
+    const data=await response.json();
+    if(!response.ok||!Array.isArray(data.accessories))throw Error();
+    for(const item of data.accessories)accessoryCatalog.set(item.id,item);
+    renderEquipment();
+  }catch{
+    $('zipEquipmentStatus').textContent='このPCのアクセサリー一覧を読み込めませんでした。';
+  }
+}
+$('zipEquip').addEventListener('click',()=>{
+  if(!currentZipFiles)return;
+  const item=accessoryById($('zipAccessory').value);
+  const feedback=$('zipEquipmentStatus');
+  if(!item){
+    feedback.textContent='装備するアクセサリーを選んでください。';
+    $('zipAccessory').focus();
+    return;
+  }
+  if(equippedIds.length>=MAX_EQUIPPED_ACCESSORIES){
+    feedback.textContent='装備は最大3個です。入れ替えるには先に1個外してください。';
+    return;
+  }
+  if(equippedIds.some(id=>accessoryById(id).method===item.method)){
+    feedback.textContent='同じ分析方法のアクセサリーは1個だけ装備できます。';
+    return;
+  }
+  equippedIds.push(item.id);
+  renderEquipment('');
+  feedback.textContent=accessoryLabel(item)+'を装備しました。';
+});
+$('zipAddAccessory').addEventListener('click',async()=>{
+  if(savingAccessory)return;
+  const nameField=$('zipAccessoryName');
+  const methodField=$('zipAccessoryMethod');
+  const feedback=$('zipEquipmentStatus');
+  if(!nameField.reportValidity()||!methodField.reportValidity())return;
+  let definition;
+  try {definition=normalizeAccessoryDefinition({name:nameField.value,method:methodField.value});}
+  catch(error){
+    nameField.setCustomValidity(error.message);
+    nameField.reportValidity();
+    return;
+  }
+  const create=$('zipAddAccessory');
+  savingAccessory=create.disabled=nameField.disabled=methodField.disabled=true;
+  try {
+    const response=await fetch(accessoryEndpoint,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(definition),cache:'no-store',credentials:'same-origin',
+    });
+    const item=await response.json();
+    if(!response.ok)throw Error(item.error||'アクセサリーを追加できませんでした。');
+    accessoryCatalog.set(item.id,item);
+    renderEquipment(item.id);
+    nameField.value='';
+    methodField.value='';
+    feedback.textContent=accessoryLabel(item)+'を一覧に追加しました。「装備する」でキャラに付けられます。';
+  }catch(error){
+    feedback.textContent=error.message;
+  }finally{
+    savingAccessory=create.disabled=nameField.disabled=methodField.disabled=false;
+  }
+});
+$('zipAccessoryName').addEventListener('input',event=>event.target.setCustomValidity(''));
+renderEquipment();
+void loadAccessoryCatalog();
+
 function refreshZipTraitStatus() {
   const missing=zipLookFields.filter(id=>!$(id).value)
-    .map(id=>({zipAccessory:'アクセサリー',zipHairStyle:'髪型',zipExpression:'性格・表情'}[id]));
+    .map(id=>({zipHairStyle:'髪型',zipExpression:'性格・表情'}[id]));
   $('registerZip').disabled=busy || !currentZipFiles || missing.length>0;
   if(!currentZipFiles)return;
   $('zipTraitsStatus').textContent=missing.length ?
     '未指定：'+missing.join('・')+'。ZIPの情報にない特徴は選択してください。' :
-    '特徴が揃いました。アクセサリーは分析方法そのものを切り替え、髪型・色は補助分析、表情は資金使用率に反映します。';
+    '登録できます。髪型・色は補助分析、表情は資金使用率に反映します。';
 }
 function applyZipAppearance(files) {
   const traits=files.appearance ?? {};
+  equippedIds=traits.accessories?.map((item,index)=>{
+    if(typeof item==='string')return item;
+    const id='manifest-'+index;
+    manifestAccessories.set(id,{id,...item});
+    return id;
+  })??(builtinAccessories.has(traits.accessory)?[traits.accessory]:[]);
+  renderEquipment('');
   for(const [field,id] of [
-    ['accessory','zipAccessory'],['hair_style','zipHairStyle'],
+    ['hair_style','zipHairStyle'],
     ['expression','zipExpression'],['hair_color','zipHairColor'],
     ['clothing_color','zipClothingColor']]) {
     $(id).value=traits[field]??(field.endsWith('_color')?'#808080':'');
   }
   $('zipName').value=traits.name??'新しい相棒';
-  const fromZip=['accessory','hair_style','expression','hair_color','clothing_color']
+  const fromZip=['accessory','accessories','hair_style','expression','hair_color','clothing_color']
     .filter(key=>Object.hasOwn(traits,key));
   $('zipTraitsStatus').textContent=fromZip.length ?
     'ZIPのmanifest.jsonから取得：'+fromZip.join('・')+
@@ -346,6 +474,7 @@ for(const id of [...zipLookFields,'zipHairColor','zipClothingColor']) {
 async function importCharacterZip(file){
   if(!file || busy)return;
   currentZipFiles=null;
+  clearZipEquipment();
   $('registerZip').disabled=true;
   $('zipGameLink').hidden=true;
   $('zipRegisterStatus').textContent='新しいZIPを確認しています。登録はまだしていません。';
@@ -414,7 +543,20 @@ $('registerZip').addEventListener('click',async()=>{
   }
   const files=currentZipFiles;
   const chosenEpoch=epoch;
+  const ids=[...equippedIds];
+  const legacyAccessory=ids.length===1&&builtinAccessories.has(ids[0])?ids[0]:'none';
+  const equipment=ids.length>0&&legacyAccessory==='none'?{
+    accessories:ids.map(id=>{
+      if(builtinAccessories.has(id))return id;
+      const {name,method}=accessoryById(id);
+      return {name,method};
+    }),
+  }:{};
+  const look={accessory:legacyAccessory,hair_style:$('zipHairStyle').value,expression:$('zipExpression').value};
+  const colors={hair_color:$('zipHairColor').value,clothing_color:$('zipClothingColor').value};
   setBusy(true);
+  $('clear').disabled=true;
+  $('frames').disabled=true;
   $('zipRegisterStatus').textContent='外見と専用AI設定をこのPCに登録しています…';
   try {
     const images={};
@@ -423,40 +565,38 @@ $('registerZip').addEventListener('click',async()=>{
     if(chosenEpoch!==epoch)return;
     const response=await fetch('/api/imported-characters/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name,look:{
-          accessory:$('zipAccessory').value,
-          hair_style:$('zipHairStyle').value,
-          expression:$('zipExpression').value,
-        },colors:{
-          hair_color:$('zipHairColor').value,
-          clothing_color:$('zipClothingColor').value,
-        },images}),
+      body:JSON.stringify({name,look,colors,images,...equipment}),
       cache:'no-store',credentials:'same-origin',
     });
     const record=await response.json();
+    if(chosenEpoch!==epoch)return;
     if(!response.ok||!/^zip_[0-9a-f]{32}$/.test(record.id)||record.ai_id!==record.id||
        record.source!=='ZIP_LOCAL'||record.model_origin!=='appearance_features'||
        record.trained!==false||!/^appearance-v1_/.test(record.model_version)||
        !record.model?.plugin_weights||!Number.isFinite(record.model.risk_fraction))
       throw Error(record.error||'外見からのAI作成結果を確認できません。');
     currentZipFiles=null; // one explicit registration per ZIP selection
+    renderEquipment('');
     $('zipGameLink').hidden=false;
     const w=record.model.plugin_weights;
+    const analysis=record.accessory_analysis;
+    const builtin=builtinAccessories.get(analysis?.accessory);
+    const equipmentText=Array.isArray(analysis?.equipped) ?
+      analysis.equipped.map(accessoryLabel).join('・') :
+      builtin ? accessoryLabel(builtin) : '装備なし（移動平均）';
     $('zipRegisterStatus').textContent=name+'を登録しました。キャラID＝AI ID：'+
-      record.id+' ／ 主な分析：'+({
-        star:'ボリンジャーバンド（急な上抜け）',
-        glasses:'RSI（売られすぎ）',
-        ribbon:'MACD（勢いの変化）',
-        none:'移動平均（価格の流れ）',
-      }[record.accessory_analysis?.accessory]??'未設定')+
+      record.id+' ／ 主な分析：'+equipmentText+
       ' ／ 補助分析：流れ'+w.trend+'%・勢い'+w.momentum+
       '%・反転'+w.reversion+'%・変動'+w.volatility+
       '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+
       '%。外見の特徴で決まる新規モデルです（未学習・実株価未対応）。';
     status('ZIPの外見と予測AI設定が同じIDで登録されました。');
   }catch(error){
-    $('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
-  }finally{setBusy(false);}
+    if(chosenEpoch===epoch)$('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
+  }finally{
+    $('frames').disabled=false;
+    if(chosenEpoch===epoch)setBusy(false);
+  }
 });
 $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
@@ -465,6 +605,7 @@ $('clear').addEventListener('click',()=>{
   setBusy(false);
   resetPack();
   currentZipFiles=null;
+  clearZipEquipment();
   $('registerZip').disabled=true;
   for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
   $('zipFile').value='';
@@ -484,6 +625,7 @@ for (const id of ['faceX','faceY']) $(id).addEventListener('input',paint);
 $('frames').addEventListener('change',()=>{
   if (pack || busy) {
     ++epoch;currentZipFiles=null;setBusy(false);resetPack();
+    clearZipEquipment();
     $('registerZip').disabled=true;
     status('コマ数が変わりました。画像をもう一度読み込んでください。');
   }

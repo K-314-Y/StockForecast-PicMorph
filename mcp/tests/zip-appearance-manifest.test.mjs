@@ -60,3 +60,19 @@ test('invalid or unsupported manifest attributes cannot silently drive a model',
     {accessory:'fake'}, {hair_style:'banana'}, {hair_color:'red'}, {expression:12}
   ])await assert.rejects(extractCharacterZip(withManifest(appearance)),/ZIPの/);
 });
+
+test('ZIP equipment accepts built-ins and named methods and rejects ambiguous or invalid sets',async()=>{
+  const custom={name:'  月のブローチ  ',method:'moving_average_trend'};
+  const data=await extractCharacterZip(withManifest({accessories:['star','glasses',custom]}));
+  assert.deepEqual(Object.keys(data),['body','ready']);
+  assert.deepEqual(data.appearance.accessories,['star','glasses',{...custom,name:'月のブローチ'}]);
+  for(const appearance of [
+    {accessory:'star',accessories:['glasses']},
+    {accessories:[]}, {accessories:'star'}, {accessories:['none','glasses']},
+    {accessories:['star','star']},
+    {accessories:['glasses',{...custom,method:'rsi_oversold'}]},
+    {accessories:['star','glasses','ribbon',custom]},
+    {accessories:[{...custom,method:'constructor'}]},
+    {accessories:[{...custom,code:'extra'}]},
+  ])await assert.rejects(extractCharacterZip(withManifest(appearance)),/ZIPの/);
+});

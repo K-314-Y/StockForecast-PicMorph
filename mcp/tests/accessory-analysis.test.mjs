@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
 import {pythonPredict,createGameServer} from '../../game_runtime/server.mjs';
 
 const MODEL={fast_window:3,slow_window:9,risk_fraction:.35,
@@ -45,12 +46,12 @@ test('base model is a secondary analysis, not an inert decoration',async()=>{
   const {execFileSync}=await import('node:child_process');
   const output=execFileSync('python3',['-B','-c',[
     'import sys',
-    'sys.path.insert(0,"game_runtime")',
+    'sys.path.insert(0,sys.argv[1])',
     'from accessory_analysis import accessory_signal',
     'prices=tuple([100.0]*30)',
     'print(accessory_signal("none",prices,0.0))',
     'print(accessory_signal("none",prices,1.0))',
-  ].join(';')],{encoding:'utf8',timeout:3000});
+  ].join(';'),fileURLToPath(new URL('../../game_runtime/',import.meta.url))],{encoding:'utf8',timeout:3000});
   assert.deepEqual(output.trim().split('\n'),['CASH','LONG']);
 });
 
@@ -62,16 +63,47 @@ test('legacy forecast remains unchanged without accessory and invalid method is 
   await assert.rejects(pythonPredict({...input,accessory_strategy:7}));
 });
 
+test('equipped indicators affect 12-day signals and use order-independent strategy identity',async()=>{
+  const accessory_methods=['bollinger_breakout','rsi_oversold','macd_momentum'];
+  const run=(methods,options={})=>pythonPredict({...input,...options,accessory_methods:methods});
+  const combined=await run(accessory_methods);
+  assert.deepEqual(await run([...accessory_methods].reverse()),combined);
+  const anotherScenario=await run(accessory_methods,{scenario_token:'v1_ffffffffffffffff'});
+  assert.notDeepEqual(combined.future_prices,anotherScenario.future_prices);
+  assert.deepEqual(combined.signals[0],anotherScenario.signals[0]);
+  for(const dropped of accessory_methods) {
+    const partial=await run(accessory_methods.filter(method=>method!==dropped));
+    assert.notEqual(partial.models.mine.effective_sha256,combined.models.mine.effective_sha256);
+    assert.notDeepEqual(partial.signals.map(step=>step.mine),combined.signals.map(step=>step.mine),dropped);
+    assert.deepEqual(partial.signals.map(({owl,turtle})=>({owl,turtle})),
+      combined.signals.map(({owl,turtle})=>({owl,turtle})));
+  }
+  const legacy=await pythonPredict({...input,accessory_strategy:'none'});
+  const movingAverage=await run(['moving_average_trend']);
+  assert.deepEqual(movingAverage.signals,legacy.signals);
+  assert.equal(combined.signals.length,12);
+});
+
+test('Python rejects malformed equipment, duplicate methods and both strategy formats together',async()=>{
+  for(const methods of [null,[],{},'rsi_oversold',['none'],[1],['rsi_oversold','rsi_oversold'],
+    ['rsi_oversold','bollinger_breakout','moving_average_trend','macd_momentum']]) {
+    await assert.rejects(pythonPredict({...input,accessory_methods:methods}));
+  }
+  await assert.rejects(pythonPredict({...input,accessory_strategy:'star',accessory_methods:['rsi_oversold']}));
+});
+
 test('browser cannot submit an accessory override to quick-practice',async()=>{
   const server=createGameServer();
   await new Promise((resolve,reject)=>{
     server.once('error',reject);server.listen(0,'127.0.0.1',resolve);
   });
   try{
-    const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/quick-practice',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({amount:1000,model_id:'self',accessory_strategy:'star'}),
-    });
-    assert.equal(res.status,400);
+    for(const override of [{accessory_strategy:'star'},{accessory_methods:['rsi_oversold']}]) {
+      const res=await fetch('http://127.0.0.1:'+server.address().port+'/api/quick-practice',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({amount:1000,model_id:'self',...override}),
+      });
+      assert.equal(res.status,400);
+    }
   }finally{await new Promise(resolve=>server.close(resolve));}
 });

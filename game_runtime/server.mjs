@@ -68,6 +68,7 @@ const PARTS_LAB = new Map([
   ['/parts-lab/preview.html', new URL('./parts-lab/preview.html', import.meta.url)],
   ['/parts-lab/preview.js', new URL('./parts-lab/preview.js', import.meta.url)],
   ['/parts-lab/zip-import.mjs', new URL('./parts-lab/zip-import.mjs', import.meta.url)],
+  ['/parts-lab/accessory-options.mjs', new URL('./parts-lab/accessory-options.mjs', import.meta.url)],
 ]);
 const PARTS_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';
@@ -411,6 +412,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     }
     if ([rawPath,path].some(target=>target==='/api/imported-characters' ||
         target.startsWith('/api/imported-characters/'))) {
+      const accessoriesPath='/api/imported-characters/accessories';
+      if(rawPath===accessoriesPath && req.method==='GET') {
+        try {return json(res,200,await importedCharacterStore.listAccessories());}
+        catch {return json(res,503,{error:'アクセサリー一覧を読み込めません'});}
+      }
       if (rawPath==='/api/imported-characters' && req.method==='GET') {
         try {return json(res,200,await importedCharacterStore.list());}
         catch {return json(res,503,{error:'ZIPキャラ一覧を読み込めません'});}
@@ -422,16 +428,18 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         try{return artworkImage(res,await importedCharacterStore.image(id));}
         catch(error){return json(res,error?.status===404?404:503,{error:'画像が見つかりません'});}
       }
-      if(rawPath!=='/api/imported-characters/register' || req.method!=='POST')
+      if(!['/api/imported-characters/register',accessoriesPath].includes(rawPath) || req.method!=='POST')
         return json(res,404,{error:'見つかりません'});
       if(inFlight>=2)return json(res,429,{error:'処理が混雑しています'});
       inFlight++;
       try {
+        if(rawPath===accessoriesPath)
+          return json(res,200,await importedCharacterStore.addAccessory(await getBody(req)));
         const payload=await getBody(req,MAX_IMPORTED_REQUEST);
         return json(res,201,await importedCharacterStore.register(payload));
       }catch(error){
         const status=error?.status??503;
-        return json(res,status,{error:status>=500?'ZIPキャラの登録に失敗しました':error.message});
+        return json(res,status,{error:status>=500?'ローカルの登録情報を保存できません':error.message});
       }finally{inFlight--;}
     }
     if (rawPath.startsWith('/parts-lab/') || path.startsWith('/parts-lab/')) {
@@ -742,7 +750,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const scenarioToken = payload.scenario_token ?? 'v1_'+randomBytes(8).toString('hex');
         const plan = await predict({...originals,models:{...originals.models,mine},
           scenario_token:scenarioToken,
-          ...(imported?.accessory_strategy ?
+          ...(imported?.accessory_methods ? {accessory_methods:imported.accessory_methods} :
+            imported?.accessory_strategy ?
             {accessory_strategy:imported.accessory_strategy}:{}),
         });
         const after = await loadSnapshot();
@@ -752,6 +761,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
            companion.revision !== currentCompanion.revision ||
            (imported && (imported.model_version !== importedAfter.model_version ||
              imported.model_revision !== importedAfter.model_revision ||
+             imported.equipment_hash !== importedAfter.equipment_hash ||
              imported.accessory_strategy !== importedAfter.accessory_strategy))) {
           throw failure('練習中にモデルが変更されました。再度お試しください',409);
         }

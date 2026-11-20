@@ -1,5 +1,7 @@
 /* Safe in-browser ZIP import for Creature Lab PNG/WebP frame atlases.
  * No extraction to disk, no persistence, no archive files are uploaded. */
+import {normalizeEquipment} from './accessory-options.mjs';
+
 const MAX_ZIP_BYTES=12*1024*1024;
 const MAX_IMAGE_BYTES=5*1024*1024;
 const MAX_ENTRIES=48;
@@ -36,6 +38,11 @@ function parseAppearanceManifest(buffer) {
       if(!allowed.includes(input[field]))throw invalid('ZIPの外見情報に未対応の'+field+'があります。');
       appearance[field]=input[field];
     }
+  }
+  if(Object.hasOwn(input,'accessories')) {
+    if(Object.hasOwn(input,'accessory'))throw invalid('ZIPの単体設定と複数装備を同時に指定できません。');
+    try {appearance.accessories=normalizeEquipment(input.accessories);}
+    catch(error){throw invalid('ZIPの装備情報：'+error.message);}
   }
   for(const field of ['hair_color','clothing_color']) {
     if(Object.hasOwn(input,field)) {

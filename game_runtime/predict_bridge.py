@@ -14,7 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine import Model, PLUGIN_IDS, SYNTHETIC_PRICES, prediction, python_source
-from game_runtime.accessory_analysis import METHODS, RULE_VERSION, accessory_signal
+from game_runtime.accessory_analysis import (
+    COMBINATION_VERSION, METHODS, RULE_VERSION, accessory_signal,
+    equipped_accessory_signal, normalize_methods,
+)
 
 SLOTS = ("mine", "owl", "turtle")
 FUTURE = (107, 106, 104, 101, 100, 104, 108, 112, 110, 114, 113, 117)
@@ -56,7 +59,7 @@ def scenario_prices(token: str) -> tuple:
 
 
 def create_prediction_plan(data: dict) -> dict:
-    optional = {"scenario_token", "accessory_strategy"}
+    optional = {"scenario_token", "accessory_strategy", "accessory_methods"}
     if (type(data) is not dict or not {"base_model", "models"}.issubset(data)
             or not (set(data) - {"base_model", "models"}).issubset(optional)
             or type(data["models"]) is not dict or set(data["models"]) != set(SLOTS)):
@@ -64,6 +67,15 @@ def create_prediction_plan(data: dict) -> dict:
     accessory = data.get("accessory_strategy")
     if "accessory_strategy" in data and (type(accessory) is not str or accessory not in METHODS):
         raise ValueError("invalid_accessory_strategy")
+    methods = None
+    strategy_identity = ""
+    if "accessory_methods" in data:
+        if "accessory_strategy" in data:
+            raise ValueError("conflicting_accessory_strategies")
+        methods = data["accessory_methods"]
+        strategy_identity = "\n" + COMBINATION_VERSION + ":" + ",".join(normalize_methods(methods))
+    elif accessory is not None:
+        strategy_identity = "\n" + RULE_VERSION + ":" + accessory
     base = model_from_record(data["base_model"])
     models = {key: model_from_record(data["models"][key]) for key in SLOTS}
     future = scenario_prices(data["scenario_token"]) if "scenario_token" in data else FUTURE
@@ -71,10 +83,13 @@ def create_prediction_plan(data: dict) -> dict:
     signals = []
     for next_price in future:
         step = {}
+        past = tuple(history)
         for key in SLOTS:
-            p = prediction(models[key], tuple(history))
-            if key == "mine" and accessory is not None:
-                step[key] = accessory_signal(accessory, tuple(history), p["UP"])
+            p = prediction(models[key], past)
+            if key == "mine" and methods is not None:
+                step[key] = equipped_accessory_signal(methods, past, p["UP"])
+            elif key == "mine" and accessory is not None:
+                step[key] = accessory_signal(accessory, past, p["UP"])
             else:
                 step[key] = "LONG" if p["UP"] > .52 and p["UP"] > p["DOWN"] + .05 else "CASH"
         signals.append(step)
@@ -91,9 +106,8 @@ def create_prediction_plan(data: dict) -> dict:
             "plugin_weights": dict(zip(PLUGIN_IDS, m.plugin_weights)),
             "plugin_strengths": dict(zip(PLUGIN_IDS, m.plugin_strengths)),
             "effective_sha256": hashlib.sha256((
-                python_source(m) + (
-                    "\n" + RULE_VERSION + ":" + accessory if k == "mine" and accessory else ""
-                )).encode()).hexdigest(),
+                python_source(m) + (strategy_identity if k == "mine" else "")
+            ).encode()).hexdigest(),
         } for k, m in models.items()},
         "model_sha256": hashlib.sha256(python_source(base).encode()).hexdigest(),
     }
