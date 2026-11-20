@@ -368,6 +368,18 @@ run `node mcp/companion-stdio.mjs --read-only`.
    the character in **Registered Demo Gallery** to preview its four layers.
    Registration does not set the permanent game avatar.
 
+The simplest registration flow is now inside the **Linux** game UI:
+/game -> 「外見を選ぶ・作る」 -> 「登録したキャラ」 ->
+「＋ 新しいキャラを作って登録」 -> name/colors/accessory ->
+「キャラを生成して登録」. This is the fixed same-origin, loopback-only
+POST /api/character-demos/create (plus a read-only availability GET).
+The endpoint generates and registers in two locally serialized helper calls,
+verifies the catalog, and returns only the new ID, name and engine. It does
+not activate a character: the user must explicitly click
+「このキャラに切り替える」. On the Windows preview this route reports
+registration unavailable and POST returns 501; its existing saves remain
+separate from Linux.
+
 Generation uses Linux Python 3 with Pillow (`python3 -c 'import PIL'`).
 `engine=original-template` draws the artwork from project-authored
 geometric primitives. The same appearance inputs and Pillow environment

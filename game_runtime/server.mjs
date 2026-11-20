@@ -22,6 +22,7 @@ import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, 
 import {compareHistoricalMarket} from './historical-market.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
+import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ACTIVE_CHARACTER_API='/api/active-character';
@@ -300,6 +301,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   artworkStore = createArtworkStore(),
                                   artworkExpressionStore = createArtworkExpressionStore(),
                                   catalogRoot, activeCharacterStore = createActiveCharacterStore(),
+                                  characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -313,6 +315,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   const characterDemos=createCharacterDemoCatalog(catalogRoot);
   const isRegisteredDemo=async id=>(await characterDemos.list()).some(item=>item.generated_id===id);
   let demoImagesInFlight=0;
+  let demoRegistrationBusy=false;
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
@@ -363,6 +366,47 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         catch {return json(res,503,{error:'登録キャラの外見設定を読み込めません'});}
       }
+    }
+    // The only creation entry point: a deliberately explicit local button.
+    // The Windows viewer receives a capability=false response, not an implicit write.
+    if (rawPath===CHARACTER_DEMOS_API+'/create' || path===CHARACTER_DEMOS_API+'/create') {
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      if (req.headers.origin!==undefined &&
+          req.headers.origin!=='http://'+req.headers.host) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      if (rawPath!==path) return json(res,404,{error:'見つかりません'});
+      if (req.method==='GET') {
+        return json(res,200,{available:characterCreator!==null,
+          message:characterCreator===null ?
+            'このWindows確認版では登録できません。Linuxのゲーム画面で作成してください。' :
+            'このLinux上で新しいキャラを作成・登録できます。'});
+      }
+      if (req.method!=='POST') return json(res,404,{error:'見つかりません'});
+      if (characterCreator===null) return json(res,501,{error:'キャラの登録はLinux側で行ってください'});
+      if (demoRegistrationBusy) return json(res,429,{error:'別のキャラを生成中です'});
+      let appearance,input;
+      try {
+        input=await getBody(req,512);
+        appearance=validateRegistration(input);
+      }
+      catch(error) {
+        const status=error?.status || 400;
+        return json(res,status,{error:status>=500?'入力を確認できません':error.message});
+      }
+      demoRegistrationBusy=true;
+      try {
+        const created=await characterCreator(input);
+        if(!/^cp_[0-9a-f]{32}$/.test(created?.generated_id) ||
+           typeof created.name!=='string' || created.name!==appearance.name ||
+           created.engine!=='original-template' || !(await isRegisteredDemo(created.generated_id))) {
+          throw failure('キャラの登録結果が一致しません');
+        }
+        return json(res,201,{...created,registered:true});
+      } catch(error) {
+        return json(res,error?.status===429?429:503,
+          {error:error?.status===429?'別のキャラを生成中です':'キャラを登録できませんでした。Linux側の保存容量などを確認してください'});
+      } finally {demoRegistrationBusy=false;}
     }
     if ([rawPath,path].some(target=>target===CHARACTER_DEMOS_API || target.startsWith(CHARACTER_DEMOS_API+'/'))) {
       const origin=req.headers.origin;

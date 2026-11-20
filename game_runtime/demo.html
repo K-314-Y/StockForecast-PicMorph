@@ -208,6 +208,20 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 .avatar-choice button{width:100%;white-space:normal;margin:0}
 .avatar-choice button:not(:disabled){background:#b9ecdc;color:#153632;font-weight:750}
 .avatar-choice small{min-height:2.4em;color:#c0d0e0}
+.avatar-registration{margin:6px 0;padding:10px;border:1px solid #81b9b0;border-radius:10px;background:#142c36}
+.avatar-registration summary{padding:11px 7px;min-height:44px;color:#c6ffe8;font-weight:780;cursor:pointer;line-height:1.5}
+.avatar-registration summary:focus-visible{outline:3px solid #f6d996;border-radius:5px}
+.avatar-registration form{display:grid;gap:10px;margin:12px 0}
+.avatar-registration label{display:grid;gap:5px;font-size:13px;font-weight:650}
+.avatar-registration input[type=text],.avatar-registration input:not([type]){width:100%;min-width:0;min-height:44px}
+.avatar-registration input[type=color]{width:100%;max-width:100%;min-height:44px;cursor:pointer}
+.avatar-registration-colors{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.avatar-registration button{min-height:44px}
+.avatar-registration p{font-size:13px;line-height:1.55}
+#registrationResult:empty{display:none}
+#registrationResult:not(:empty){padding:9px;border-radius:7px;background:#263e4b;color:#e0f7ff}
+@media(max-width:400px){.avatar-registration-colors{grid-template-columns:minmax(0,1fr)}}
+
 #generatedAvatarStatus{margin:12px 0 6px;min-height:1.35em;overflow-wrap:anywhere}
 #avatarEditNotice:not([hidden]){margin:10px 0;padding:10px 12px;border-left:3px solid #f3ce8f;border-radius:8px;background:#373146;color:#fff0d1;font-size:14px;line-height:1.6}
 .avatar-show-preview{display:inline-flex;align-items:center;min-height:44px;padding:7px 0;color:#b8f6dc;font-size:14px;text-underline-offset:3px}
@@ -544,8 +558,30 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     </section>
     <section id="avatarDemoChoice" class="avatar-choice" data-current="false" aria-labelledby="avatarDemoTitle">
      <h4 id="avatarDemoTitle">登録したキャラ</h4>
-     <p>生成・登録したキャラを、動く見た目として使います。</p>
-     <label for="generatedAvatarSelect">表示するキャラ</label>
+     <p>生成・登録したキャラを、動く見た目として使います。<strong>登録は下の「＋ 新しく作って登録」から。</strong></p>
+     <details id="avatarRegistration" class="avatar-registration">
+      <summary>＋ 新しいキャラを作って登録</summary>
+      <form id="registerCharacterForm">
+       <label for="registerCharacterName">① キャラの名前
+        <input id="registerCharacterName" name="name" maxlength="16" autocomplete="off" placeholder="例：ラベンダー" required>
+       </label>
+       <div class="avatar-registration-colors">
+        <label for="registerHairColor">② 髪の色 <input id="registerHairColor" name="hair_color" type="color" value="#a58bd9"></label>
+        <label for="registerClothingColor">③ 服の色 <input id="registerClothingColor" name="clothing_color" type="color" value="#78c2c5"></label>
+       </div>
+       <label for="registerAccessory">④ 飾り
+        <select id="registerAccessory" name="accessory">
+         <option value="none">なし</option><option value="ribbon">リボン</option>
+         <option value="glasses">眼鏡</option><option value="star">星</option>
+        </select>
+       </label>
+       <button id="registerCharacterButton" type="submit" disabled>キャラを生成して登録</button>
+      </form>
+      <p id="registrationCapability" class="creator-note">このPCで生成できるか確認しています…</p>
+      <p id="registrationResult" role="status" aria-live="polite"></p>
+      <small>図形を組み合わせた6コマの見本です。生成AIの画像ではありません。登録してもゲームの外見は自動では変わりません。</small>
+     </details>
+     <label for="generatedAvatarSelect">⑤ 登録したキャラを選ぶ</label>
      <select id="generatedAvatarSelect" disabled><option value="">読み込んでいます…</option></select>
      <button id="useGeneratedAvatar" type="button" disabled aria-describedby="avatarSelectionHint">このキャラに切り替える</button>
      <small id="avatarSelectionHint">選ぶだけでは変更されません。ボタンで適用します。</small>

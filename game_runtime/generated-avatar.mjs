@@ -55,6 +55,10 @@ export function mountGeneratedAvatar() {
   const demoCard=element('avatarDemoChoice');
   const selectionHint=element('avatarSelectionHint');
   const editNotice=element('avatarEditNotice');
+  const registrationForm=element('registerCharacterForm');
+  const registrationButton=element('registerCharacterButton');
+  const registrationResult=element('registrationResult');
+  const registrationCapability=element('registrationCapability');
   const status=message=>{element('generatedAvatarStatus').textContent=message;};
   const warning=message=>{element('generatedAvatarWarning').textContent=message;};
   let catalog=new Map();
@@ -62,9 +66,12 @@ export function mountGeneratedAvatar() {
   let record;
   let work;
   let epoch=0;
+  let registrationSupported=false;
+  let registrationBusy=false;
 
   function controls() {
-    const locked=!record || work?.phase==='refresh' || work?.phase==='save';
+    const locked=!record || registrationBusy || work?.phase==='refresh' || work?.phase==='save';
+    registrationButton.disabled=!registrationSupported || registrationBusy || Boolean(work);
     const showingDemo=Boolean(record?.active_demo_id && !sprite.hidden);
     const pendingDemo=Boolean(catalog.has(select.value) && select.value!==record?.active_demo_id);
     select.disabled=locked || !catalog.size;
@@ -213,6 +220,60 @@ export function mountGeneratedAvatar() {
       }
     } finally {finish(request);}
   }
+
+  async function createAndRegister(event) {
+    event.preventDefault();
+    if(!registrationSupported || registrationBusy || work) return;
+    const fields=new FormData(registrationForm);
+    const input={
+      name:String(fields.get('name')??'').trim(),
+      hair_color:String(fields.get('hair_color')??''),
+      clothing_color:String(fields.get('clothing_color')??''),
+      accessory:String(fields.get('accessory')??'none'),
+    };
+    if(!input.name || [...input.name].length>16) {
+      registrationResult.textContent='名前を1～16文字で入力してください。';
+      return;
+    }
+    registrationBusy=true;
+    controls();
+    registrationButton.textContent='キャラを生成・登録中…';
+    registrationResult.textContent='6コマの画像と3種類の表情を作って登録しています。';
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),38000);
+    try {
+      const created=await json(CATALOG+'/create',controller.signal,input);
+      if(!validId(created?.generated_id) || created?.registered!==true ||
+         created.engine!=='original-template') throw Error('Invalid registration');
+      // Re-fetch verified entries; do not trust a client-provided ID alone.
+      await refresh();
+      if(!catalog.has(created.generated_id)) throw Error('Registration not available');
+      select.value=created.generated_id;
+      registrationResult.textContent='「'+created.name+'」を登録しました。次は下の「このキャラに切り替える」を押すとゲームに表示されます。';
+      status('新しいキャラを登録しました。ゲームの表示はまだ変更していません。');
+    } catch(error) {
+      registrationResult.textContent=error?.name==='AbortError' ?
+        '登録の確認が途中で止まりました。画面を再読込して一覧を確認してください。' :
+        error?.status===429 ? '別のキャラを生成中です。しばらくしてから再実行してください。' :
+        '登録できませんでした。Linuxのゲームサーバーと保存容量を確認してください。';
+    } finally {
+      clearTimeout(timer);
+      registrationBusy=false;
+      registrationButton.textContent='キャラを生成して登録';
+      controls();
+    }
+  }
+
+  registrationForm.addEventListener('submit',event=>void createAndRegister(event));
+  void json(CATALOG+'/create').then(capability=>{
+    registrationSupported=capability?.available===true;
+    registrationCapability.textContent=registrationSupported ?
+      'ここから新しいキャラを作成・登録できます。登録だけでは現在の表示は変わりません。' :
+      'Windowsは画面確認用です。新しいキャラの作成・登録はLinuxのゲーム画面で行ってください。';
+  }).catch(()=>{
+    registrationSupported=false;
+    registrationCapability.textContent='登録機能の利用状況を確認できません。';
+  }).finally(controls);
 
   select.addEventListener('change',()=>{
     if(work?.phase==='decode') {

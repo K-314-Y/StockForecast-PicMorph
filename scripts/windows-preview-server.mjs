@@ -8,7 +8,7 @@ const previewCharacterStore={
   async read() {return {schema:1,revision:0,active_demo_id:null};},
   async save() {throw Object.assign(Error('Windows viewer does not save active avatars'),{status:403});},
 };
-const server=createGameServer({activeCharacterStore:previewCharacterStore});
+const server=createGameServer({activeCharacterStore:previewCharacterStore,characterCreator:null});
 server.listen(8891,'127.0.0.1',()=>{
   process.stdout.write('Creature Lab Windows preview: http://127.0.0.1:8891/game\n');
 });

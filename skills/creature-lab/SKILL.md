@@ -25,7 +25,16 @@ private local Creature Lab Node game. It has no real-trading capability.
 4. Use `list_my_trained_brains` to find training IDs and
    `get_my_creature_growth` only to read progression. Do not fabricate
    models, training, images, XP or results.
-5. To create a new original chibi from appearance choices, call
+5. For the easiest browser workflow on Linux, open the local game /game,
+   click 「外見を選ぶ・作る」, then under 「登録したキャラ」 click
+   「＋ 新しいキャラを作って登録」. Enter a display name, hair color,
+   clothing color and an optional accessory, then click
+   「キャラを生成して登録」. Wait for the registered name to appear in
+   the dropdown, then explicitly click 「このキャラに切り替える」 to
+   display it. Registration alone never changes the current avatar and
+   never replaces saved art or a stock model. Windows is an independent
+   read-only viewing copy for registration: generate/register on Linux.
+   Advanced workflow: to create a new original chibi from appearance choices, call
    `generate_character_parts` on the full private connection. Supply a
    display name, hex hair and clothing colors, and optionally an accessory
    and a seed. Describe the results as original procedural template artwork
