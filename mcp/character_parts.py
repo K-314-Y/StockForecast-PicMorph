@@ -102,7 +102,7 @@ def clear_staging(root):
             info = os.fstat(folder)
             if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise PartsError("Unsafe temporary character directory.")
-            for name in (*ASSETS, "manifest.json"):
+            for name in (*ASSETS, "manifest.json", "demo.json"):
                 remove_temporary_file(folder, name)
                 remove_temporary_file(folder, ".tmp-" + name)
     except FileNotFoundError:

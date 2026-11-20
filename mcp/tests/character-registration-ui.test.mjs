@@ -114,7 +114,10 @@ test('form explicitly distinguishes registration from changing displayed avatar'
     'registrationCapability','registrationResult']){
     assert.equal(html.match(new RegExp('id="'+id+'"','g'))?.length,1,id);
   }
-  assert.match(html,/＋ 新しいキャラを作って登録/);
+  // Procedural templates remain optional; user's dropped PNG is primary.
+  assert.match(html,/別機能：図形のサンプルキャラを新しく作る/);
+  assert.match(html,/PNGをドラッグ＆ドロップして登録/);
+  assert.ok(html.indexOf('id="pngDropRegistration"')<html.indexOf('id="avatarRegistration"'));
   assert.match(html,/キャラを生成して登録/);
   assert.match(html,/登録してもゲームの外見は自動では変わりません/);
   assert.match(js,/registrationForm\.addEventListener\('submit'/);

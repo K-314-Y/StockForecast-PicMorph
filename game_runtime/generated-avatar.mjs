@@ -1,4 +1,5 @@
 /** Only the registered visual overlay is managed here; the underlying game stays live. */
+import {mountPngDropRegistration} from './png-drop-registration.mjs';
 const STATE='/api/active-character';
 const CATALOG='/api/character-demos';
 const PARTS=['body','ready','happy','cautious'];
@@ -147,7 +148,8 @@ export function mountGeneratedAvatar() {
   function setCatalog(entries) {
     const next=new Map();
     for(const item of Array.isArray(entries) ? entries.slice(0,32) : []) {
-      if(validId(item?.generated_id) && item.engine==='original-template' && typeof item.name==='string') {
+      if(validId(item?.generated_id) && ['original-template','user-png'].includes(item.engine) &&
+         typeof item.name==='string') {
         next.set(item.generated_id,item.name);
       }
     }
@@ -274,6 +276,17 @@ export function mountGeneratedAvatar() {
     registrationSupported=false;
     registrationCapability.textContent='登録機能の利用状況を確認できません。';
   }).finally(controls);
+
+  mountPngDropRegistration({
+    onRegistered:async created=>{
+      await refresh();
+      if(catalog.has(created.generated_id)) {
+        select.value=created.generated_id;
+        controls();
+        status('PNGキャラを登録しました。ゲームで使うには「このキャラに切り替える」を押してください。');
+      }
+    },
+  });
 
   select.addEventListener('change',()=>{
     if(work?.phase==='decode') {

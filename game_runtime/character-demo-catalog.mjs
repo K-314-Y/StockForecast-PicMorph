@@ -11,6 +11,9 @@ const DEFAULT_ROOT=fileURLToPath(new URL('../local_state/character_parts',import
 const ENGINE='original-template';
 const MODEL='creature-lab-chibi-v1';
 const PROVENANCE='Drawn from project-authored geometric primitives using Python Pillow.';
+const USER_ENGINE='user-png';
+const USER_MODEL='creature-lab-user-png-v1';
+const USER_PROVENANCE='User-supplied local PNG parts, normalized in the browser.';
 const ID=/^cp_[0-9a-f]{32}$/;
 const MOODS=['body','ready','happy','cautious'];
 const MAX_ENTRIES=32;
@@ -83,10 +86,12 @@ async function readEntry(folder,id) {
   const {name}=demo;
   requireValid(typeof name==='string' && name.length<=16 && name.trim() &&
     !/\p{Cc}/u.test(name) && demo.visibility==='local_only' &&
-    demo.generated_id===id && demo.engine===ENGINE && demo.model===MODEL &&
-    demo.browser_auto_link===false &&
+    demo.generated_id===id && demo.browser_auto_link===false &&
+    [ENGINE,USER_ENGINE].includes(demo.engine) &&
+    demo.model===(demo.engine===USER_ENGINE ? USER_MODEL : MODEL) &&
     manifest.schema_version===1 && manifest.generated_id===id && manifest.name===name &&
-    manifest.engine===ENGINE && manifest.model===MODEL && manifest.source_provenance===PROVENANCE &&
+    manifest.engine===demo.engine && manifest.model===demo.model &&
+    manifest.source_provenance===(demo.engine===USER_ENGINE ? USER_PROVENANCE : PROVENANCE) &&
     Object.entries(LAYOUT).every(([key,value])=>manifest.layout?.[key]===value));
   for(const part of MOODS) {
     const info=manifest.files?.[`character_${part}_6frames.png`];
@@ -94,7 +99,7 @@ async function readEntry(folder,id) {
       typeof info.sha256==='string' && info.sha256.length===64 && /^[0-9a-f]+$/.test(info.sha256) &&
       info.width===1152 && info.height===208 && info.frames===6);
   }
-  return {metadata:{generated_id:id,name,engine:ENGINE,model:MODEL},files:manifest.files};
+  return {metadata:{generated_id:id,name,engine:demo.engine,model:demo.model},files:manifest.files};
 }
 
 async function readPart(folder,files,part) {

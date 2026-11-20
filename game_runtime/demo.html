@@ -221,6 +221,28 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #registrationResult:empty{display:none}
 #registrationResult:not(:empty){padding:9px;border-radius:7px;background:#263e4b;color:#e0f7ff}
 @media(max-width:400px){.avatar-registration-colors{grid-template-columns:minmax(0,1fr)}}
+/* Direct PNG/WebP drop & ZIP import are the primary character registration path. */
+.avatar-drop-registration{display:grid;gap:9px;margin:10px 0;padding:12px;border:1px solid #80cfc0;border-radius:12px;background:#17333b;min-width:0}
+.avatar-drop-registration h5{font-size:15px;margin:0;color:#c9ffea}
+.avatar-drop-registration p{font-size:13px;margin:0;line-height:1.65}
+.avatar-drop-registration label{display:grid;gap:6px;font-size:14px;font-weight:680}
+.avatar-drop-registration input[type=text]{width:100%;min-width:0;min-height:44px}
+.png-drop-zone{display:grid;gap:7px;padding:16px 11px;border:2px dashed #83c6be;border-radius:12px;background:#20364a;text-align:center;min-width:0}
+.png-drop-zone[data-dragging=true]{background:#30534e;border-color:#d6f9d9}
+.png-drop-zone:focus-visible{outline:3px solid #ffdc82;outline-offset:3px}
+.png-drop-zone strong{font-size:15px}
+.png-drop-zone span{font-size:12px;color:#d6e9ec}
+.png-drop-zone input{font-size:12px;width:100%;min-width:0;padding:7px}
+.png-parts-by-role{margin-top:2px;border:1px solid #547d86;border-radius:9px;padding:8px 10px;background:#1b3040}
+.png-parts-by-role summary{padding:7px;min-height:44px;cursor:pointer;font-size:13px;font-weight:750;line-height:1.5}
+.png-parts-by-role summary:focus-visible{outline:3px solid #ffd98b}
+.png-parts-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-block:10px}
+.png-parts-inputs label{min-width:0}
+.png-parts-inputs input[type=file]{width:100%;min-width:0;font-size:12px}
+@media(max-width:560px){.png-parts-inputs{grid-template-columns:minmax(0,1fr)}}
+#pngDropPreview:not([hidden]){display:block;width:min(192px,100%);height:auto;aspect-ratio:192/208;object-fit:contain;justify-self:center;background:#405265;border-radius:9px}
+#pngImportStatus:not(:empty){padding:9px;border:1px solid #4e817d;border-radius:7px;background:#203d45;overflow-wrap:anywhere}
+
 
 #generatedAvatarStatus{margin:12px 0 6px;min-height:1.35em;overflow-wrap:anywhere}
 #avatarEditNotice:not([hidden]){margin:10px 0;padding:10px 12px;border-left:3px solid #f3ce8f;border-radius:8px;background:#373146;color:#fff0d1;font-size:14px;line-height:1.6}
@@ -391,6 +413,9 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    </div>
   </div>
   <div class="actions">
+   <button id="quickPngRegister" type="button" aria-controls="appearanceStudio pngDropRegistration">PNG・ZIPをドラッグ＆ドロップして登録する</button>
+  </div>
+  <div class="actions">
    <button id="hatchIdleToggle" type="button" aria-pressed="false" aria-describedby="hatchIdleHint hatchIdleStatus" disabled>動くデモを見る</button>
    <button id="hatchPartsToggle" type="button" aria-pressed="false" aria-describedby="hatchPartsHint hatchPartsStatus" disabled>PNGパーツ合成を試す</button>
   </div>
@@ -558,9 +583,41 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     </section>
     <section id="avatarDemoChoice" class="avatar-choice" data-current="false" aria-labelledby="avatarDemoTitle">
      <h4 id="avatarDemoTitle">登録したキャラ</h4>
-     <p>生成・登録したキャラを、動く見た目として使います。<strong>登録は下の「＋ 新しく作って登録」から。</strong></p>
+     <p>自分で用意したPNGパーツを登録して、動くキャラとして使えます。</p>
+     <section id="pngDropRegistration" class="avatar-drop-registration" aria-labelledby="pngDropTitle">
+      <h5 id="pngDropTitle">① PNGをドラッグ＆ドロップして登録</h5>
+      <p>以前の <strong>body / ready / happy / cautious</strong> の4枚（髪・服も任意）、またはパーツ入りZIPをここに入れます。PNG・WebPも読み込めます。</p>
+      <label for="pngCharacterName">キャラの登録名
+       <input id="pngCharacterName" type="text" maxlength="16" placeholder="例：ラベンダー" autocomplete="off">
+      </label>
+      <div id="pngDropZone" class="png-drop-zone" role="group" tabindex="0" aria-label="PNG画像やZIPをドラッグ＆ドロップ">
+       <strong>ここにPNGパーツ4～6枚かZIPをドロップ</strong>
+       <span>またはファイルを選んでください</span>
+       <input id="pngDropFileInput" type="file" multiple accept=".png,.webp,.zip,image/png,image/webp,application/zip">
+      </div>
+      <button id="pngUsePreparedParts" type="button">用意済みのHatchPet画像パーツを試す</button>
+      <details id="pngPartsByRole" class="png-parts-by-role">
+       <summary>体・表情・髪・服を個別に選ぶ（PNG / WebP）</summary>
+       <p>自分で用意したパーツを1種類ずつ選べます。体と3つの表情は必須、髪と服は任意です。髪と服は6コマ画像でも、1コマ分の透過PNGでも使えます。</p>
+       <div class="png-parts-inputs">
+        <label for="pngRoleBody">体・土台 <input id="pngRoleBody" type="file" accept="image/png,image/webp"></label>
+        <label for="pngRoleReady">顔・通常 <input id="pngRoleReady" type="file" accept="image/png,image/webp"></label>
+        <label for="pngRoleHappy">顔・笑顔 <input id="pngRoleHappy" type="file" accept="image/png,image/webp"></label>
+        <label for="pngRoleCautious">顔・心配 <input id="pngRoleCautious" type="file" accept="image/png,image/webp"></label>
+        <label for="pngRoleOutfit">服（任意） <input id="pngRoleOutfit" type="file" accept="image/png,image/webp"></label>
+        <label for="pngRoleHair">髪（任意） <input id="pngRoleHair" type="file" accept="image/png,image/webp"></label>
+       </div>
+       <button id="pngLoadChosenParts" type="button">選んだパーツを合成して確認</button>
+      </details>
+      <p id="pngFileSummary" class="creator-note">まだファイルを選んでいません。画像の確認だけでは保存しません。</p>
+      <canvas id="pngDropPreview" width="192" height="208" aria-label="登録前のPNGキャラの先頭コマのプレビュー" hidden></canvas>
+      <button id="pngRegisterButton" type="button" disabled>② このPNGキャラを登録する</button>
+      <p id="pngImportCapability" class="creator-note">PNG登録が利用できるか確認しています…</p>
+      <p id="pngImportStatus" role="status" aria-live="polite"></p>
+      <small>登録後、下の「このキャラに切り替える」でゲームに表示します。元画像や予測AIは変更しません。</small>
+     </section>
      <details id="avatarRegistration" class="avatar-registration">
-      <summary>＋ 新しいキャラを作って登録</summary>
+      <summary>別機能：図形のサンプルキャラを新しく作る</summary>
       <form id="registerCharacterForm">
        <label for="registerCharacterName">① キャラの名前
         <input id="registerCharacterName" name="name" maxlength="16" autocomplete="off" placeholder="例：ラベンダー" required>

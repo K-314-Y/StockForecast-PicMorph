@@ -16,7 +16,7 @@ function crc32(buffer){
   return (value^0xffffffff)>>>0;
 }
 function partsKey(name){
-  const m=/(?:^|[_-])(body|ready|happy|cautious)(?:[_-]6frames)?\.(webp|png)$/i.exec(name);
+  const m=/(?:^|[_-])(body|ready|happy|cautious|outfit|hair)(?:[_-]6frames)?\.(webp|png)$/i.exec(name);
   if(!m)return null;
   return {key:m[1].toLowerCase(),ext:m[2].toLowerCase()};
 }

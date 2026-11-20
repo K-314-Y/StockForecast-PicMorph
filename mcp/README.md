@@ -407,3 +407,16 @@ The server verifies all four PNGs before listing a demo and verifies each
 requested PNG again before serving it. The browser receives only catalog
 metadata until a selection. Previewing or clearing a demo does not write
 files or change game state.
+
+
+### Browser PNG-part registration (Linux only)
+
+The primary registration workflow uses **prepared transparent PNG/WebP
+layers**, not new geometric generation. In the Linux game page click
+「PNG・ZIPをドラッグ＆ドロップして登録する」. Drag body, ready, happy,
+cautious, plus optional hair and outfit, or import a ZIP. The existing
+project-authored HatchPet layers can be loaded with one button. A separate
+per-layer file picker accepts an aligned static hair/outfit PNG or six-frame
+atlas. The preview is client-only until explicit registration; import writes
+only to the private local PNG catalog and never changes active visuals,
+models or XP. Windows shows the interface but cannot register PNG files.

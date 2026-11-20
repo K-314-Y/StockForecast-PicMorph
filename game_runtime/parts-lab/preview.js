@@ -349,13 +349,13 @@ async function refreshGallery() {
     for(const item of entries) {
       if(typeof item?.name!=='string' || typeof item.generated_id!=='string' ||
           item.generated_id.length!==35 || !/^cp_[0-9a-f]{32}$/.test(item.generated_id) ||
-          item.engine!=='original-template' || seen.has(item.generated_id)) continue;
+          !['original-template','user-png'].includes(item.engine) || seen.has(item.generated_id)) continue;
       seen.add(item.generated_id);
       const card=document.createElement('li');
       const name=document.createElement('strong');
       name.textContent=item.name;
       const engine=document.createElement('small');
-      engine.textContent='図形で作ったデモ';
+      engine.textContent=item.engine==='user-png' ? '登録したPNGキャラ' : '図形で作ったデモ';
       const button=document.createElement('button');
       button.type='button';
       button.textContent='このキャラで試す';

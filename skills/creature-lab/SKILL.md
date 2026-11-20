@@ -25,31 +25,28 @@ private local Creature Lab Node game. It has no real-trading capability.
 4. Use `list_my_trained_brains` to find training IDs and
    `get_my_creature_growth` only to read progression. Do not fabricate
    models, training, images, XP or results.
-5. For the easiest browser workflow on Linux, open the local game /game,
-   click 「外見を選ぶ・作る」, then under 「登録したキャラ」 click
-   「＋ 新しいキャラを作って登録」. Enter a display name, hair color,
-   clothing color and an optional accessory, then click
-   「キャラを生成して登録」. Wait for the registered name to appear in
-   the dropdown, then explicitly click 「このキャラに切り替える」 to
-   display it. Registration alone never changes the current avatar and
-   never replaces saved art or a stock model. Windows is an independent
-   read-only viewing copy for registration: generate/register on Linux.
-   Advanced workflow: to create a new original chibi from appearance choices, call
-   `generate_character_parts` on the full private connection. Supply a
-   display name, hex hair and clothing colors, and optionally an accessory
-   and a seed. Describe the results as original procedural template artwork
-   (`engine=original-template`). Call `package_character_parts` with the
-   generated ID and give the user the local ZIP path to select in Parts Lab.
-   For one-click preview, call register_demo_character, then open or refresh
-   Parts Lab and select the character in Registered Demo Gallery. Registration
-   alone never changes the game's avatar. On the game's appearance manager,
-   the user can explicitly click 「このキャラに切り替える」 to save only the
-   registered visual ID, or 「自分の外見を表示」 to stop displaying that
-   registered visual. The latter never deletes or rolls back saved artwork,
-   looks, colors, prediction settings or XP. Both controls are in the
-   appearance studio and the user can check the current visual at the top.
-   Existing artwork uploads and manual crop actions belong in the local web
-   game. Image data must not be sent to arbitrary destinations.
+5. For existing user-supplied PNG or WebP body, ready, happy, cautious parts,
+   the preferred workflow is the **drag-and-drop upload**, NOT generating an
+   original-template character. On Linux /game, click
+   「PNG・ZIPをドラッグ＆ドロップして登録する」 next to the character, then
+   drop four named images (body/ready/happy/cautious), optional hair/outfit
+   layers, or a ZIP. To use already prepared assets without selecting files,
+   click 「用意済みのHatchPet画像パーツを試す」. To mix custom PNG/WebP
+   layers, expand 「体・表情・髪・服を個別に選ぶ」. Confirm the
+   preview, enter the character name and explicitly click
+   「このPNGキャラを登録する」. The four PNGs are normalized locally to
+   1152x208 six-frame RGBA atlases; name and transparency are checked.
+   After registration the new ID appears in the character dropdown; click
+   「このキャラに切り替える」 to activate the visual.
+   Registration does not edit existing art, model, XP or display selection.
+   The old PNG Parts Lab /parts-lab/preview.html is preview only.
+   Windows is an independent viewing copy and cannot save PNG registrations;
+   use Linux to register, Windows only to review the UI.
+   Separately, for a new procedural illustration, use the optional
+   「別機能：図形のサンプルキャラを新しく作る」, or call
+   generate_character_parts and then register_demo_character on the
+   authorized MCP. These procedural templates are not AI-generated art.
+
 6. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

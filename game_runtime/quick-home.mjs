@@ -772,6 +772,10 @@ element('quickReflectionEdit').addEventListener('click',()=>{
   openEditor();
 });
 element('quickArtwork').addEventListener('click',openArtwork);
+element('quickPngRegister').addEventListener('click',()=>{
+  openArtwork();
+  scrollAndFocus('pngDropRegistration','pngDropFileInput');
+});
 element('artworkReturn').addEventListener('click',()=>scrollAndFocus('simpleHome','quickModel'));
 element('shopReturn').addEventListener('click',returnHome);
 element('companionReturn').addEventListener('click',returnHome);

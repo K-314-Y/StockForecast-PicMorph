@@ -23,6 +23,7 @@ import {compareHistoricalMarket} from './historical-market.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
+import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 
 const ACTIVE_CHARACTER_API='/api/active-character';
@@ -33,6 +34,7 @@ const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.ur
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const GENERATED_AVATAR_JS = new URL('./generated-avatar.mjs', import.meta.url);
+const PNG_DROP_JS = new URL('./png-drop-registration.mjs', import.meta.url);
 // Fixed allowlist: do not map client input to arbitrary filesystem paths.
 const HATCH_ASSETS = new Map([
   ['/assets/hatchpet-demo-idle.webp', new URL('./assets/hatchpet-demo-idle.webp', import.meta.url)],
@@ -302,6 +304,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   artworkExpressionStore = createArtworkExpressionStore(),
                                   catalogRoot, activeCharacterStore = createActiveCharacterStore(),
                                   characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
+                                  userPngImporter = process.platform==='linux' ? createUserPngImporter() : null,
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
@@ -316,6 +319,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   const isRegisteredDemo=async id=>(await characterDemos.list()).some(item=>item.generated_id===id);
   let demoImagesInFlight=0;
   let demoRegistrationBusy=false;
+  let userPngImportBusy=false;
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
@@ -366,6 +370,47 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         catch {return json(res,503,{error:'登録キャラの外見設定を読み込めません'});}
       }
+    }
+    // Local PNG/WebP sprites are normalized to four PNG atlases by the browser;
+    // importing them must always require a separate, explicit Save button.
+    if (rawPath===CHARACTER_DEMOS_API+'/import' || path===CHARACTER_DEMOS_API+'/import') {
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      if (req.headers.origin!==undefined &&
+          req.headers.origin!=='http://'+req.headers.host) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      if (rawPath!==path) return json(res,404,{error:'見つかりません'});
+      if (req.method==='GET') return json(res,200,{
+        available:userPngImporter!==null,
+        message:userPngImporter===null ?
+          'このWindows確認版ではPNG登録できません。Linux側で登録してください。' :
+          '自作PNGをこのLinux内に登録できます。登録だけでは表示を変更しません。',
+      });
+      if (req.method!=='POST') return json(res,404,{error:'見つかりません'});
+      if (userPngImporter===null) return json(res,501,{error:'PNGの登録はLinux側で行ってください'});
+      if (userPngImportBusy) return json(res,429,{error:'別のPNGを登録中です'});
+      let payload;
+      try {payload=validateUserPngPayload(await getBody(req,3*1024*1024));}
+      catch(error) {
+        const status=error?.status||400;
+        return json(res,status,{error:status>=500?'PNGの入力を確認できません':error.message});
+      }
+      userPngImportBusy=true;
+      try {
+        const saved=await userPngImporter(payload);
+        if(!/^cp_[0-9a-f]{32}$/.test(saved?.generated_id) ||
+           saved.name!==payload.name || saved.engine!=='user-png' ||
+           saved.registered!==true || !(await isRegisteredDemo(saved.generated_id))) {
+          throw failure('PNGの登録結果が一致しません');
+        }
+        return json(res,201,saved);
+      } catch(error) {
+        return json(res,error?.status===422?422:503,{
+          error:error?.status===422 ?
+            '画像を登録できません。PNGのサイズや透明背景を確認してください。' :
+            'PNGの登録に失敗しました。Linux側の保存先を確認してください。',
+        });
+      } finally {userPngImportBusy=false;}
     }
     // The only creation entry point: a deliberately explicit local button.
     // The Windows viewer receives a capability=false response, not an implicit write.
@@ -658,12 +703,13 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
     }
 
-    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
-      const script = path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
+    if (req.method === 'GET' && (path === '/game' || path === '/' || path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/png-drop-registration.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs')) {
+      const script = path === '/demo.mjs' || path === '/generated-avatar.mjs' || path === '/png-drop-registration.mjs' || path === '/arena-ui.mjs' || path === '/crop-editor.mjs' || path === '/model-lab-ui.mjs' || path === '/model-shop-ui.mjs' || path === '/quick-home.mjs';
       let body;
       try {
         body = await readFile(path === '/quick-home.mjs' ? QUICK_HOME_JS : path === '/model-shop-ui.mjs' ? MODEL_SHOP_JS : path === '/model-lab-ui.mjs' ? MODEL_LAB_JS : path === '/crop-editor.mjs' ? CROP_JS :
-        path === '/arena-ui.mjs' ? ARENA_JS : path === '/generated-avatar.mjs' ? GENERATED_AVATAR_JS : script ? DEMO_JS : DEMO);
+        path === '/arena-ui.mjs' ? ARENA_JS : path === '/generated-avatar.mjs' ? GENERATED_AVATAR_JS :
+        path === '/png-drop-registration.mjs' ? PNG_DROP_JS : script ? DEMO_JS : DEMO);
       } catch (error) {
         console.error('Creature Lab static asset read failed', error);
         return json(res, 503, {error: 'ゲーム画面を読み込めません'});
