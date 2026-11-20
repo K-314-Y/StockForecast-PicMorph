@@ -1,14 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {copyFile,mkdir,mkdtemp,readFile,readdir,rm,stat,symlink} from 'node:fs/promises';
+import {chmod,copyFile,mkdir,mkdtemp,readFile,readdir,rm,stat,symlink,truncate,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
+import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {createGameServer} from '../../game_runtime/server.mjs';
 import {createActiveCharacterStore} from '../../game_runtime/active-character.mjs';
+
+function runPython(root,argv,{input,env}={}) {
+ return new Promise((resolve,reject)=>{
+  const child=spawn('python3',['-B','-E',...argv],{cwd:root,env,stdio:['pipe','pipe','pipe']});
+  let stdout='',stderr='';
+  child.stdout.setEncoding('utf8').on('data',x=>stdout+=x);
+  child.stderr.setEncoding('utf8').on('data',x=>stderr+=x);
+  child.stdin.on('error',reject);
+  child.stdin.end(input);
+  child.once('error',reject);
+  child.once('close',code=>code===0?resolve(stdout):reject(Error(stderr)));
+ });
+}
 
 async function createFixtureImage(root) {
  const lines=[
@@ -25,29 +39,23 @@ async function createFixtureImage(root) {
  "  if part=='body':",
  '   d.rectangle((x+20,70,x+170,190),fill=(190,155,228,255))',
  '  else:',
- '   d.rectangle((x+43,30,x+75,48),fill=(239,36,112,255))',
+ '   left=43+(7 if frame==5 else 0)',
+ '   d.rectangle((x+left,30,x+left+32,48),fill=(239,36,112,255))',
  '   d.ellipse((x+91,82,x+110,95),fill=(45,73,99,255))',
  ' out=io.BytesIO(); im.save(out,format="PNG")',
  ' parts[part]=base64.b64encode(out.getvalue()).decode()',
  'print(json.dumps(register({"name":"Local Candidate","parts":parts})))'
  ];
- const output=await new Promise((resolve,reject)=>{
-  const child=spawn('python3',['-B','-c',lines.join('\n')],{cwd:root,stdio:['ignore','pipe','pipe']});
-  let stdout='',stderr='';
-  child.stdout.setEncoding('utf8').on('data',x=>stdout+=x);
-  child.stderr.setEncoding('utf8').on('data',x=>stderr+=x);
-  child.once('error',reject);
-  child.once('close',code=>code===0?resolve(stdout):reject(Error(stderr)));
- });
- return JSON.parse(output);
+ return JSON.parse(await runPython(root,['-c',lines.join('\n')]));
 }
 
-async function fixture(t,{readOnly=false}={}) {
+async function fixture(t,{readOnly=false,http=false}={}) {
  const dir=await mkdtemp(join(tmpdir(),'creature-segment-mcp-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
  await mkdir(join(dir,'mcp'),{recursive:true});
  await mkdir(join(dir,'game_runtime'),{recursive:true});
  for(const name of ['character_parts.py','character_parts_render.py','import_png_character.py',
-     'artwork_segment.py','companion-chatgpt.mjs']) {
+     'artwork_segment.py','segment_onnx.py','companion-chatgpt.mjs']) {
    await copyFile(new URL('../'+name,import.meta.url),join(dir,'mcp',name));
  }
  for(const name of ['artwork.mjs','image-validation.mjs'])
@@ -63,17 +71,26 @@ async function fixture(t,{readOnly=false}={}) {
   loadSnapshot:()=>{throw Error('No market access for segmentation tests');},
  });
  await new Promise((resolve,reject)=>game.once('error',reject).listen(0,'127.0.0.1',resolve));
+ t.after(()=>new Promise(resolve=>game.close(resolve)));
  const url='http://127.0.0.1:'+game.address().port;
- const {makeCompanionChatGptMcp}=await import(pathToFileURL(join(dir,'mcp','companion-chatgpt.mjs')));
- const mcp=makeCompanionChatGptMcp({apiBase:url,readOnly});
+ const {createCompanionChatGptHttpServer,makeCompanionChatGptMcp}=await import(
+  pathToFileURL(join(dir,'mcp','companion-chatgpt.mjs')));
  const client=new Client({name:'segment-test',version:'1.0.0'});
- const [left,right]=InMemoryTransport.createLinkedPair();
- await mcp.connect(right);await client.connect(left);
- t.after(async()=>{
-  await client.close();await mcp.close();
-  await new Promise(resolve=>game.close(resolve));
-  await rm(dir,{recursive:true,force:true});
- });
+ t.after(()=>client.close());
+ if(http){
+  const bridge=createCompanionChatGptHttpServer({apiBase:url,readOnly});
+  await new Promise((resolve,reject)=>bridge.once('error',reject).listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>{
+   bridge.close(resolve);
+   bridge.closeAllConnections();
+  }));
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${bridge.address().port}/mcp`)));
+ }else{
+  const mcp=makeCompanionChatGptMcp({apiBase:url,readOnly});
+  const [left,right]=InMemoryTransport.createLinkedPair();
+  await mcp.connect(right);await client.connect(left);
+  t.after(()=>mcp.close());
+ }
  return {dir,url,id:generated.generated_id,client};
 }
 
@@ -90,6 +107,8 @@ test('MCP previews color-mask PNG without creating files or altering the game',a
  assert.equal(tools.length,16);
  for(const name of ['inspect_character_image_for_parts','preview_segment_candidate','save_segment_candidate'])
   assert(tools.some(x=>x.name===name),name);
+ for(const name of ['inspect_character_image_for_parts','preview_segment_candidate'])
+  assert.equal(tools.find(x=>x.name===name).annotations.readOnlyHint,false);
  const inspection=await call(client,'inspect_character_image_for_parts',{
   generated_id:id,source_part:'ready',
  });
@@ -101,9 +120,120 @@ test('MCP previews color-mask PNG without creating files or altering the game',a
  assert.deepEqual(preview.structuredContent.bbox,[43,30,76,49]);
  assert.equal(preview.structuredContent.mask_pixels,33*19);
  assert.equal(preview.structuredContent.semantic_model_used,false);
+ assert.equal(preview.structuredContent.neural_model_used,false);
+ assert.equal(preview.structuredContent.method,'ai-guided-color-region');
  assert.match(preview.structuredContent.source_sha256,/^[0-9a-f]{64}$/);
  await assert.rejects(readdir(join(dir,'local_state','segment_candidates')),{code:'ENOENT'});
  assert.deepEqual(await(await fetch(url+'/api/active-character')).json(),initial);
+});
+
+async function helper(dir,payload,model) {
+ return JSON.parse(await runPython(dir,['mcp/artwork_segment.py'],{
+  input:JSON.stringify(payload)+'\n',
+  env:{PATH:process.env.PATH,CREATURE_SEGMENT_ONNX_MODEL:model},
+ }));
+}
+
+test('Configured ONNX worker falls back on model, runtime, contention and timeout failures',async t=>{
+ const {dir,id,url}=await fixture(t);
+ const source=Buffer.from(await(await fetch(url+'/api/character-demos/'+id+'/ready.png')).arrayBuffer());
+ const payload={...args(id),mode:'preview',source_png:source.toString('base64')};
+ const model=join(dir,'fixture.onnx');
+ const missing=await helper(dir,payload,model);
+ assert.equal(missing.result.fallback_reason,'invalid_model_file');
+ await writeFile(model,'unused');
+ await truncate(model,64*1024*1024+1);
+ const oversized=await helper(dir,payload,model);
+ assert.equal(oversized.result.fallback_reason,'invalid_model_file');
+ await truncate(model,1);
+ const busy=JSON.parse(await runPython(dir,['-c',[
+  'import fcntl,os,subprocess,sys',
+  'fd=os.open("mcp",os.O_RDONLY|os.O_DIRECTORY)',
+  'fcntl.flock(fd,fcntl.LOCK_EX)',
+  'subprocess.run([sys.executable,"-B","-E","mcp/artwork_segment.py"],input=sys.stdin.buffer.read(),check=True)',
+ ].join('\n')],{input:JSON.stringify(payload)+'\n',env:{PATH:process.env.PATH,CREATURE_SEGMENT_ONNX_MODEL:model}}));
+ assert.equal(busy.result.fallback_reason,'inference_busy');
+ await writeFile(join(dir,'mcp','onnxruntime.py'),'raise ImportError("test runtime missing")\n');
+ const unavailable=await helper(dir,payload,model);
+ assert.equal(unavailable.result.fallback_reason,'runtime_unavailable');
+
+ const worker=join(dir,'mcp','segment_onnx.py');
+ const code=await readFile(worker,'utf8');
+ await writeFile(worker,code.replace('MAX_WALL_SECONDS = 8','MAX_WALL_SECONDS = 0.1')
+  .replace('sys.exit(worker_main(*sys.argv[1:]))','import time; time.sleep(10)'));
+ const timedOut=await helper(dir,payload,model);
+ assert.equal(timedOut.result.fallback_reason,'inference_timeout');
+ for(const {result} of [missing,oversized,busy,unavailable,timedOut]){
+  assert.equal(result.method,'ai-guided-color-region');
+  assert.equal(result.neural_model_used,false);
+  assert.equal(result.mask_pixels,33*19);
+  assert.equal(result.part_png_sha256,oversized.result.part_png_sha256);
+ }
+ await assert.rejects(readdir(join(dir,'local_state','segment_candidates')),{code:'ENOENT'});
+});
+
+test('HTTP MCP saves the exact reviewed neural mask in frame coordinates',async t=>{
+ const {dir,id,url,client}=await fixture(t,{http:true});
+ const atlasUrl=url+'/api/character-demos/'+id+'/ready.png';
+ const source=Buffer.from(await(await fetch(atlasUrl)).arrayBuffer());
+ const payload={...args(id),frame:5,seeds:[{x:55,y:35}]};
+ const model=join(dir,'fixture.onnx');
+ await writeFile(model,'fixture');
+ const previousModel=process.env.CREATURE_SEGMENT_ONNX_MODEL;
+ process.env.CREATURE_SEGMENT_ONNX_MODEL=model;
+ t.after(()=>{
+  if(previousModel===undefined)delete process.env.CREATURE_SEGMENT_ONNX_MODEL;
+  else process.env.CREATURE_SEGMENT_ONNX_MODEL=previousModel;
+ });
+ const worker=join(dir,'mcp','segment_onnx.py');
+ const code=await readFile(worker,'utf8');
+ const mockMask=right=>writeFile(worker,code.replace('    sys.exit(worker_main(*sys.argv[1:]))',[
+  '    assert sys.argv[2].endswith("/fixture.onnx")',
+  '    assert sys.stdin.buffer.read()[4*(35*WIDTH+55):4*(35*WIDTH+55)+4]==bytes([239,36,112,255])',
+  `    sys.stdout.buffer.write(bytes(52<=x<${right} and 32<=y<38 for y in range(HEIGHT) for x in range(WIDTH)))`,
+ ].join('\n')));
+ await mockMask(62);
+ const preview=await call(client,'preview_segment_candidate',payload);
+ assert.equal(preview.isError,undefined,JSON.stringify(preview));
+ assert.match(preview.content[0].text,/EfficientSAM/);
+ const details=preview.structuredContent;
+ assert.equal(details.method,'efficientsam-onnx-cpu');
+ assert.equal(details.neural_model_used,true);
+ assert.equal(details.semantic_model_used,false);
+ assert.deepEqual(details.bbox,[52,32,62,38]);
+ assert.equal(details.mask_pixels,60);
+ const image=await runPython(dir,['-c',[
+  'import sys,io,base64,json',
+  'from PIL import Image',
+  'im=Image.open(io.BytesIO(base64.b64decode(sys.stdin.read())))',
+  'print(json.dumps([im.size, im.getpixel((55,35)), im.getpixel((51,35))]))',
+ ].join('\n')],{input:preview.content[1].data});
+ assert.deepEqual(JSON.parse(image),[[192,208],[239,36,112,255],[0,0,0,0]]);
+ const save={...payload,expected_sha256:details.source_sha256};
+ const unreviewed=await call(client,'save_segment_candidate',{...save,tolerance:8});
+ assert.equal(unreviewed.isError,true);
+ await mockMask(63);
+ assert.match((await call(client,'save_segment_candidate',save)).content[0].text,/mask changed/);
+ await writeFile(worker,code);
+ assert.match((await call(client,'save_segment_candidate',save)).content[0].text,/neural mask is unavailable/);
+ await assert.rejects(readdir(join(dir,'local_state','segment_candidates')),{code:'ENOENT'});
+ const fallback=await call(client,'preview_segment_candidate',payload);
+ assert.equal(fallback.structuredContent.method,'ai-guided-color-region');
+ assert.match(fallback.content[0].text,/Pillow/);
+ await mockMask(62);
+ const savedFallback=await call(client,'save_segment_candidate',save);
+ assert.equal(savedFallback.isError,undefined,JSON.stringify(savedFallback));
+ assert.equal(savedFallback.structuredContent.method,'ai-guided-color-region');
+ const colorOutput=await readFile(join(dir,savedFallback.structuredContent.local_directory,'part.png'));
+ assert.deepEqual(colorOutput,Buffer.from(fallback.content[1].data,'base64'));
+
+ await call(client,'preview_segment_candidate',payload);
+ const saved=await call(client,'save_segment_candidate',save);
+ assert.equal(saved.isError,undefined,JSON.stringify(saved));
+ assert.equal(saved.structuredContent.method,'efficientsam-onnx-cpu');
+ const output=await readFile(join(dir,saved.structuredContent.local_directory,'part.png'));
+ assert.deepEqual(output,Buffer.from(preview.content[1].data,'base64'));
+ assert.deepEqual(Buffer.from(await(await fetch(atlasUrl)).arrayBuffer()),source);
 });
 
 test('Save requires matching source digest, creates only isolated candidate PNG',async t=>{
@@ -113,7 +243,29 @@ test('Save requires matching source digest, creates only isolated candidate PNG'
  assert.equal(preview.isError,undefined);
  const wrong=await call(client,'save_segment_candidate',{...args(id),expected_sha256:'0'.repeat(64)});
  assert.equal(wrong.isError,true);
- await assert.rejects(readdir(join(dir,'local_state','segment_candidates')),{code:'ENOENT'});
+ const unreviewed=await call(client,'save_segment_candidate',{
+  ...args(id),tolerance:8,expected_sha256:preview.structuredContent.source_sha256,
+ });
+ assert.equal(unreviewed.isError,true);
+ const candidates=join(dir,'local_state','segment_candidates');
+ await assert.rejects(readdir(candidates),{code:'ENOENT'});
+ const staging=join(candidates,'.staging-segment');
+ await chmod(join(dir,'local_state'),0o775);
+ await mkdir(candidates,{mode:0o700});
+ await mkdir(staging,{mode:0o700});
+ await writeFile(join(staging,'part.png'),'interrupted write',{mode:0o600});
+ const busy=JSON.parse(await runPython(dir,['-c',[
+  'import fcntl,os,subprocess,sys',
+  'fd=os.open("local_state/segment_candidates",os.O_RDONLY|os.O_DIRECTORY)',
+  'fcntl.flock(fd,fcntl.LOCK_EX)',
+  'subprocess.run([sys.executable,"-B","-E","mcp/artwork_segment.py"],input=sys.stdin.buffer.read(),check=True,timeout=2)',
+ ].join('\n')],{input:JSON.stringify({
+  ...args(id),mode:'save',source_png:before.toString('base64'),
+  expected_sha256:preview.structuredContent.source_sha256,
+  review:{method:preview.structuredContent.method,sha256:preview.structuredContent.part_png_sha256},
+ })+'\n'}));
+ assert.match(busy.error,/storage is busy/i);
+ assert.deepEqual(await readdir(candidates),['.staging-segment']);
  const saved=await call(client,'save_segment_candidate',{
   ...args(id),expected_sha256:preview.structuredContent.source_sha256,
  });
@@ -127,6 +279,9 @@ test('Save requires matching source digest, creates only isolated candidate PNG'
  assert.equal((await stat(filename)).mode & 0o777,0o600);
  const manifest=JSON.parse(await readFile(join(dir,data.local_directory,'manifest.json'),'utf8'));
  assert.equal(manifest.not_registered_in_game,true);
+ assert.equal(manifest.part_png_sha256,preview.structuredContent.part_png_sha256);
+ assert.deepEqual(contents,Buffer.from(preview.content[1].data,'base64'));
+ assert.deepEqual(await readdir(candidates),[data.candidate_id]);
  assert.deepEqual(Buffer.from(await(await fetch(url+'/api/character-demos/'+id+'/ready.png')).arrayBuffer()),before);
  assert.equal((await(await fetch(url+'/api/active-character')).json()).active_demo_id,null);
 });

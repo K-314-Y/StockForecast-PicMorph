@@ -117,6 +117,9 @@ async function characterParts(operation, input, signal, message) {
 
 const MAX_CATALOG_IMAGE=512*1024;
 const MAX_SEGMENT_RESPONSE=750000;
+const MAX_SEGMENT_REVIEWS=32;
+const NEURAL_SEGMENT_METHOD='efficientsam-onnx-cpu';
+const COLOR_SEGMENT_METHOD='ai-guided-color-region';
 let segmentationBusy=false;
 
 // The source path is entirely fixed except for strictly validated catalog ID
@@ -158,16 +161,16 @@ async function localCharacterAtlas(apiBase,{generated_id,source_part}) {
   return image;
 }
 
-function segmentPython(payload,signal) {
+function segmentPython(payload,signal,model) {
   return new Promise((resolve,reject)=>{
     let done;
     const child=execFile('python3',['-B','-E',segmentationHelper],{
       env:{PATH:process.env.PATH??'/usr/bin:/bin',LANG:'C.UTF-8',
-        PYTHONDONTWRITEBYTECODE:'1'},
+        ...(model?{CREATURE_SEGMENT_ONNX_MODEL:model}:{})},
       signal,timeout:12000,maxBuffer:MAX_SEGMENT_RESPONSE,killSignal:'SIGKILL',
     },(error,stdout)=>{done={error,stdout};});
     child.once('close',()=>{
-      if(!done || done.error)return reject(done?.error??Error('Segment helper failed'));
+      if(!done || done.error)return reject(Error('ローカルの切り出し処理が完了しませんでした'));
       try {
         const data=JSON.parse(done.stdout);
         if(typeof data.error==='string')throw Error(data.error);
@@ -181,7 +184,7 @@ function segmentPython(payload,signal) {
   });
 }
 
-async function segmentWithImage(apiBase,mode,args,signal) {
+async function segmentWithImage(apiBase,reviews,mode,args,signal) {
   if(segmentationBusy)return partsError('別のPNG候補を処理中です');
   segmentationBusy=true;
   try {
@@ -190,22 +193,37 @@ async function segmentWithImage(apiBase,mode,args,signal) {
     const digest=createHash('sha256').update(bytes).digest('hex');
     if(mode==='save' && digest!==expected)
       return partsError('元画像が変更されました。切り出しプレビューからやり直してください');
+    const model=process.env.CREATURE_SEGMENT_ONNX_MODEL;
+    const reviewKey=JSON.stringify([digest,params.generated_id,params.source_part,params.part_type,
+      params.frame,params.seeds.map(({x,y})=>[x,y]),params.tolerance]);
+    const review=mode==='save' ? reviews.get(reviewKey) : undefined;
+    if(mode==='save' && !review)
+      return partsError('同じ設定で候補PNGをプレビューし、確認してから保存してください');
     const result=await segmentPython({
       ...params,mode,source_png:bytes.toString('base64'),
       ...(mode==='save'?{expected_sha256:expected}:{}),
-    },signal);
+      ...(review?{review}:{}),
+    },signal,model);
     if(mode==='preview'){
       const preview=result.preview_png_base64;
+      const neural=result.method===NEURAL_SEGMENT_METHOD;
       if(typeof preview!=='string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(preview) ||
-         preview.length>MAX_CATALOG_IMAGE*2 || result.source_sha256!==digest)
+         preview.length>MAX_CATALOG_IMAGE*2 || result.source_sha256!==digest ||
+         (!neural && result.method!==COLOR_SEGMENT_METHOD) || result.neural_model_used!==neural ||
+         createHash('sha256').update(Buffer.from(preview,'base64')).digest('hex')!==result.part_png_sha256)
         throw Error('PNG候補の検証に失敗しました');
+      reviews.delete(reviewKey);
+      reviews.set(reviewKey,{method:result.method,sha256:result.part_png_sha256});
+      if(reviews.size>MAX_SEGMENT_REVIEWS)reviews.delete(reviews.keys().next().value);
       const {preview_png_base64,...details}=result;
+      const method=neural ? 'ローカルのEfficientSAMで指定座標から領域を推定しました。' :
+        (result.fallback_reason ? 'ローカルモデルの推論結果は使われませんでした。' : '')+
+        'Pillowで指定座標につながる近い色の領域を切り出しました。';
       return {content:[
-        {type:'text',text:'候補PNGを表示します。AIが選んだ座標の周辺色から切り出したため、部位を正確に認識した保証はありません。元画像・保存データは変更していません。確認後にだけ保存してください。'},
+        {type:'text',text:method+'候補PNGを確認し、保存する場合だけ指示してください。'},
         {type:'image',mimeType:'image/png',data:preview},
       ],structuredContent:{...details,seeds:params.seeds,tolerance:params.tolerance,
-        source_id:params.generated_id,saved:false,review_required:true,
-        semantic_model_used:false}};
+        source_id:params.generated_id,saved:false,review_required:true}};
     }
     if(!/^sg_[a-f0-9]{32}$/.test(result.candidate_id) ||
        !result.local_directory?.endsWith(result.candidate_id) ||
@@ -284,14 +302,14 @@ function errorResult(error) {
   };
 }
 
-export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
+export function makeCompanionChatGptMcp({apiBase=API,readOnly=false,segmentReviews=new Map()}={}) {
   if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
   const server = new McpServer(
     {name:'creature-lab-companion',version:'1.5.0'},
     {instructions:readOnly
       ? 'Creature Labの非公開・読み取り専用メタデータ接続。保存済みキャラ、外見、画像の登録状況、育成、学習済みキャラ一覧のみ確認できる。名前やXPも個人情報として扱う。保存・プレビュー・画像本体の転送はできない。'
       :
-      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はAIの推測。inspect_character_image_for_parts→preview_segment_candidateで部位候補を見せ、ユーザー確認後だけsave_segment_candidateを使う。学習済みの自動分割モデルではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。オリジナルのキャラ画像は generate_character_parts でローカル作成し、package_character_parts でブラウザ用ZIPにまとめられる。実取引・V6変更・XP操作なし。'}
+      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。inspect_character_image_for_parts→preview_segment_candidateで部位候補を見せ、ユーザー確認後だけsave_segment_candidateを使う。切り出し方式はプレビューのmethodで確認できる。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。オリジナルのキャラ画像は generate_character_parts でローカル作成し、package_character_parts でブラウザ用ZIPにまとめられる。実取引・V6変更・XP操作なし。'}
   );
   // Explicit metadata allowlist: readOnlyHint alone also permits previews/images.
   const registerTool=(name,config,handler)=>{
@@ -485,9 +503,10 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
   });
   registerTool('inspect_character_image_for_parts',{
     title:'Creature Lab: 登録PNGをAIで確認する',
-    description:'指定した登録済みキャラのbody/ready/happy/cautiousの6コマPNGを表示。画像を見てAIが切り出し候補の位置を判断するための明示的な閲覧。元画像は変更せず、読み取り専用MCPでは非公開。',
+    description:'ユーザーが登録画像の閲覧または切り出しを明示的に依頼した場合だけ呼ぶ。指定した登録済みキャラのbody/ready/happy/cautiousの6コマPNGを表示し、部位候補の座標を調べる。',
     inputSchema:segmentSourceSchema,
-    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+    // Image disclosure requires explicit user approval even without disk writes.
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
   },async args=>{
     try {
       const image=await localCharacterAtlas(apiBase,args);
@@ -500,16 +519,17 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
   });
   registerTool('preview_segment_candidate',{
     title:'Creature Lab: 顔・髪・アクセサリーの切り出し候補を表示',
-    description:'AIが登録済み画像を見て指定した不透明部分の座標から、近い色の領域を取り出す候補をプレビュー。目・口・髪・リボン等を指定できる。これは学習済み分割モデルではなくAIが位置を判断する補助方式。ファイル保存はしない。',
+    description:'ユーザーが切り出しを明示的に依頼した場合だけ呼ぶ。登録済み画像の不透明部分に指定した座標から、目・口・髪・リボン等の候補PNGを表示する。設定済みの場合はローカルの点指定モデルを試す。Pillowで近い色の領域を抽出する場合は色の許容差を使う。',
     inputSchema:segmentationSchema,
-    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
-  },(args,extra)=>segmentWithImage(apiBase,'preview',args,extra?.signal));
+    // Image disclosure requires explicit user approval even without disk writes.
+    annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+  },(args,extra)=>segmentWithImage(apiBase,segmentReviews,'preview',args,extra?.signal));
   registerTool('save_segment_candidate',{
     title:'Creature Lab: 確認した切り出し候補を別PNGで保存',
-    description:'ユーザーが候補プレビューを確認して保存を依頼した場合のみ呼ぶ。座標・範囲とプレビュー時の元画像SHA-256が一致する場合、新規の独立したPNGとして保存する。元イラスト、既存パーツ、ゲーム表示、株価予測やXPは一切更新しない。',
+    description:'ユーザーが候補プレビューを確認して保存を依頼した場合のみ呼ぶ。プレビューと同じ入力および元画像SHA-256を指定する。確認済み候補PNGのSHA-256を照合し、新規の独立したPNGとして保存する。',
     inputSchema:confirmSegmentationSchema,
     annotations:localWrite,
-  },(args,extra)=>segmentWithImage(apiBase,'save',args,extra?.signal));
+  },(args,extra)=>segmentWithImage(apiBase,segmentReviews,'save',args,extra?.signal));
   registerTool('generate_character_parts',{
     title:'Creature Lab: オリジナルのキャラパーツを生成',
     description:'名前・髪色・服色・飾り・シードから、体と3表情の透過6コマPNG、GIF、manifestをローカル作成する。色は #RRGGBB。engine=original-template の手続き描画。',
@@ -546,6 +566,8 @@ function locallyAllowed(req, port) {
 
 export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}) {
   if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
+  // Stateless requests each create an MCP instance. Keep reviews at server scope.
+  const segmentReviews=new Map();
   const server=createServer(async(req,res)=>{
     const port=server.address()?.port;
     if(!locallyAllowed(req,port)) {
@@ -565,7 +587,7 @@ export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}
     if(req.method==='POST' && Number(req.headers['content-length']??0)>MAX_REQUEST_BYTES) {
       res.writeHead(413).end('Request too large');return;
     }
-    const mcp=makeCompanionChatGptMcp({apiBase,readOnly});
+    const mcp=makeCompanionChatGptMcp({apiBase,readOnly,segmentReviews});
     const transport=new StreamableHTTPServerTransport({
       sessionIdGenerator:undefined,enableJsonResponse:true,
     });

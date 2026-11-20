@@ -422,7 +422,7 @@ only to the private local PNG catalog and never changes active visuals,
 models or XP. Windows shows the interface but cannot register PNG files.
 
 
-## AI-guided part cutout (Sprint 93, SAME private MCP)
+## AI-guided part cutout (Sprint 94, private MCP)
 
 This adds three tools to the existing creature-lab-companion MCP; there is
 no new MCP server. The full authorized endpoint offers 16 tools and the
@@ -435,20 +435,44 @@ Workflow:
 2. preview_segment_candidate: specify the target category (eyes, mouth,
    eyebrows, cheeks, hair, outfit, ribbon, glasses, hat, earrings,
    accessory), frame 0..5, 1..6 point coordinates, and color tolerance 0..64.
-   Returns a transparent PNG preview, bbox, coverage and SHA-256.
+   Returns a transparent PNG preview, bbox, coverage, method, and SHA-256
+   hashes for the source and candidate PNG. Pillow uses the color tolerance.
    No local files are created by preview.
-3. save_segment_candidate: user approval required; repeat identical inputs
-   with the preview's expected_sha256. If the source is unchanged, save
-   a candidate PNG and manifest to a new, isolated
+3. save_segment_candidate: after the user approves, repeat the same inputs
+   with the preview's source SHA-256 in `expected_sha256`. The server keeps
+   the last 32 previews in memory. It reruns the same method and verifies the exact
+   PNG hash before saving. Preview again after a server restart or if the
+   reviewed mask changes or becomes unavailable. Save atomically publishes
+   a candidate PNG and manifest to a new, private
    local_state/segment_candidates/sg_<id> directory. Never overwrite
    original art, character records, XP, or market data. The candidate is
    not yet registered in the game, and registered source PNG is unchanged.
 
-LIMIT: No installed semantic segmentation neural model is used here.
-The AI (ChatGPT / an authorized vision model) chooses the part and point
-from the PNG; a local Pillow flood-fill extracts similar-color, connected
-opaque pixels from ONE frame. This fails on complicated overlaps, outlines
-and multi-frame movement, so preview and user correction are mandatory.
-No GPU, remote API, credential, external upload, or model download is added.
-The full 8896 endpoint must remain private. The 8897 read-only endpoint
-must never expose these tools or image contents.
+Pillow's default `ai-guided-color-region` method selects connected opaque
+pixels of similar color in one frame. The optional `efficientsam-onnx-cpu`
+method predicts a mask from positive seed points. It reports
+`neural_model_used: true`. The caller still chooses the part category.
+Review every candidate, especially around overlaps and small details.
+
+To opt in on Linux, provide a trusted, self-contained EfficientSAM-Ti ONNX
+export with its encoder, decoder and pretrained weights embedded in one file.
+Set `CREATURE_SEGMENT_ONNX_MODEL` to its absolute `.onnx` path when starting
+the full private MCP. The server's `PATH` must resolve `python3` to an
+environment with Pillow, NumPy and the CPU `onnxruntime` package.
+
+The adapter checks the [upstream ONNX export interface](https://github.com/yformer/EfficientSAM/blob/main/export_to_onnx.py).
+It expects float32 `batched_images`, `batched_point_coords` and
+`batched_point_labels` inputs and image-sized `output_masks` logits with
+`iou_predictions` scores. It resizes a frame and scales points for a
+1024×1024 input, then resamples logits to 192×208 and clips the mask to
+visible pixels. The adapter also accepts a fixed 192×208 export. The
+upstream five-prompt export can fall back to Pillow for six-point requests.
+
+The checkout allows one neural worker at a time. It runs with one CPU
+thread, a 64 MiB file limit, a 1.5 GiB virtual
+address-space limit, and an 8-second wall-clock timeout. Missing dependencies,
+incompatible exports, timeouts and unusable masks return a Pillow preview
+with a `fallback_reason`. Inference uses local files and disables ONNX Runtime
+telemetry. The 8897 read-only endpoint continues to offer six metadata tools.
+The two image-returning cutout tools require explicit user intent in their
+descriptions. Client approval behavior depends on the MCP client.
