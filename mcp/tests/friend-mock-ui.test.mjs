@@ -607,6 +607,8 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   await page.goto(at('/friend/'));
   const bearer = await openAccount(ids[0]);
   await text('practice-status', '1ラウンド練習できます');
+  assert.equal(await node('practice-milestones').isHidden(), true);
+  assert.deepEqual(await node('practice-journey-meter').evaluate(meter => [meter.value, meter.max]), [0,1]);
   assert.equal(await node('practice-start').isDisabled(), true);
   assert.equal(await node('practice-reveal').isHidden(), true);
   await node('companion-name').fill(companion.name);
@@ -649,6 +651,9 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   assert.equal(revealed.round_id, frozen.round_id);
   await text('practice-status', '1ラウンドは終了');
   await text('practice-target-price', '129');
+  assert.equal(await node('practice-milestones').isHidden(), true);
+  assert.equal(await node('practice-journey-badge').textContent(), '');
+  assert.equal(await node('practice-history').locator('li').count(), 0);
   await text('practice-actual', 'UP');
   await text('practice-brier', String(new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6}).format(revealed.result.brier)));
   assert.equal(await node('practice-start').isHidden(), true);
@@ -687,16 +692,39 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   assert.deepEqual(errors, []);
 });
 
-test('P9l Chromium completes three explicit rounds and clears campaign details on account changes', {timeout:35_000}, async t => {
+test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clears account details', {timeout:35_000}, async t => {
   const browser = await openChromium(t);
   if (!browser) return;
-  const {server, ids} = await setup(t, undefined, ([id]) => [friendPracticeCampaign(id, [129, 112, 120])]);
-  const page = await browser.newPage({viewport:{width:380, height:844}});
+  const {server, ids} = await setup(t, undefined, ([id]) => {
+    const campaign = friendPracticeCampaign(id, [129, 112, 120]);
+    const tie = campaign.rounds[2];
+    tie.history = tie.history.map((point, index) => ({...point, price:index === 11 ? 64.1 : 100}));
+    return [campaign];
+  });
+  const page = await browser.newPage({viewport:{width:380, height:844}, reducedMotion:'no-preference'});
   page.setDefaultTimeout(5000);
   const node = id => page.locator('#' + id);
   const at = path => server.origin + path;
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => {
+    if (message.type() !== 'error') return;
+    const source = message.location().url;
+    const expectedFailures = new Map([
+      [at('/favicon.ico'), [404]], [at(character), [503]],
+      [at('/friend/practice/start'), [409]], [at('/friend/practice'), [401,503]],
+    ]);
+    const response = /^Failed to load resource: the server responded with a status of (\d+) /.exec(message.text());
+    if (!response || !expectedFailures.get(source)?.includes(Number(response[1]))) errors.push(message.text());
+  });
+  await page.addInitScript(() => {
+    window.journeyHighlights = 0;
+    window.cspViolations = [];
+    document.addEventListener('animationstart', event => {
+      if (event.animationName === 'practice-journey-highlight') window.journeyHighlights++;
+    });
+    document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.effectiveDirective));
+  });
   async function text(id, expected) {
     await page.waitForFunction(([id, expected]) =>
       document.getElementById(id).textContent.includes(expected), [id, expected]);
@@ -722,6 +750,7 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
     assert.equal(await node('practice-target-price').textContent(), '');
     assert.equal(await node('practice-result').isHidden(), true);
     assert.equal(await node('practice-history').locator('li').count(), index - 1);
+    assert.equal(await node('practice-journey-meter').evaluate(meter => meter.value), index - 1);
   }
   async function revealRound(index, price) {
     await submit('practice-reveal', '/friend/practice/reveal');
@@ -731,11 +760,30 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
     assert.equal(await node('practice-reveal').isHidden(), true);
   }
   async function cleared() {
-    for (const id of ['practice-round-number', 'practice-stats', 'practice-model', 'practice-target-price', 'practice-history']) {
+    for (const id of ['practice-round-number', 'practice-stats', 'practice-model', 'practice-target-price',
+      'practice-history', 'practice-journey-count', 'practice-journey-badge', 'practice-journey-next']) {
       assert.equal(await node(id).textContent(), '', id);
     }
     assert.equal(await node('practice-history').locator('li').count(), 0);
     assert.equal(await node('practice-history-panel').isHidden(), true);
+    assert.equal(await node('practice-milestones').isHidden(), true);
+    assert.equal(await node('practice-milestones').getAttribute('data-complete'), null);
+    assert.equal(await node('practice-milestones').evaluate(el => el.classList.contains('journey-highlight')), false);
+    assert.equal(await node('practice-journey-meter').getAttribute('aria-valuetext'), null);
+    assert.deepEqual(await node('practice-journey-meter').evaluate(meter => [meter.value, meter.max]), [0,1]);
+  }
+  async function achievement(completed, title, nextTitle) {
+    await text('practice-journey-count', '完了 ' + completed + ' / 全 3');
+    assert.equal(await node('practice-journey-badge').textContent(), title);
+    assert.deepEqual(await node('practice-journey-meter').evaluate(meter => [meter.value, meter.max]), [completed,3]);
+    assert.equal(await node('practice-journey-meter').getAttribute('aria-valuetext'), '完了 ' + completed + ' / 全 3 ラウンド');
+    assert.equal(await page.getByRole('progressbar', {name:'架空練習の参加進捗'}).isVisible(), true);
+    const next = await node('practice-journey-next').textContent();
+    if (nextTitle) assert.ok(next.includes(nextTitle));
+    else assert.equal(next, '');
+  }
+  async function highlightCount() {
+    return page.evaluate(() => window.journeyHighlights);
   }
 
   await page.goto(at('/friend/'));
@@ -743,6 +791,7 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
   await text('practice-round-number', '第1/3ラウンド');
   await text('practice-stats', '平均 Brier —');
   await text('practice-stats', '判定なし');
+  await achievement(0, '準備中', 'はじめの一歩');
   assert.equal(await node('practice-start').isDisabled(), true);
   await node('companion-name').fill(companion.name);
   await node('approach').selectOption('momentum');
@@ -750,6 +799,7 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
   await freezeRound(1);
   await text('practice-model', 'companion-v1_0_100_0_0_35');
   await revealRound(1, 129);
+  await achievement(1, 'はじめの一歩', '練習を続ける');
   await text('practice-start', '次の練習へ');
   assert.equal(await node('practice-start').evaluate(button => document.activeElement === button), true);
   await node('accessory').selectOption('glasses');
@@ -785,21 +835,54 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
   assert.equal(await node('practice-target-price').textContent(), '');
   await node('accessory').selectOption('star');
   await revealRound(2, 112);
+  await achievement(2, '練習を続ける', '全3回完走');
+  assert.equal(await node('accessory').inputValue(), 'star');
+  await text('look-dirty', '未保存の変更あり');
+  assert.equal(await highlightCount(), 0);
   assert.equal(await node('practice-start').isDisabled(), true);
   assert.equal(await node('practice-refresh').evaluate(button => document.activeElement === button), true);
   await node('restore-look').click();
+  await node('approach').selectOption('volatility');
+  await submit('save-companion', character + '/companion');
   await freezeRound(3);
   await revealRound(3, 120);
   await text('practice-status', '完走しました');
+  await achievement(3, '全3回完走（架空練習の参加賞）');
+  assert.equal(await node('practice-milestones').getAttribute('data-complete'), '');
   assert.equal(await node('practice-start').isHidden(), true);
-  for (const width of [380,390,1280]) {
+  const memories = node('practice-history').getByRole('listitem');
+  assert.deepEqual(await memories.locator('strong').allTextContents(), ['ラウンド1', 'ラウンド2', 'ラウンド3']);
+  assert.deepEqual(await memories.locator('.practice-memory-reaction').allTextContents(), [
+    '😊 的中（架空） · 喜び', '😔 不的中（架空） · しょんぼり', '😐 判定なし（架空）',
+  ]);
+  assert.doesNotMatch(await memories.nth(2).textContent(), /不的中/);
+  assert.match(await memories.nth(2).textContent(), /予測 未判定.*結果 UP.*Brier.*companion-v1/);
+  await page.waitForFunction(() => window.journeyHighlights === 1);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await node('practice-milestones').evaluate(el => getComputedStyle(el).animationName), 'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await node('practice-refresh').click();
+  await text('message', '練習状態を再取得しました。');
+  assert.equal(await highlightCount(), 1);
+  for (const width of [375,380,390,1280]) {
     await page.setViewportSize({width,height:900});
     assert.equal(await page.evaluate(() => {
       const history = document.getElementById('practice-history');
-      return document.documentElement.scrollWidth <= innerWidth && history.scrollWidth <= history.clientWidth;
+      const milestones = document.getElementById('practice-milestones');
+      const meter = document.getElementById('practice-journey-meter');
+      return document.documentElement.scrollWidth <= innerWidth && history.scrollWidth <= history.clientWidth &&
+        milestones.scrollWidth <= milestones.clientWidth && meter.offsetWidth <= milestones.clientWidth;
     }), true, String(width));
   }
 
+  await page.route(at('/friend/practice'), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
+  await node('practice-refresh').click();
+  await text('practice-status', '練習状態を取得できませんでした。');
+  await cleared();
+  await node('retry-reads').click();
+  await text('practice-status', '完走しました');
+  await achievement(3, '全3回完走（架空練習の参加賞）');
+  assert.equal(await highlightCount(), 1);
   await submit('logout', logout);
   await cleared();
   await openAccount(ids[1]);
@@ -808,11 +891,14 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
   await submit('logout', logout);
   await openAccount(ids[0]);
   await text('practice-status', '完走しました');
+  await achievement(3, '全3回完走（架空練習の参加賞）');
+  assert.equal(await highlightCount(), 1);
   assert.equal(await node('practice-history').locator('li').count(), 3);
   server.revokeAccount(ids[0]);
   await node('practice-refresh').click();
   await text('message', 'セッションが終了しました');
   await cleared();
+  assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.deepEqual(errors, []);
 });
 

@@ -101,17 +101,23 @@ const faces = avatar.querySelectorAll('.face');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const revealAttempts = new Set();
 
+function resultReaction(directionCorrect) {
+  switch (directionCorrect) {
+    case true: return {mood:'pleased', expression:'cheerful', line:'やった！ 今回の方向は的中したよ。',
+      memory:'😊 的中（架空） · 喜び'};
+    case false: return {mood:'disappointed', expression:'sad', line:'今回は外れたね。次はどうなるかな？',
+      memory:'😔 不的中（架空） · しょんぼり'};
+    case null: return {mood:'neutral', expression:'calm', line:'今回は方向を判定できなかったよ。',
+      memory:'😐 判定なし（架空）'};
+    default: return null;
+  }
+}
+
 function practiceReaction(state) {
   if (state?.status === 'frozen') {
     return {mood:'focused', expression:'determined', line:'予測を確定したよ。結果はまだ分からないね。'};
   }
-  if (!practiceRevealed(state)) return null;
-  switch (state.result.directionCorrect) {
-    case true: return {mood:'pleased', expression:'cheerful', line:'やった！ 今回の方向は的中したよ。'};
-    case false: return {mood:'disappointed', expression:'sad', line:'今回は外れたね。次はどうなるかな？'};
-    case null: return {mood:'neutral', expression:'calm', line:'今回は方向を判定できなかったよ。'};
-    default: return null;
-  }
+  return practiceRevealed(state) ? resultReaction(state.result.directionCorrect) : null;
 }
 
 function previewExpression() {
@@ -550,6 +556,44 @@ const practicePrediction = byId('practice-prediction');
 const practiceResult = byId('practice-result');
 const practiceValues = document.querySelectorAll('.practice dd');
 const practiceHistory = byId('practice-history');
+const practiceMilestones = byId('practice-milestones');
+const journeyMeter = byId('practice-journey-meter');
+const journeyCount = byId('practice-journey-count');
+const journeyBadge = byId('practice-journey-badge');
+const journeyNext = byId('practice-journey-next');
+const participationTitles = [[1, 'はじめの一歩'], [2, '練習を続ける'], [3, 'コツコツ継続'], [6, '練習を重ねる']];
+
+function clearJourneyHighlight() {
+  practiceMilestones.classList.remove('journey-highlight');
+}
+
+practiceMilestones.addEventListener('animationend', event => {
+  if (event.animationName === 'practice-journey-highlight') clearJourneyHighlight();
+});
+reducedMotion.addEventListener('change', clearJourneyHighlight);
+
+function renderPracticeMilestones(progress) {
+  clearJourneyHighlight();
+  const completed = progress?.completed ?? 0;
+  const total = progress?.total ?? 1;
+  const complete = completed === total;
+  practiceMilestones.hidden = !progress;
+  practiceMilestones.toggleAttribute('data-complete', complete);
+  journeyMeter.max = total;
+  journeyMeter.value = completed;
+  journeyCount.textContent = progress ? '完了 ' + completed + ' / 全 ' + total : '';
+  if (!progress) {
+    journeyMeter.removeAttribute('aria-valuetext');
+    journeyBadge.textContent = journeyNext.textContent = '';
+    return;
+  }
+  journeyMeter.setAttribute('aria-valuetext', journeyCount.textContent + ' ラウンド');
+  const finish = (total === 12 ? '12ラウンド完走' : '全' + total + '回完走') + '（架空練習の参加賞）';
+  const earned = participationTitles.findLast(([at]) => at <= completed)?.[1] ?? '準備中';
+  journeyBadge.textContent = complete ? finish : earned;
+  const [nextAt, nextTitle] = participationTitles.find(([at]) => at > completed && at < total) ?? [total, finish];
+  journeyNext.textContent = complete ? '' : 'あと' + (nextAt - completed) + '回の完了で「' + nextTitle + '」。';
+}
 
 function renderPracticeProgress(state) {
   const progress = state?.progress;
@@ -564,14 +608,21 @@ function renderPracticeProgress(state) {
     stats = '採点済み ' + completed + '/' + total + ' · ' + hits + ' · 平均 Brier ' + average;
   }
   byId('practice-stats').textContent = stats;
+  renderPracticeMilestones(progress);
   byId('practice-history-panel').hidden = history.length === 0;
   practiceHistory.replaceChildren(...history.map(round => {
     const item = document.createElement('li');
+    const title = document.createElement('strong');
+    title.textContent = 'ラウンド' + round.round;
     item.textContent = '予測 ' + (round.direction ?? '未判定') + ' / 結果 ' + round.actualDirection +
-      ' · ' + directionResult(round.directionCorrect) + ' · Brier ' + number.format(round.brier);
+      ' · Brier ' + number.format(round.brier);
+    item.prepend(title);
+    const reaction = document.createElement('span');
+    reaction.className = 'practice-memory-reaction';
+    reaction.textContent = resultReaction(round.directionCorrect).memory;
     const model = document.createElement('small');
     model.textContent = round.model_version + ' · 保存版 ' + round.companion_revision;
-    item.append(model);
+    item.append(reaction, model);
     return item;
   }));
 }
@@ -740,8 +791,13 @@ practiceReveal.addEventListener('click', () => {
     }));
     checked(practiceRevealed(data) && data.round_id === round_id);
     renderPractice(data);
-    if (firstAttempt && !reducedMotion.matches && data.result.directionCorrect !== null) {
-      avatar.dataset.motion = data.result.directionCorrect ? 'cheer' : 'dip';
+    if (firstAttempt && !reducedMotion.matches) {
+      if (data.result.directionCorrect !== null) avatar.dataset.motion = data.result.directionCorrect ? 'cheer' : 'dip';
+      if (data.progress && data.status === 'exhausted' &&
+          current.progress?.total === data.progress.total &&
+          current.progress.completed === data.progress.total - 1 && data.progress.completed === data.progress.total) {
+        practiceMilestones.classList.add('journey-highlight');
+      }
     }
     feedback('架空の結果を公開しました。');
     return practiceResultFocus;

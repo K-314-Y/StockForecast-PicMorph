@@ -58,16 +58,43 @@ h2 { font-size: 1.15rem; }
 .practice .actions:has(> :not([hidden])) { margin-top: .85rem; }
 .practice-progress { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .65rem 0; }
 .practice-progress span { color: var(--muted); }
+.practice-milestones {
+  min-width: 0;
+  margin: .75rem 0;
+  padding: .85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: .85rem;
+  background-color: #faf6fc;
+  overflow-wrap: anywhere;
+}
+.practice-milestones h3 { margin: 0 0 .35rem; font-size: 1rem; }
+.practice-milestones progress {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: .35rem 0 .6rem;
+  accent-color: var(--accent);
+}
+.practice-journey-title b { color: var(--accent); }
+.practice-milestones .hint { margin-top: .3rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .practice-milestones.journey-highlight { animation: practice-journey-highlight .8s ease-out; }
+}
+@keyframes practice-journey-highlight { from { background-color: #ede2fc; } }
 .practice-odds { grid-column: 1 / -1; }
 .practice-history { margin-top: .85rem; }
 .practice-history ol {
   display: grid;
   gap: .55rem 1rem;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
-  padding-inline-start: 1.5rem;
+  padding: 0;
   margin: 0;
 }
 .practice-history li { overflow-wrap: anywhere; }
+.practice-history li::marker { content: ''; }
+.practice-history strong, .practice-memory-reaction { display: block; }
+.practice-memory-reaction { color: var(--accent); }
 .practice-history small { display: block; color: var(--muted); }
 .revision {
   color: #58426b;

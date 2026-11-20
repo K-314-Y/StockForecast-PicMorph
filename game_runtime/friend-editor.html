@@ -177,6 +177,14 @@
           <b id="practice-round-number"></b>
           <span id="practice-stats"></span>
         </div>
+        <section id="practice-milestones" class="practice-milestones" aria-labelledby="practice-milestones-title" hidden>
+          <h3 id="practice-milestones-title">練習の達成</h3>
+          <p id="practice-journey-count"></p>
+          <progress id="practice-journey-meter" aria-label="架空練習の参加進捗" max="1" value="0"></progress>
+          <p class="practice-journey-title">称号 <b id="practice-journey-badge"></b></p>
+          <p id="practice-journey-next" class="hint"></p>
+          <p class="hint">称号は架空練習の完了回数だけで決まります。モデルや予測精度は変わらず、現実の実績を示すものではありません。</p>
+        </section>
         <p id="practice-requirement" class="hint" hidden></p>
         <div class="record-grid">
           <section id="practice-prediction" class="record-panel" aria-labelledby="practice-prediction-title" hidden>
@@ -209,7 +217,7 @@
           <button id="practice-reveal" type="button" hidden>結果を公開</button>
         </div>
         <section id="practice-history-panel" class="record-panel practice-history" aria-labelledby="practice-history-title" hidden>
-          <h3 id="practice-history-title">過去のラウンド結果</h3>
+          <h3 id="practice-history-title">練習の思い出</h3>
           <ol id="practice-history"></ol>
         </section>
       </section>
