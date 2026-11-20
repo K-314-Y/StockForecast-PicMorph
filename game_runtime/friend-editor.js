@@ -89,15 +89,54 @@ const editableVersion = byId('editable-version');
 const predictionStep = byId('prediction-step');
 const resultStep = byId('result-step');
 const previewName = byId('preview-name');
+const previewComment = byId('preview-comment');
+const previewReaction = byId('preview-reaction');
+const avatar = byId('avatar');
 const riskValue = byId('risk-value');
 
 const hairShapes = document.querySelectorAll('[data-hair-color]');
 const clothingShape = document.querySelector('[data-clothing-color]');
-const parts = document.querySelectorAll('#avatar .part');
+const parts = avatar.querySelectorAll('.part');
+const faces = avatar.querySelectorAll('.face');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const revealAttempts = new Set();
+
+function practiceReaction(state) {
+  if (state?.status === 'frozen') {
+    return {mood:'focused', expression:'determined', line:'予測を確定したよ。結果はまだ分からないね。'};
+  }
+  if (!practiceRevealed(state)) return null;
+  switch (state.result.directionCorrect) {
+    case true: return {mood:'pleased', expression:'cheerful', line:'やった！ 今回の方向は的中したよ。'};
+    case false: return {mood:'disappointed', expression:'sad', line:'今回は外れたね。次はどうなるかな？'};
+    case null: return {mood:'neutral', expression:'calm', line:'今回は方向を判定できなかったよ。'};
+    default: return null;
+  }
+}
+
+function previewExpression() {
+  const reaction = practiceReaction(practiceState);
+  const look = groups.look;
+  const expression = reaction && !isDirty(look) ? reaction.expression : look.inputs.expression.value;
+  for (const face of faces) face.classList.toggle('selected', face.dataset.expression === expression);
+  previewReaction.textContent = reaction?.line ?? '';
+  previewComment.hidden = !reaction;
+  if (reaction) avatar.dataset.mood = reaction.mood;
+  else delete avatar.dataset.mood;
+}
+
+function clearReactionMotion() {
+  delete avatar.dataset.motion;
+}
+
+avatar.addEventListener('animationend', event => {
+  if (event.animationName === 'practice-' + avatar.dataset.motion) clearReactionMotion();
+});
+reducedMotion.addEventListener('change', clearReactionMotion);
 
 function previewEdits() {
   const {name, hair_color, clothing_color, risk_percent} = groups.companion.inputs;
-  const {hair_style, expression, accessory} = groups.look.inputs;
+  const {hair_style, accessory} = groups.look.inputs;
   previewName.textContent = name.value || '相棒';
   riskValue.value = risk_percent.value + '%';
   for (const shape of hairShapes) {
@@ -105,9 +144,11 @@ function previewEdits() {
   }
   if (matches(colorPattern, clothing_color.value)) clothingShape.setAttribute('fill', clothing_color.value);
   for (const part of parts) {
+    if (part.classList.contains('face')) continue;
     part.classList.toggle('selected', part.dataset.hair === hair_style.value ||
-      part.dataset.expression === expression.value || part.dataset.accessory === accessory.value);
+      part.dataset.accessory === accessory.value);
   }
+  previewExpression();
 }
 
 // Module scope is private to this page. Each operation owns an abort signal so a
@@ -180,6 +221,7 @@ function syncControls() {
 
 function clearAccount() {
   session = undefined;
+  revealAttempts.clear();
   failedReads = [];
   if (logoutDialog.open) logoutDialog.close('');
   login.hidden = false;
@@ -536,6 +578,8 @@ function renderPracticeProgress(state) {
 
 function renderPractice(state, failed = false) {
   practiceState = state;
+  clearReactionMotion();
+  previewExpression();
   const status = state?.status;
   let caption = practiceLabels[status] ?? '';
   if (state?.progress && status === 'ready') caption = 'この口座で全' + state.progress.total + 'ラウンド練習できます。';
@@ -680,15 +724,35 @@ practiceReveal.addEventListener('click', () => {
   if (!session || operation || practiceState?.status !== 'frozen') return;
   const {round_id} = practiceState;
   void run('架空の結果を採点中…', '結果を公開できませんでした。練習状態を再取得してください。', async controller => {
+    // The idempotent POST returns the same body on a replay. Restore known
+    // published rounds through GET, and never animate after an uncertain POST.
+    const current = validatePractice(await request('/friend/practice', controller, {auth:session}));
+    if (current.status !== 'frozen' || current.round_id !== round_id) {
+      renderPractice(current);
+      const published = practiceRevealed(current) && current.round_id === round_id;
+      feedback(published ? '公開済みの結果を表示しました。' : '練習の進行状態を確認してください。', !published);
+      return practiceResultFocus;
+    }
+    const firstAttempt = !revealAttempts.has(round_id);
+    revealAttempts.add(round_id);
     const data = validatePractice(await request('/friend/practice/reveal', controller, {
       method:'POST', auth:session, body:{round_id},
     }));
     checked(practiceRevealed(data) && data.round_id === round_id);
     renderPractice(data);
+    if (firstAttempt && !reducedMotion.matches && data.result.directionCorrect !== null) {
+      avatar.dataset.motion = data.result.directionCorrect ? 'cheer' : 'dip';
+    }
     feedback('架空の結果を公開しました。');
-    return () => !practiceStart.hidden && !practiceStart.disabled ? practiceStart : practiceRefresh;
+    return practiceResultFocus;
   });
 });
+
+function practiceResultFocus() {
+  if (!practiceStart.hidden && !practiceStart.disabled) return practiceStart;
+  if (!practiceReveal.hidden && !practiceReveal.disabled) return practiceReveal;
+  return practiceRefresh.hidden ? logout : practiceRefresh;
+}
 
 login.addEventListener('submit', event => {
   event.preventDefault();

@@ -486,6 +486,8 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   assert.equal(await node('record-pending').isVisible(), true);
   assert.equal(await node('record-score').isHidden(), true);
   assert.equal(await node('record-pnl').isHidden(), true);
+  assert.equal(await node('preview-comment').isHidden(), true);
+  assert.equal(await node('avatar').getAttribute('data-mood'), null);
 
   const literalName = '<b>ミント</b>';
   await node('companion-name').fill(literalName);
@@ -517,6 +519,8 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   assert.equal(await node('fx-rate-row').isHidden(), true);
   assert.equal(await node('fx-note').isHidden(), true);
   assert.equal(await node('record-pending').isHidden(), true);
+  assert.equal(await node('preview-reaction').textContent(), '');
+  assert.equal(await node('avatar').getAttribute('data-mood'), null);
   await text('frozen-version', 'companion-v1_0_100_0_0_45');
   await text('editable-version', 'companion-v1_100_0_0_0_45');
   assert.equal(await node('companion-name').inputValue(), '編集中の相棒');
@@ -809,5 +813,209 @@ test('P9l Chromium completes three explicit rounds and clears campaign details o
   await node('practice-refresh').click();
   await text('message', 'セッションが終了しました');
   await cleared();
+  assert.deepEqual(errors, []);
+});
+
+test('P9m Chromium reacts to live practice transitions without changing looks or replaying motion', {timeout:35_000}, async t => {
+  const browser = await openChromium(t);
+  if (!browser) return;
+  const {server, ids} = await setup(t, undefined, ([id]) => {
+    const campaign = friendPracticeCampaign(id, [129, 112, 78, 129, 133]);
+    const tie = campaign.rounds[2];
+    tie.history = tie.history.map((point, index) => ({...point, price:index === 11 ? 64.1 : 100}));
+    return [campaign];
+  });
+  const page = await browser.newPage({viewport:{width:380,height:844}, reducedMotion:'no-preference'});
+  page.setDefaultTimeout(5000);
+  const node = id => page.locator('#' + id);
+  const at = path => server.origin + path;
+  const lines = {
+    focused:'予測を確定したよ。結果はまだ分からないね。',
+    pleased:'やった！ 今回の方向は的中したよ。',
+    disappointed:'今回は外れたね。次はどうなるかな？',
+    neutral:'今回は方向を判定できなかったよ。',
+  };
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  async function text(id, expected) {
+    await page.waitForFunction(([id, expected]) =>
+      document.getElementById(id).textContent.includes(expected), [id, expected]);
+  }
+  async function submit(id, path, expected = 200) {
+    const pending = page.waitForResponse(res => res.request().method() === 'POST' && res.url() === at(path));
+    await node(id).click();
+    const response = await pending;
+    assert.equal(response.status(), expected);
+    return response;
+  }
+  async function openAccount(id) {
+    await node('invite').fill(server.issueInvite(id).token);
+    const response = await submit('login-button', redeem);
+    await text('account-id', id);
+    return {Authorization:'Bearer ' + (await response.json()).sessionToken};
+  }
+  async function face(expression) {
+    assert.equal(await node('avatar').locator('.face.selected').getAttribute('data-expression'), expression);
+  }
+  async function reaction(mood, expression) {
+    await text('preview-reaction', lines[mood]);
+    await face(expression);
+    assert.equal(await node('avatar').getAttribute('data-mood'), mood);
+    assert.equal(await node('preview-comment').isVisible(), true);
+  }
+  async function clearReaction() {
+    assert.equal(await node('preview-reaction').textContent(), '');
+    assert.equal(await node('preview-comment').isHidden(), true);
+    for (const attr of ['data-mood', 'data-motion']) assert.equal(await node('avatar').getAttribute(attr), null);
+  }
+  async function assertStatic() {
+    assert.equal(await node('avatar').getAttribute('data-motion'), null);
+    assert.equal(await node('avatar').locator('.chibi').evaluate(chibi => getComputedStyle(chibi).animationName), 'none');
+  }
+  async function motionEvents(expected) {
+    if (expected.length) {
+      await page.waitForFunction(count => window.practiceMotions.length >= count, expected.length);
+    }
+    await page.waitForFunction(() => !document.getElementById('avatar').hasAttribute('data-motion'));
+    assert.deepEqual(await page.evaluate(() => window.practiceMotions), expected);
+  }
+  async function freeze() {
+    await submit('practice-start', '/friend/practice/start');
+    await reaction('focused', 'determined');
+    await assertStatic();
+  }
+  async function reveal(mood, expression) {
+    await submit('practice-reveal', '/friend/practice/reveal');
+    await reaction(mood, expression);
+  }
+
+  await page.goto(at('/friend/'));
+  await page.evaluate(() => {
+    window.practiceMotions = [];
+    document.getElementById('avatar').addEventListener('animationstart', event => {
+      if (event.animationName.startsWith('practice-')) window.practiceMotions.push(event.animationName);
+    });
+  });
+  let bearer = await openAccount(ids[0]);
+  await face('cheerful');
+  await clearReaction();
+  await submit('save-companion', character + '/companion');
+  await freeze();
+  assert.equal(await node('expression').inputValue(), 'cheerful');
+  await node('expression').selectOption('calm');
+  await node('hair-style').selectOption('long');
+  await node('accessory').selectOption('star');
+  await node('hair-color').fill('#123456');
+  await node('clothing-color').fill('#654321');
+  await reaction('focused', 'calm');
+  await reveal('pleased', 'calm');
+  assert.equal(await node('expression').inputValue(), 'calm');
+  assert.equal(await node('hair-style').inputValue(), 'long');
+  assert.equal(await node('accessory').inputValue(), 'star');
+  assert.equal(await node('avatar').locator('[data-hair="long"]').isVisible(), true);
+  assert.equal(await node('avatar').locator('[data-accessory="star"]').isVisible(), true);
+  assert.equal(await node('avatar').locator('[data-hair-color]').first().getAttribute('fill'), '#123456');
+  assert.equal(await node('avatar').locator('[data-clothing-color]').getAttribute('fill'), '#654321');
+  await text('look-revision', '0');
+  await text('look-dirty', '未保存の変更あり');
+  for (const width of [375,380,390,1280]) {
+    await page.setViewportSize({width,height:900});
+    assert.equal(await node('preview-comment').evaluate(comment => {
+      const card = document.getElementById('preview');
+      return comment.scrollWidth <= comment.clientWidth && card.scrollWidth <= card.clientWidth &&
+        document.documentElement.scrollWidth <= innerWidth &&
+        (innerWidth > 624 || getComputedStyle(comment).gridColumnEnd === '-1');
+    }), true, String(width));
+  }
+  await motionEvents(['practice-cheer']);
+  const navigation = page.waitForEvent('dialog');
+  await page.evaluate(() => setTimeout(() => location.reload(), 0));
+  const warning = await navigation;
+  assert.equal(warning.type(), 'beforeunload');
+  await warning.dismiss();
+  for (let i = 0; i < 2; i++) {
+    await node('practice-refresh').click();
+    await text('message', '練習状態を再取得しました。');
+    await reaction('pleased', 'calm');
+    await assertStatic();
+  }
+  await motionEvents(['practice-cheer']);
+
+  // Preserve the existing two-step 409 flow while the practice reaction is active.
+  const {csrfToken} = (await call(server, session, {headers:bearer})).json();
+  const concurrentLook = {hair_style:'bob', expression:'determined', accessory:'glasses'};
+  const other = await call(server, character + '/look', {
+    method:'POST', headers:{...bearer, 'X-CSRF-Token':csrfToken},
+    body:{expected_revision:0, look:concurrentLook},
+  });
+  assert.equal(other.status, 200);
+  await submit('save-look', character + '/look', 409);
+  await text('look-dirty', '未保存の下書きあり');
+  await reaction('pleased', 'determined');
+  await node('reapply-look').click();
+  await reaction('pleased', 'calm');
+  await node('restore-look').click();
+  await node('restore-companion').click();
+  await reaction('pleased', 'cheerful');
+  assert.equal(await node('expression').inputValue(), 'determined');
+  await text('look-revision', '1');
+
+  await submit('logout', logout);
+  await clearReaction();
+  bearer = await openAccount(ids[0]);
+  await reaction('pleased', 'cheerful');
+  await assertStatic();
+  await motionEvents(['practice-cheer']);
+  await freeze();
+  await reveal('disappointed', 'sad');
+  await motionEvents(['practice-cheer', 'practice-dip']);
+  assert.equal(await node('expression').inputValue(), 'determined');
+
+  await node('approach').selectOption('volatility');
+  await submit('save-companion', character + '/companion');
+  await freeze();
+  await reveal('neutral', 'calm');
+  await assertStatic();
+  await motionEvents(['practice-cheer', 'practice-dip']);
+
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await node('approach').selectOption('trend');
+  await submit('save-companion', character + '/companion');
+  await freeze();
+  await reveal('pleased', 'cheerful');
+  await assertStatic();
+  await motionEvents(['practice-cheer', 'practice-dip']);
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await assertStatic();
+
+  // A reveal performed elsewhere leaves this tab frozen until it reads the
+  // published state. Clicking here restores that result and sends no new POST.
+  await freeze();
+  const current = (await call(server, '/friend/practice', {headers:bearer})).json();
+  const info = (await call(server, session, {headers:bearer})).json();
+  const published = await call(server, '/friend/practice/reveal', {
+    method:'POST', headers:{...bearer, 'X-CSRF-Token':info.csrfToken}, body:{round_id:current.round_id},
+  });
+  assert.equal(published.status, 200);
+  const attempts = [];
+  const capture = req => attempts.push([req.method(), new URL(req.url()).pathname]);
+  page.on('request', capture);
+  await node('practice-reveal').click();
+  await text('message', '公開済みの結果を表示しました。');
+  page.off('request', capture);
+  assert.deepEqual(attempts.filter(([, path]) => path.startsWith('/friend/practice')), [['GET', '/friend/practice']]);
+  await reaction('pleased', 'cheerful');
+  await assertStatic();
+  await motionEvents(['practice-cheer', 'practice-dip']);
+
+  server.revokeAccount(ids[0]);
+  await node('practice-refresh').click();
+  await text('message', 'セッションが終了しました。');
+  await clearReaction();
+  assert.equal(await node('avatar').locator('.face.selected').count(), 0);
+  await openAccount(ids[1]);
+  await text('practice-status', '架空練習は未接続です。');
+  await clearReaction();
+  await face('cheerful');
   assert.deepEqual(errors, []);
 });

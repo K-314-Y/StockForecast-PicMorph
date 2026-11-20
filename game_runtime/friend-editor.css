@@ -88,13 +88,36 @@ dialog::backdrop { background: #30253d80; }
 .preview svg { display: block; width: min(100%, 17rem); margin: .5rem auto 0; }
 .preview p { color: var(--muted); }
 .preview .preview-name { font-size: 1.15rem; font-weight: 750; color: #30253d; overflow-wrap: anywhere; }
+.preview-comment {
+  grid-column: 1 / -1;
+  margin-top: .75rem;
+  border-radius: .8rem;
+  padding: .6rem .75rem;
+  background: #fff;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.preview-comment b { display: block; font-size: .8rem; color: var(--accent); }
 .ink, .face { stroke: #493953; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .face { fill: none; stroke-width: 3.5; }
 .sparkle { fill: #a57ebe; }
 .part { display: none; }
 .part.selected { display: inline; }
 .chibi { animation: bob 2.2s ease-in-out 2 alternate; }
+#avatar[data-mood] .chibi { animation: none; }
 @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-6px); } }
+@media (prefers-reduced-motion: no-preference) {
+  #avatar[data-motion="cheer"] .chibi { animation: practice-cheer .62s ease-in-out; }
+  #avatar[data-motion="dip"] .chibi { animation: practice-dip .68s ease-in-out; }
+}
+@keyframes practice-cheer {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-13px); }
+}
+@keyframes practice-dip {
+  0%, 100% { transform: translateY(0); }
+  58% { transform: translateY(6px); }
+}
 
 fieldset { min-width: 0; border: 0; padding: 0; margin: 0; display: grid; gap: .3rem; }
 label { font-weight: 650; }
