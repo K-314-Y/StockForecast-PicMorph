@@ -70,6 +70,8 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.doesNotMatch(script,/\bXMLHttpRequest\b|sendBeacon\b/);
   assert.match(script,/createImageBitmap\(file\)/);
   assert.match(script,/bitmap\.close\(\)/);
+  // A new ZIP must clear the old sprite before its archive validation can fail.
+  assert.match(script,/async function importCharacterZip\(file\)\{[\s\S]*?resetPack\(\);[\s\S]*?extractCharacterZip\(file\)/);
   assert.match(script,/MAX_BYTES = 5 \* 1024 \* 1024/);
   assert.match(script,/MAX_FRAME_SIDE = 1024/);
   assert.match(script,/getImageData\(0,0,1,1\)/);

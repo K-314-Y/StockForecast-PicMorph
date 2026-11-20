@@ -473,6 +473,8 @@ for(const id of [...zipLookFields,'zipHairColor','zipClothingColor']) {
 // Users select ONE archive; registration is a separate explicit disk write.
 async function importCharacterZip(file){
   if(!file || busy)return;
+  // A failed replacement must never leave the previous character on screen.
+  resetPack();
   currentZipFiles=null;
   clearZipEquipment();
   $('registerZip').disabled=true;
