@@ -1,6 +1,8 @@
 /* User-supplied PNG composition. Preview is browser-only.
  * Files are saved locally only after explicit ZIP character registration. */
 import {BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition} from './accessory-options.mjs';
+import {checkOverlayHeader,hasOverlayAlpha,OVERLAY_MAX_SIDE,OVERLAY_POSITION,
+  OVERLAY_SCALE,overlayRect,overlayValue} from './accessory-overlay.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('previewCanvas');
@@ -29,10 +31,12 @@ const methodLabels={
 const builtinAccessories=new Map(BUILTIN_ACCESSORIES.map(item=>[item.id,item]));
 const accessoryCatalog=new Map(builtinAccessories);
 const manifestAccessories=new Map();
+const accessoryOverlays=new Map();
 let equippedIds=[];
 let savingAccessory=false;
 let epoch = 0;
 let busy = false;
+let registering = false;
 let paused = false;
 let frame = 0;
 let lastChange = 0;
@@ -73,31 +77,46 @@ function setBusy(value) {
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
+  $('zipFrames').disabled = value;
   for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood','faceX','faceY'])$(id).disabled=value;
   $('zipEquipment').disabled=value;
   refreshZipTraitStatus();
   // Allow cancelling a slow decode or delayed sample request.
-  $('clear').disabled = !value && !pack;
+  $('clear').disabled = registering || (!value && !pack);
+}
+function setRegistering(value) {
+  registering=value;
+  for (const id of ['frames','fps',...keys.map(([,id])=>id),...generatedKeys.map(([,id])=>id)])
+    $(id).disabled=value;
+  $('pause').disabled=value || !pack;
+  setBusy(value);
 }
 function checkedOffset(id) {
   const value = Number($(id).value);
   return Number.isFinite(value) ? Math.max(-24,Math.min(24,value)) : 0;
 }
-function drawLayer(bitmap, frameIndex, dx=0, dy=0) {
+function drawLayer(target, bitmap, frameIndex, dx=0, dy=0) {
   if (!bitmap) return;
   const width = pack.width;
   const height = pack.height;
-  ctx.drawImage(bitmap,frameIndex*width,0,width,height,dx,dy,width,height);
+  target.drawImage(bitmap,frameIndex*width,0,width,height,dx,dy,width,height);
+}
+function drawCharacter(target,frameIndex) {
+  const mood = $('mood').value;
+  const images = pack.images;
+  target.clearRect(0,0,pack.width,pack.height);
+  drawLayer(target,images.base,frameIndex);
+  drawLayer(target,images.outfit,frameIndex);
+  drawLayer(target,images[mood] || images.ready,frameIndex,checkedOffset('faceX'),checkedOffset('faceY'));
+  drawLayer(target,images.hair,frameIndex);
+  for (const id of equippedIds) {
+    const overlay=accessoryOverlays.get(id);
+    if (overlay?.bitmap) target.drawImage(overlay.bitmap,...overlayRect(pack.width,pack.height,overlay));
+  }
 }
 function paint() {
   if (!pack) return;
-  const mood = $('mood').value;
-  const images = pack.images;
-  ctx.clearRect(0,0,pack.width,pack.height);
-  drawLayer(images.base,frame);
-  drawLayer(images.outfit,frame);
-  drawLayer(images[mood] || images.ready,frame,checkedOffset('faceX'),checkedOffset('faceY'));
-  drawLayer(images.hair,frame);
+  drawCharacter(ctx,frame);
   $('frameInfo').textContent = String(frame+1) + ' / ' + String(pack.frames) +
     ' コマ｜' + String(pack.width) + ' × ' + String(pack.height) + ' px' +
     (reduced.matches ? '｜静止表示（動きを減らす設定）' : '');
@@ -143,7 +162,7 @@ function hasAlpha(bitmap) {
   }
   return false;
 }
-async function decodeFile(file, label) {
+async function decodeFile(file, label, checkHeader) {
   if (!file) return null;
   if (file.type!=='image/png' && file.type!=='image/webp') {
     throw Error(label+'はPNGかWebPにしてください。');
@@ -151,6 +170,7 @@ async function decodeFile(file, label) {
   if (!file.size || file.size>MAX_BYTES) {
     throw Error(label+'は5MB以下にしてください。');
   }
+  if (checkHeader) await checkHeader(file);
   try {return await createImageBitmap(file);}
   catch {throw Error(label+'を画像として読み込めませんでした。');}
 }
@@ -329,6 +349,111 @@ $('loadGenerated').addEventListener('click',loadGeneratedSheets);
 function accessoryLabel({name,method}) {
   return name+'（'+methodLabels[method]+'）';
 }
+function overlayStatus(overlay,message,isError=false) {
+  overlay.feedback.textContent=message;
+  overlay.feedback.dataset.error=String(isError);
+  overlay.remove.disabled=!overlay.bitmap && !overlay.pending;
+  for (const input of overlay.adjustments) input.disabled=!overlay.bitmap;
+}
+function releaseOverlay(overlay) {
+  overlay.pending=null;
+  overlay.bitmap?.close();
+  overlay.bitmap=null;
+}
+async function loadOverlay(id,overlay,file) {
+  if (!file || busy || !currentZipFiles || accessoryOverlays.get(id)!==overlay) return;
+  const request=Symbol();
+  const chosenEpoch=epoch;
+  overlay.pending=request;
+  const isCurrent=()=>epoch===chosenEpoch && currentZipFiles && !busy &&
+    accessoryOverlays.get(id)===overlay && overlay.pending===request;
+  overlayStatus(overlay,'重ね絵を確認しています…');
+  refreshZipTraitStatus();
+  let bitmap;
+  try {
+    bitmap=await decodeFile(file,'重ね絵',async source=>{
+      const buffer=await source.arrayBuffer();
+      if (!isCurrent()) throw Error();
+      checkOverlayHeader(buffer,source.type);
+    });
+    if (!isCurrent()) return;
+    if (!bitmap.width || !bitmap.height || bitmap.width>OVERLAY_MAX_SIDE || bitmap.height>OVERLAY_MAX_SIDE)
+      throw Error('重ね絵の縦横は1〜1024pxにしてください。');
+    const check=document.createElement('canvas');
+    check.width=bitmap.width;check.height=bitmap.height;
+    const target=check.getContext('2d',{willReadFrequently:true});
+    target.drawImage(bitmap,0,0);
+    if (!hasOverlayAlpha(target.getImageData(0,0,check.width,check.height).data))
+      throw Error('透明な背景が画像の1割以上あり、絵が描かれている素材を選んでください。');
+    overlay.bitmap?.close();
+    overlay.bitmap=bitmap;
+    bitmap=null;
+    overlayStatus(overlay,'表示中：'+file.name);
+    paint();
+  } catch (error) {
+    if (isCurrent()) {
+      overlayStatus(overlay,(error.message||'重ね絵を読み込めませんでした。')+
+        (overlay.bitmap?' 以前の重ね絵を表示しています。':' 分析装備は有効です。'),true);
+    }
+  } finally {
+    bitmap?.close();
+    if (isCurrent()) {
+      overlay.pending=null;
+      overlay.remove.disabled=!overlay.bitmap;
+      refreshZipTraitStatus();
+    }
+  }
+}
+function createOverlayRow(id) {
+  const row=$('zipOverlayRow').content.firstElementChild.cloneNode(true);
+  const file=row.querySelector('input[type=file]');
+  const remove=row.querySelector('[data-action=remove-overlay]');
+  const unequip=row.querySelector('[data-action=unequip]');
+  const adjustments=row.querySelectorAll('[data-overlay]');
+  const overlay={row,feedback:row.querySelector('[role=status]'),remove,adjustments,
+    bitmap:null,pending:null};
+  for (const input of adjustments) {
+    const key=input.dataset.overlay;
+    const bounds=key==='scale'?OVERLAY_SCALE:OVERLAY_POSITION;
+    input.min=bounds.min;
+    input.max=bounds.max;
+    overlay[key]=bounds.initial;
+    input.value=overlay[key];
+    input.addEventListener('input',()=>{
+      if (busy || !currentZipFiles || !overlay.bitmap) return;
+      overlay[key]=overlayValue(input.valueAsNumber,bounds);
+      paint();
+    });
+    input.addEventListener('change',()=>{input.value=overlay[key];});
+  }
+  file.setAttribute('aria-describedby','zipOverlayHelp');
+  file.addEventListener('change',()=>{
+    const selected=file.files?.[0];
+    file.value='';
+    void loadOverlay(id,overlay,selected);
+  });
+  remove.addEventListener('click',()=>{
+    if (busy || !currentZipFiles || accessoryOverlays.get(id)!==overlay) return;
+    releaseOverlay(overlay);
+    overlayStatus(overlay,'重ね絵を外しました。分析装備は有効です。');
+    refreshZipTraitStatus();
+    paint();
+    file.focus();
+  });
+  unequip.addEventListener('click',()=>{
+    if (busy || !currentZipFiles || accessoryOverlays.get(id)!==overlay) return;
+    releaseOverlay(overlay);
+    accessoryOverlays.delete(id);
+    equippedIds=equippedIds.filter(item=>item!==id);
+    renderEquipment(id);
+    $('zipAccessory').focus();
+    $('zipEquipmentStatus').textContent=accessoryLabel(accessoryById(id))+'を外しました。';
+    refreshZipTraitStatus();
+    paint();
+  });
+  overlayStatus(overlay,'重ね絵なし。分析装備は有効です。');
+  return overlay;
+}
 function renderEquipment(preferred=$('zipAccessory').value) {
   const picker=$('zipAccessory');
   $('zipEquip').disabled=!currentZipFiles;
@@ -338,33 +463,28 @@ function renderEquipment(preferred=$('zipAccessory').value) {
   picker.replaceChildren(empty,...options);
   picker.value=available.has(preferred)?preferred:'';
   const rows=equippedIds.map(id=>{
-    const label=accessoryLabel(available.get(id));
-    const row=document.createElement('li');
-    row.textContent=label;
-    const remove=document.createElement('button');
-    remove.type='button';
-    remove.disabled=!currentZipFiles;
-    remove.textContent='外す';
-    remove.setAttribute('aria-label',label+'を外す');
-    remove.addEventListener('click',()=>{
-      equippedIds=equippedIds.filter(item=>item!==id);
-      renderEquipment(id);
-      picker.focus();
-      $('zipEquipmentStatus').textContent=label+'を外しました。';
-    });
-    row.append(remove);
+    if (!accessoryOverlays.has(id)) accessoryOverlays.set(id,createOverlayRow(id));
+    const {row}=accessoryOverlays.get(id);
+    row.querySelector('legend').textContent=accessoryLabel(available.get(id));
+    row.querySelector('fieldset').disabled=!currentZipFiles;
     return row;
   });
-  $('zipEquipped').replaceChildren(...rows);
+  const list=$('zipEquipped');
+  if (list.children.length!==rows.length || rows.some((row,index)=>list.children[index]!==row))
+    list.replaceChildren(...rows);
+  $('zipOverlayHelp').hidden=!rows.length;
 }
 function accessoryById(id) {
   return accessoryCatalog.get(id)??manifestAccessories.get(id);
 }
 function clearZipEquipment() {
+  for (const overlay of accessoryOverlays.values()) releaseOverlay(overlay);
+  accessoryOverlays.clear();
   equippedIds=[];
   manifestAccessories.clear();
   renderEquipment('');
   $('zipEquipmentStatus').textContent='';
+  paint();
 }
 async function loadAccessoryCatalog() {
   try {
@@ -378,7 +498,7 @@ async function loadAccessoryCatalog() {
   }
 }
 $('zipEquip').addEventListener('click',()=>{
-  if(!currentZipFiles)return;
+  if(busy||!currentZipFiles)return;
   const item=accessoryById($('zipAccessory').value);
   const feedback=$('zipEquipmentStatus');
   if(!item){
@@ -399,7 +519,7 @@ $('zipEquip').addEventListener('click',()=>{
   feedback.textContent=accessoryLabel(item)+'を装備しました。';
 });
 $('zipAddAccessory').addEventListener('click',async()=>{
-  if(savingAccessory)return;
+  if(busy||savingAccessory)return;
   const nameField=$('zipAccessoryName');
   const methodField=$('zipAccessoryMethod');
   const feedback=$('zipEquipmentStatus');
@@ -436,11 +556,12 @@ renderEquipment();
 void loadAccessoryCatalog();
 
 function refreshZipTraitStatus() {
+  const pending=[...accessoryOverlays.values()].some(overlay=>overlay.pending);
   const missing=zipLookFields.filter(id=>!$(id).value)
     .map(id=>({zipHairStyle:'髪型',zipExpression:'性格・表情'}[id]));
-  $('registerZip').disabled=busy || !currentZipFiles || missing.length>0;
+  $('registerZip').disabled=busy || !currentZipFiles || missing.length>0 || pending;
   if(!currentZipFiles)return;
-  $('zipTraitsStatus').textContent=missing.length ?
+  $('zipTraitsStatus').textContent=pending ? '重ね絵を確認しています。' : missing.length ?
     '未指定：'+missing.join('・')+'。ZIPの情報にない特徴は選択してください。' :
     '登録できます。髪型・色は補助分析、表情は資金使用率に反映します。';
 }
@@ -473,6 +594,7 @@ for(const id of [...zipLookFields,'zipHairColor','zipClothingColor']) {
 // Users select ONE archive; registration is a separate explicit disk write.
 async function importCharacterZip(file){
   if(!file || busy)return;
+  const frames=Number($('zipFrames').value);
   // A failed replacement must never leave the previous character on screen.
   resetPack();
   currentZipFiles=null;
@@ -494,9 +616,9 @@ async function importCharacterZip(file){
       if(files[name])temp[kind]=await decodeFile(files[name],name);
       if(myEpoch!==epoch)return;
     }
-    const next=inspect({...temp},6);
+    const next=inspect({...temp},frames);
     if(myEpoch!==epoch)return;
-    displayLoaded(next,6);
+    displayLoaded(next,frames);
     for(const key of Object.keys(temp))delete temp[key];
     currentZipFiles=files;
     applyZipAppearance(files);
@@ -528,15 +650,19 @@ async function encodeImage(file) {
 }
 async function composedPortrait() {
   if(!pack)throw Error('キャラ画像の読み込みが必要です。');
-  const before=frame;
-  frame=0;paint();
-  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
-  frame=before;paint();
+  const portrait=document.createElement('canvas');
+  portrait.width=pack.width;
+  portrait.height=pack.height;
+  const target=portrait.getContext('2d',{alpha:true});
+  target.imageSmoothingEnabled=true;
+  target.imageSmoothingQuality='high';
+  drawCharacter(target,0);
+  const blob=await new Promise(resolve=>portrait.toBlob(resolve,'image/png'));
   if(!blob||blob.size>1024*1024)throw Error('合成プレビューが大きすぎます。');
   return new File([blob],'portrait.png',{type:'image/png'});
 }
 $('registerZip').addEventListener('click',async()=>{
-  if(busy||!currentZipFiles)return;
+  if($('registerZip').disabled||busy||!currentZipFiles)return;
   const name=$('zipName').value.trim();
   if(!name||[...name].length>16) {
     $('zipRegisterStatus').textContent='キャラ名は1〜16文字にしてください。';
@@ -556,14 +682,13 @@ $('registerZip').addEventListener('click',async()=>{
   }:{};
   const look={accessory:legacyAccessory,hair_style:$('zipHairStyle').value,expression:$('zipExpression').value};
   const colors={hair_color:$('zipHairColor').value,clothing_color:$('zipClothingColor').value};
-  setBusy(true);
-  $('clear').disabled=true;
-  $('frames').disabled=true;
+  setRegistering(true);
   $('zipRegisterStatus').textContent='外見と専用AI設定をこのPCに登録しています…';
   try {
     const images={};
-    for(const [part,file] of Object.entries(files))images[part]=await encodeImage(file);
     images.portrait=await encodeImage(await composedPortrait());
+    if(chosenEpoch!==epoch)return;
+    for(const [part,file] of Object.entries(files))images[part]=await encodeImage(file);
     if(chosenEpoch!==epoch)return;
     const response=await fetch('/api/imported-characters/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
@@ -596,13 +721,13 @@ $('registerZip').addEventListener('click',async()=>{
   }catch(error){
     if(chosenEpoch===epoch)$('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
   }finally{
-    $('frames').disabled=false;
-    if(chosenEpoch===epoch)setBusy(false);
+    if(chosenEpoch===epoch)setRegistering(false);
   }
 });
 $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
+  if(registering)return;
   ++epoch;
   setBusy(false);
   resetPack();
@@ -614,7 +739,7 @@ $('clear').addEventListener('click',()=>{
   status('プレビューを解除しました。画像データは保存していません。');
 });
 $('pause').addEventListener('click',()=>{
-  if (!pack) return;
+  if (!pack || registering) return;
   paused=!paused;
   $('pause').setAttribute('aria-pressed',String(paused));
   $('pause').textContent=paused?'再生する':'停止する';
@@ -625,6 +750,7 @@ $('mood').addEventListener('change',paint);
 $('fps').addEventListener('change',startClock);
 for (const id of ['faceX','faceY']) $(id).addEventListener('input',paint);
 $('frames').addEventListener('change',()=>{
+  if (registering) return;
   if (pack || busy) {
     ++epoch;currentZipFiles=null;setBusy(false);resetPack();
     clearZipEquipment();
@@ -638,5 +764,5 @@ for (const [,input] of keys) $(input).addEventListener('change',()=>{
 document.addEventListener('visibilitychange',startClock);
 reduced.addEventListener('change',startClock);
 window.addEventListener('pagehide',()=>{
-  ++epoch;currentZipFiles=null;resetPack();setBusy(false);
+  ++epoch;currentZipFiles=null;resetPack();clearZipEquipment();setRegistering(false);
 });

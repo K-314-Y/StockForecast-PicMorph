@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createGameServer} from '../../game_runtime/server.mjs';
+import {checkOverlayHeader,hasOverlayAlpha,overlayRect}
+  from '../../game_runtime/parts-lab/accessory-overlay.mjs';
 
 const pagePath = new URL('../../game_runtime/parts-lab/preview.html',import.meta.url);
 const scriptPath = new URL('../../game_runtime/parts-lab/preview.js',import.meta.url);
@@ -19,6 +21,8 @@ test('local PNG parts lab has independently accessible, fixed-path, safe read-on
     for (const [path,mime,data] of [
       ['/parts-lab/preview.html','text/html; charset=utf-8',Buffer.from(html)],
       ['/parts-lab/preview.js','text/javascript; charset=utf-8',Buffer.from(script)],
+      ['/parts-lab/accessory-overlay.mjs','text/javascript; charset=utf-8',
+        await readFile(new URL('../../game_runtime/parts-lab/accessory-overlay.mjs',import.meta.url))],
     ]) {
       const res=await fetch(root+path);
       assert.equal(res.status,200,path);
@@ -87,4 +91,39 @@ test('the only game entrypoint is an opt-in link inside the appearance studio',a
   assert.match(studio,/rel="noopener noreferrer"/);
   assert.match(studio,/SAVEもアップロードも行いません/);
   assert.doesNotMatch(game.split('id="frontCharacter"')[1].split('id="simpleHome"')[0],/parts-lab\/preview/);
+});
+
+test('accessory preflight bounds PNG and WebP dimensions before decode and checks real format',()=>{
+  const png=Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg==','base64')).buffer;
+  checkOverlayHeader(png,'image/png');
+  assert.throws(()=>checkOverlayHeader(png,'image/webp'),/静止PNG/);
+  assert.throws(()=>checkOverlayHeader(png.slice(0,40),'image/png'),/静止PNG/);
+  new DataView(png).setUint32(16,1025);
+  assert.throws(()=>checkOverlayHeader(png,'image/png'),/1024px/);
+
+  // A VP8L header with no pixel data. This is preflight, before browser decode.
+  const webp=Uint8Array.from(Buffer.from('RIFF\x12\0\0\0WEBPVP8L\x05\0\0\0\x2f\0\0\0\0\0','latin1')).buffer;
+  checkOverlayHeader(webp,'image/webp');
+  new DataView(webp).setUint32(21,1024,true);
+  assert.throws(()=>checkOverlayHeader(webp,'image/webp'),/1024px/);
+  new Uint8Array(webp).set(Buffer.from('ANIM'),12);
+  assert.throws(()=>checkOverlayHeader(webp,'image/webp'),/静止PNG/);
+});
+
+test('accessory alpha requires visible content and a transparent background',()=>{
+  const pixels=new Uint8ClampedArray(40);
+  assert.equal(hasOverlayAlpha(pixels),false);
+  pixels.fill(255);
+  assert.equal(hasOverlayAlpha(pixels),false);
+  pixels[3]=32;
+  assert.equal(hasOverlayAlpha(pixels),true);
+});
+
+test('accessory transform clamps position and scale while preserving frame bounds',()=>{
+  const bitmap={width:20,height:10};
+  assert.deepEqual(overlayRect(100,60,{bitmap,x:0,y:0,scale:100}),[40,25,20,10]);
+  assert.deepEqual(overlayRect(100,60,{bitmap,x:999,y:-999,scale:999}),[60,0,40,20]);
+  assert.deepEqual(overlayRect(100,60,{bitmap,x:NaN,y:NaN,scale:-999}),[48,29,5,3]);
+  assert.deepEqual(overlayRect(32,64,{bitmap:{width:1024,height:2},x:100,y:100,scale:200}),
+    [0,63,32,1]);
 });

@@ -69,6 +69,7 @@ const PARTS_LAB = new Map([
   ['/parts-lab/preview.js', new URL('./parts-lab/preview.js', import.meta.url)],
   ['/parts-lab/zip-import.mjs', new URL('./parts-lab/zip-import.mjs', import.meta.url)],
   ['/parts-lab/accessory-options.mjs', new URL('./parts-lab/accessory-options.mjs', import.meta.url)],
+  ['/parts-lab/accessory-overlay.mjs', new URL('./parts-lab/accessory-overlay.mjs', import.meta.url)],
 ]);
 const PARTS_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';

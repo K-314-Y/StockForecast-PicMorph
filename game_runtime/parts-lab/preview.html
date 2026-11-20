@@ -46,7 +46,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .zip-import fieldset{min-width:0;margin:12px 0;padding:12px;border:1px solid #7ab89f;border-radius:8px}
 #zipEquipped{padding-inline-start:22px;overflow-wrap:anywhere}
 #zipEquipped li{margin-block:6px}
-#zipEquipped button{margin-inline-start:8px}
+#zipEquipped .controls{grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr))}
+#zipEquipped [data-error=true]{color:#ffe4a3}
 
 .generated-import summary{font-weight:700;cursor:pointer;line-height:1.65;padding:3px}
 .generated-import summary:focus-visible{outline:3px solid #f9dc8b}
@@ -68,6 +69,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <div class="zip-import" aria-label="ZIP一括読み込み">
 <p><strong>おすすめ：ZIPを1回選ぶだけ</strong></p>
 <p class="hint">前に渡した「ラベンダーキャラ」のZIPを選ぶと、中の <code>body / ready / happy / cautious</code> を自動判別して再生します。展開や4枚の選択は不要です。</p>
+<label for="zipFrames">ZIP内の画像のコマ数
+<select id="zipFrames"><option value="6" selected>6コマ（横一列）</option><option value="1">1コマ（静止画）</option></select></label>
 <label for="zipFile">ZIPファイルを選ぶと自動再生
 <input id="zipFile" type="file" accept=".zip,application/zip,application/x-zip-compressed"></label>
 <small>プレビューだけなら保存しません。「登録」を押すとこのPCに画像と専用AI設定を保存します。</small>
@@ -76,11 +79,32 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p class="hint"><strong>外見の特徴からAIを作成</strong>：ZIPのmanifest.jsonに登録されたアクセサリー・髪色・服色を自動取得します。記録のない特徴は下の項目で指定してください。画像そのものをAI認識した結果ではありません。</p>
 <fieldset id="zipEquipment">
 <legend>予測用アクセサリー（最大3個）</legend>
-<p id="zipEquipmentHelp" class="hint">装備した分析方法を同じ比率で組み合わせます。同じ方法は1個まで。装備がなければ移動平均で分析します。装備名はゲームに表示されます。キャラ画像には描画されません。</p>
+<p id="zipEquipmentHelp" class="hint">装備した分析方法を同じ比率で組み合わせます。同じ方法は1個まで。装備がなければ移動平均で分析します。見た目にも付ける場合は、装備ごとに重ね絵を選んでください。</p>
 <label for="zipAccessory">装備するアクセサリー
 <select id="zipAccessory" aria-describedby="zipEquipmentHelp"></select></label>
 <button id="zipEquip" type="button">装備する</button>
 <ul id="zipEquipped" aria-label="装備中のアクセサリー"></ul>
+<template id="zipOverlayRow">
+  <li>
+    <fieldset>
+      <legend></legend>
+      <label>表示用の重ね絵（任意）
+        <input type="file" accept="image/png,image/webp">
+      </label>
+      <p class="hint" role="status"></p>
+      <div class="controls">
+        <label>横位置（%）<input type="number" data-overlay="x" step="1"></label>
+        <label>縦位置（%）<input type="number" data-overlay="y" step="1"></label>
+        <label>拡大率（%）<input type="number" data-overlay="scale" step="1"></label>
+      </div>
+      <div class="actions">
+        <button type="button" data-action="remove-overlay">重ね絵だけ外す</button>
+        <button type="button" data-action="unequip">分析装備を外す</button>
+      </div>
+    </fieldset>
+  </li>
+</template>
+<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。横・縦位置は中央が0%、端が±100%です。重ね絵は各コマの同じ位置に表示され、登録時に選択中の表情の最初のコマへ合成します。元のアニメーション素材はそのまま保存します。重ね絵なしでも分析装備は登録できます。</p>
 <details>
 <summary>新しいアクセサリーを作る</summary>
 <div class="controls">
