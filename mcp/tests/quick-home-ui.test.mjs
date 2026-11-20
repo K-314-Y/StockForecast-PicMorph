@@ -6,7 +6,7 @@ import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('../../game_runtime/quick-home.mjs',import.meta.url),'utf8');
 const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
 
-async function mount(models=[],chatgpt=false) {
+async function mount(models=[],chatgpt=false,imported=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
   let observeSource=()=>{};
   let document;
@@ -54,7 +54,7 @@ async function mount(models=[],chatgpt=false) {
     nodes.set(id,node);
   }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
-  const state={models,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
+  const state={models,imported,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
     scenario_kind:body.scenario_token?'replay':'new',
@@ -68,7 +68,7 @@ async function mount(models=[],chatgpt=false) {
   const fetch=async(path,options)=>{
     const body=options?.body?JSON.parse(options.body):undefined;
     calls.push({path,body});
-    if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models})};
+    if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models,imported_characters:state.imported})};
     if(path==='/api/chatgpt-session'){
       assert.equal(options?.method??'GET','GET');
       assert.equal(body,undefined);
@@ -1733,6 +1733,30 @@ test('owner caption follows self art, other AI and reset without extra network',
   await fire('quickAgain');
   assert.equal(get('quickReplayOwner').textContent,'');
   assert.deepEqual(storageWrites,[]);
+});
+
+test('a registered ZIP character selects its own AI and owns its result image and caption',async()=>{
+  const id='zip_'+'a'.repeat(32);
+  const own={id,ai_id:id,name:'ラベンダー',image_url:'/api/imported-characters/image/'+id,
+    model_version:'companion-v1_0_100_0_0_75',trained:false,live_market:false};
+  const {get,fire,state,calls}=await mount([],false,[own]);
+  assert.equal(get('quickModel').children.some(child=>child.value===id),true);
+  get('quickModel').value=id;
+  await fire('quickModel','change');
+  assert.equal(get('quickZipLinked').hidden,false);
+  assert.equal(get('quickZipPortrait').src,own.image_url);
+  const practice=state.practice;
+  state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:own.name});
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  assert.equal(calls.at(-1).body.model_id,id);
+  assert.match(get('quickReplayOwner').textContent,/登録したZIPキャラ「ラベンダー」専用AI/);
+  assert.equal(get('quickMiniPortrait').src,own.image_url);
+  await fire('quickMiniPortrait','load');
+  assert.equal(get('quickMini').hidden,false);
+  await fire('quickAgain');
+  assert.equal(get('quickMini').hidden,true);
+  assert.equal(get('quickReplayOwner').textContent,'');
 });
 
 test('ChatGPT is hidden by default and never requests on load, run or reflection submit',async()=>{

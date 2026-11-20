@@ -1,5 +1,5 @@
-/* User-supplied PNG composition, entirely in this browser tab.
- * Images remain in ephemeral browser memory. No upload or API writes. */
+/* User-supplied PNG composition. Preview is browser-only.
+ * Files are saved locally only after explicit ZIP character registration. */
 'use strict';
 
 const $ = id => document.getElementById(id);
@@ -19,6 +19,7 @@ const sampleUrls = Object.freeze({
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_FRAME_SIDE = 1024;
 let pack = null;
+let currentZipFiles = null;
 let epoch = 0;
 let busy = false;
 let paused = false;
@@ -59,6 +60,9 @@ function setBusy(value) {
   busy = value;
   $('loadOwn').disabled = value;
   $('loadSample').disabled = value;
+  $('loadGenerated').disabled = value;
+  $('zipFile').disabled = value;
+  $('registerZip').disabled = value || !currentZipFiles;
   // Allow cancelling a slow decode or delayed sample request.
   $('clear').disabled = !value && !pack;
 }
@@ -167,6 +171,8 @@ function inspect(images, frames) {
 }
 async function loadPack(isSample) {
   if (busy) return;
+  currentZipFiles = null;
+  $('registerZip').disabled = true;
   const myEpoch=++epoch;
   const temp={};
   setBusy(true);
@@ -185,23 +191,8 @@ async function loadPack(isSample) {
     // Transfer bitmaps to a separate object before releasing temporary references.
     const next=inspect({...temp},frames);
     if (epoch!==myEpoch) return;
-    if (pack) release(pack);
-    pack=next;
+    displayLoaded(next,frames);
     for (const key of Object.keys(temp)) delete temp[key]; // ownership transferred to pack
-    $('frames').value=String(frames);
-    canvas.width=next.width;canvas.height=next.height;
-    ctx.imageSmoothingEnabled=true;
-    ctx.imageSmoothingQuality='high';
-    frame=0;paused=false;
-    $('pause').disabled=false;
-    $('pause').setAttribute('aria-pressed','false');
-    $('pause').textContent='停止する';
-    $('clear').disabled=false;
-    $('stage').dataset.hasPreview='true';
-    $('stage').dataset.single=String(frames===1);
-    $('stage').dataset.paused='false';
-    $('faceX').value='0';$('faceY').value='0';
-    startClock();
     status(isSample ?
       'デモを読み込みました。表情と動きの切替を試してください。' :
       'PNGを読み込みました。画像はこのブラウザ内のみで使用し、保存していません。');
@@ -212,13 +203,221 @@ async function loadPack(isSample) {
     if (epoch===myEpoch) setBusy(false);
   }
 }
+
+// Generated six-frame (3 columns x 2 rows) sheet import. The four sources
+// never leave this browser. Coordinates tuned to this original lavender chibi;
+// this is NOT an automatic Live2D/face-part extractor.
+const generatedKeys = [
+  ['base','generatedBase'],['ready','generatedReady'],
+  ['happy','generatedHappy'],['cautious','generatedCautious'],
+];
+const GRID_COLUMNS=3, GRID_ROWS=2, TARGET_CELL=256;
+function generatedSheetGeometry(bitmap) {
+  if (bitmap.width % GRID_COLUMNS || bitmap.height % GRID_ROWS ||
+      bitmap.width / GRID_COLUMNS !== bitmap.height / GRID_ROWS) {
+    throw Error('画像生成の素材は3列×2行で、各コマが正方形の画像にしてください。');
+  }
+  const side=bitmap.width / GRID_COLUMNS;
+  if (side<64 || side>1024) throw Error('元の1コマは64〜1024pxにしてください。');
+  return side;
+}
+async function normalizeGenerated(bitmap, layer, side) {
+  const strip=document.createElement('canvas');
+  strip.width=TARGET_CELL*6;strip.height=TARGET_CELL;
+  const c=strip.getContext('2d',{alpha:true,willReadFrequently:true});
+  c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high';
+  for (let i=0;i<6;i++) {
+    const x=(i%GRID_COLUMNS)*side;
+    const y=Math.floor(i/GRID_COLUMNS)*side;
+    if (layer==='base') {
+      c.drawImage(bitmap,x,y,side,side,i*TARGET_CELL,0,TARGET_CELL,TARGET_CELL);
+    } else {
+      // Original face panels are wider than the blank face in the body sheet.
+      // 169,75,174 are original 512px-cell alignment coordinates, kept proportional.
+      const destX=i*TARGET_CELL+(169/512)*TARGET_CELL;
+      const destY=(75/512)*TARGET_CELL;
+      const length=(174/512)*TARGET_CELL;
+      c.drawImage(bitmap,x,y,side,side,destX,destY,length,length);
+    }
+  }
+  // Suppress near-transparent generation haze without erasing the foreground.
+  const pixels=c.getImageData(0,0,strip.width,strip.height);
+  for(let i=3;i<pixels.data.length;i+=4){
+    const a=pixels.data[i];
+    pixels.data[i]=Math.max(0,Math.min(255,Math.round((a-14)*255/170)));
+  }
+  c.putImageData(pixels,0,0);
+  return await createImageBitmap(strip);
+}
+function displayLoaded(next,frames,isSample=false){
+  if(pack)release(pack);
+  pack=next;
+  $('frames').value=String(frames);
+  canvas.width=next.width;canvas.height=next.height;
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  frame=0;paused=false;
+  $('pause').disabled=false;
+  $('pause').setAttribute('aria-pressed','false');
+  $('pause').textContent='停止する';
+  $('clear').disabled=false;
+  $('stage').dataset.hasPreview='true';
+  $('stage').dataset.single=String(frames===1);
+  $('stage').dataset.paused='false';
+  $('faceX').value='0';$('faceY').value='0';
+  startClock();
+}
+async function loadGeneratedSheets(){
+  if(busy)return;
+  currentZipFiles=null;
+  $('registerZip').disabled=true;
+  const myEpoch=++epoch;
+  const raw={};const transformed={};
+  setBusy(true);
+  status('3列×2行の生成画像から、体と顔の6コマを組み立てています…');
+  try{
+    for(const [name,id] of generatedKeys){
+      const file=$(id).files?.[0];
+      if(file)raw[name]=await decodeFile(file,name);
+      if(myEpoch!==epoch)return;
+    }
+    if(!raw.base||!raw.ready){
+      throw Error('生成画像の「顔なしの体」と「通常の顔」の両方を選んでください。');
+    }
+    const side=generatedSheetGeometry(raw.base);
+    for(const [name,image] of Object.entries(raw)){
+      if(image.width!==raw.base.width||image.height!==raw.base.height){
+        throw Error(name+'の画像サイズが体と違います。4枚を同じ3×2シートで作ってください。');
+      }
+      if(name!=='base'&&!hasAlpha(image)){
+        throw Error(name+'の顔画像は透明背景が必要です。');
+      }
+      transformed[name]=await normalizeGenerated(image,name,side);
+      if(myEpoch!==epoch)return;
+    }
+    const next=inspect({...transformed},6);
+    if(myEpoch!==epoch)return;
+    displayLoaded(next,6);
+    for(const name of Object.keys(transformed))delete transformed[name];
+    status('生成したキャラの6コマを合成しました。表情切替とまばたきを確認できます。位置にズレがあれば顔のX・Yで調整してください。');
+  }catch(error){
+    if(myEpoch===epoch)status(error.message||'生成画像を開けませんでした。',true);
+  }finally{
+    release({images:raw});
+    release({images:transformed});
+    if(myEpoch===epoch)setBusy(false);
+  }
+}
+$('loadGenerated').addEventListener('click',loadGeneratedSheets);
+
+// Users select ONE archive; file change automatically loads the four atlases.
+// The archive never leaves this browser and no extracted files are saved.
+async function importCharacterZip(file){
+  if(!file || busy)return;
+  currentZipFiles=null;
+  $('registerZip').disabled=true;
+  $('zipGameLink').hidden=true;
+  $('zipRegisterStatus').textContent='新しいZIPを確認しています。登録はまだしていません。';
+  const myEpoch=++epoch;
+  const temp={};
+  setBusy(true);
+  status('ZIPから体と表情4種類を自動で読み込んでいます…');
+  try{
+    const {extractCharacterZip}=await import('/parts-lab/zip-import.mjs');
+    if(myEpoch!==epoch)return;
+    const files=await extractCharacterZip(file);
+    if(myEpoch!==epoch)return;
+    for(const kind of ['base','ready','happy','cautious']){
+      const name=kind==='base'?'body':kind;
+      if(files[name])temp[kind]=await decodeFile(files[name],name);
+      if(myEpoch!==epoch)return;
+    }
+    const next=inspect({...temp},6);
+    if(myEpoch!==epoch)return;
+    displayLoaded(next,6);
+    for(const key of Object.keys(temp))delete temp[key];
+    currentZipFiles=files;
+    $('registerZip').disabled=false;
+    $('zipRegisterStatus').textContent='読み込み成功。名前と予測ルールを確認して登録できます。';
+    status('ZIPのキャラを自動で再生しています。体＋表情を読み込みました。表情を変えて確認してください。');
+  }catch(error){
+    if(myEpoch===epoch)status(error.message||'ZIPを読み込めませんでした。',true);
+  }finally{
+    release({images:temp});
+    if(myEpoch===epoch){
+      $('zipFile').value='';
+      setBusy(false);
+    }
+  }
+}
+$('zipFile').addEventListener('change',()=>{
+  const file=$('zipFile').files?.[0];
+  if(file)void importCharacterZip(file);
+});
+
+async function encodeImage(file) {
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  let text='';
+  for(let offset=0;offset<bytes.length;offset+=32768) {
+    text+=String.fromCharCode(...bytes.subarray(offset,offset+32768));
+  }
+  return {mime:file.type,base64:btoa(text)};
+}
+async function composedPortrait() {
+  if(!pack)throw Error('キャラ画像の読み込みが必要です。');
+  const before=frame;
+  frame=0;paint();
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+  frame=before;paint();
+  if(!blob||blob.size>1024*1024)throw Error('合成プレビューが大きすぎます。');
+  return new File([blob],'portrait.png',{type:'image/png'});
+}
+$('registerZip').addEventListener('click',async()=>{
+  if(busy||!currentZipFiles)return;
+  const name=$('zipName').value.trim();
+  if(!name||[...name].length>16) {
+    $('zipRegisterStatus').textContent='キャラ名は1〜16文字にしてください。';
+    $('zipName').focus();
+    return;
+  }
+  const files=currentZipFiles;
+  const chosenEpoch=epoch;
+  setBusy(true);
+  $('zipRegisterStatus').textContent='外見と専用AI設定をこのPCに登録しています…';
+  try {
+    const images={};
+    for(const [part,file] of Object.entries(files))images[part]=await encodeImage(file);
+    images.portrait=await encodeImage(await composedPortrait());
+    if(chosenEpoch!==epoch)return;
+    const response=await fetch('/api/imported-characters/register',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,approach:$('zipApproach').value,
+        risk_percent:Number($('zipRisk').value),images}),
+      cache:'no-store',credentials:'same-origin',
+    });
+    const record=await response.json();
+    if(!response.ok||!/^zip_[0-9a-f]{32}$/.test(record.id)||record.ai_id!==record.id||
+       record.source!=='ZIP_LOCAL'||record.trained!==false||!record.model_version)
+      throw Error(record.error||'登録結果を確認できません。');
+    currentZipFiles=null; // one explicit registration per ZIP selection
+    $('zipGameLink').hidden=false;
+    $('zipRegisterStatus').textContent=name+'を登録しました。キャラIDと専用AI ID：'+
+      record.id+' ／ モデル版：'+record.model_version+
+      '。新規設定です（未学習・実株価未対応）。';
+    status('ZIPの外見と予測AI設定が同じIDで登録されました。');
+  }catch(error){
+    $('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
+  }finally{setBusy(false);}
+});
 $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
   ++epoch;
   setBusy(false);
   resetPack();
-  for (const [,input] of keys) $(input).value='';
+  currentZipFiles=null;
+  $('registerZip').disabled=true;
+  for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
+  $('zipFile').value='';
   status('プレビューを解除しました。画像データは保存していません。');
 });
 $('pause').addEventListener('click',()=>{
@@ -234,7 +433,8 @@ $('fps').addEventListener('change',startClock);
 for (const id of ['faceX','faceY']) $(id).addEventListener('input',paint);
 $('frames').addEventListener('change',()=>{
   if (pack || busy) {
-    ++epoch;setBusy(false);resetPack();
+    ++epoch;currentZipFiles=null;setBusy(false);resetPack();
+    $('registerZip').disabled=true;
     status('コマ数が変わりました。画像をもう一度読み込んでください。');
   }
 });
@@ -244,5 +444,5 @@ for (const [,input] of keys) $(input).addEventListener('change',()=>{
 document.addEventListener('visibilitychange',startClock);
 reduced.addEventListener('change',startClock);
 window.addEventListener('pagehide',()=>{
-  ++epoch;resetPack();setBusy(false);
+  ++epoch;currentZipFiles=null;resetPack();setBusy(false);
 });

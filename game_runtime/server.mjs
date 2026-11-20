@@ -28,6 +28,7 @@ import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket} from './historical-market.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
+import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST} from './imported-characters.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
@@ -66,6 +67,7 @@ const ARTWORK_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsaf
 const PARTS_LAB = new Map([
   ['/parts-lab/preview.html', new URL('./parts-lab/preview.html', import.meta.url)],
   ['/parts-lab/preview.js', new URL('./parts-lab/preview.js', import.meta.url)],
+  ['/parts-lab/zip-import.mjs', new URL('./parts-lab/zip-import.mjs', import.meta.url)],
 ]);
 const PARTS_LAB_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const UPSTREAM = 'http://127.0.0.1:8765';
@@ -301,6 +303,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
                                   companionStore = createCompanionStore(),
                                   modelShopStore = createModelShopStore(),
+                                  importedCharacterStore = createImportedCharacterStore(),
                                   lookStore = createLookStore(),
                                   forwardLedgerFile, forwardRecords,
                                   artworkStore = createArtworkStore(),
@@ -406,6 +409,31 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         inFlight--;
       }
     }
+    if ([rawPath,path].some(target=>target==='/api/imported-characters' ||
+        target.startsWith('/api/imported-characters/'))) {
+      if (rawPath==='/api/imported-characters' && req.method==='GET') {
+        try {return json(res,200,await importedCharacterStore.list());}
+        catch {return json(res,503,{error:'ZIPキャラ一覧を読み込めません'});}
+      }
+      const prefix='/api/imported-characters/image/';
+      if (req.method==='GET' && rawPath.startsWith(prefix)) {
+        const id=rawPath.slice(prefix.length);
+        if (!IMPORTED_CHARACTER_ID.test(id))return json(res,404,{error:'画像が見つかりません'});
+        try{return artworkImage(res,await importedCharacterStore.image(id));}
+        catch(error){return json(res,error?.status===404?404:503,{error:'画像が見つかりません'});}
+      }
+      if(rawPath!=='/api/imported-characters/register' || req.method!=='POST')
+        return json(res,404,{error:'見つかりません'});
+      if(inFlight>=2)return json(res,429,{error:'処理が混雑しています'});
+      inFlight++;
+      try {
+        const payload=await getBody(req,MAX_IMPORTED_REQUEST);
+        return json(res,201,await importedCharacterStore.register(payload));
+      }catch(error){
+        const status=error?.status??503;
+        return json(res,status,{error:status>=500?'ZIPキャラの登録に失敗しました':error.message});
+      }finally{inFlight--;}
+    }
     if (rawPath.startsWith('/parts-lab/') || path.startsWith('/parts-lab/')) {
       const asset = PARTS_LAB.get(rawPath);
       if (req.method !== 'GET' || !asset) return json(res, 404, {error: '見つかりません'});
@@ -458,8 +486,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       catch {return json(res, 503, {error:'育成情報を読み取れません'});}
     }
     if (req.method === 'GET' && path === '/api/model-shop') {
-      try{return json(res,200,await modelShopStore.public());}
-      catch{return json(res,503,{error:'ショップ情報を読み込めません'});}
+      try {
+        const shop=await modelShopStore.public();
+        // ZIP-owned characters appear alongside licensed models, without changing
+        // shop ownership, prices, XP or the existing forecast engine.
+        let imported_characters=[],imported_characters_error=false;
+        try {imported_characters=(await importedCharacterStore.list()).characters;}
+        catch {imported_characters_error=true;}
+        return json(res,200,{...shop,imported_characters,imported_characters_error});
+      }catch{return json(res,503,{error:'ショップ情報を読み込めません'});}
     }
     if (req.method === 'GET' && path === '/api/model-lab/baseline') {
       try {
@@ -691,14 +726,16 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
               payload.leverage > 25
             )) ||
             typeof payload.model_id !== 'string' ||
-            !/^(self|demo_[a-z_]{1,40})$/.test(payload.model_id)) {
+            !/^(self|demo_[a-z_]{1,40}|zip_[a-f0-9]{32})$/.test(payload.model_id)) {
           throw failure('AI、1〜10,000の整数コイン額、1〜25の整数倍率を指定してください',400);
         }
         const leverage = payload.leverage ?? 1;
         const snapshot = await loadSnapshot();
         const companion = await companionStore.read();
         const originals = modelPlanFromSnapshot(snapshot,null);
-        const mine = payload.model_id === 'self' ?
+        const imported = IMPORTED_CHARACTER_ID.test(payload.model_id) ?
+          await importedCharacterStore.model(payload.model_id) : null;
+        const mine = imported ? imported.model : payload.model_id === 'self' ?
           applyCompanion(originals,companion).models.mine :
           await modelShopStore.licensedModel(payload.model_id);
         const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
@@ -707,8 +744,11 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           scenario_token:scenarioToken});
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
+        const importedAfter = imported ? await importedCharacterStore.model(payload.model_id) : null;
         if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
-           companion.revision !== currentCompanion.revision) {
+           companion.revision !== currentCompanion.revision ||
+           (imported && (imported.model_version !== importedAfter.model_version ||
+             imported.model_revision !== importedAfter.model_revision))) {
           throw failure('練習中にモデルが変更されました。再度お試しください',409);
         }
         // Unallocated coins remain in cash; only the entered amount is simulated.
@@ -728,7 +768,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           scenario_notice:scenarioKind==='replay' ?
             '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
             '今回は新しい架空相場です',
-          companion_name:payload.model_id==='self' && companion.created ? companion.companion.name : null,
+          companion_name:imported?.name ?? (payload.model_id==='self' && companion.created ? companion.companion.name : null),
           companion_strategy:payload.model_id==='self' && companion.created ? {
             source:'saved_companion',approach:companion.companion.approach,
             risk_percent:companion.companion.risk_percent,

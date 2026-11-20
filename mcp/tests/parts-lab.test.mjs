@@ -65,7 +65,8 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.doesNotMatch(html,/<form\b/);
   assert.doesNotMatch(html,/<script(?![^>]*src)/);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
-  assert.doesNotMatch(script,/['"]\/api\//);
+  assert.match(script,/fetch\('\/api\/imported-characters\/register'/);
+  assert.match(html,/id="registerZip"[^>]*disabled/);
   assert.doesNotMatch(script,/\bXMLHttpRequest\b|sendBeacon\b/);
   assert.match(script,/createImageBitmap\(file\)/);
   assert.match(script,/bitmap\.close\(\)/);

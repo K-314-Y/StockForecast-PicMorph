@@ -362,7 +362,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <select id="quickModel" name="model" required aria-describedby="quickModelHelp"><option value="self">自分のAI（未作成なら標準AI）</option></select>
    </label>
    <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button></div>
-   <p id="quickModelHelp" class="simple-hint">自分のAIは無料です。デモAIはショップ専用のコインで解放できます。</p>
+   <p id="quickModelHelp" class="simple-hint">自分のAIとZIP登録した専用AIは無料です。デモAIはショップ専用のコインで解放できます。</p>
+   <div id="quickZipLinked" hidden style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid #557c8c;border-radius:12px">
+    <img id="quickZipPortrait" alt="選択したZIPキャラの合成画像" width="96" height="110" style="object-fit:contain">
+    <p id="quickZipDetails" class="simple-hint"></p>
+   </div>
    <label for="quickAmount">② 試算額を入力（練習用：1〜10,000 C）</label>
    <div class="amount-entry"><input id="quickAmount" name="amount" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000" required aria-describedby="quickHelp quickError quickRisk"></div>
    <div class="actions simple-model-actions" role="group" aria-label="試算額の入力補助"><button id="quickTen" type="button">10%</button><button id="quickHalf" type="button">50%</button><button id="quickAll" type="button">全額</button></div>

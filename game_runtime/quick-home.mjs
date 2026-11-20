@@ -133,6 +133,7 @@ let replay = null;
 let replayDay = 0;
 let replayHighlights = null;
 let replayIsSelf = false;
+let replayZipId = null;
 // Module-local ownership: advanced scenes must survive quick-practice cleanup.
 let sceneVoice = null;
 function clearSceneVoice() {
@@ -174,8 +175,10 @@ function validatedStrategy(value,modelId,responseModelId) {
   return Object.freeze({source:'saved_companion',approach:value.approach,risk_percent:value.risk_percent});
 }
 function syncReplayOwner() {
-  element('quickReplayOwner').textContent = !replay ? '' : !replayIsSelf ?
-    '別のAIの練習結果です。自作キャラの成績ではありません。' :
+  const imported=zipCharacters.find(item=>item.id===replayZipId);
+  element('quickReplayOwner').textContent = !replay ? '' : imported ?
+    '登録したZIPキャラ「'+imported.name+'」専用AIの架空練習結果です（実相場の成績ではありません）。' :
+    !replayIsSelf ? '別のAIの練習結果です。自作キャラの成績ではありません。' :
     element('quickMini').hidden ? '相棒の外見は上の画面で確認できます' :
     '自作キャラと振り返る';
 }
@@ -390,7 +393,9 @@ function renderReflection() {
     reflectionPrompts[saved.reason][signal];
   element('quickReflectionNext').textContent='次の行動（任意）：'+(replayIsSelf ?
     reflectionNextActions[saved.reason]+' 自分で保存した設定だけが次の練習に反映されます。今回の結果は変わりません。' :
-    'このデモAIの判断ルールはここでは編集できません。自分の判断基準を振り返りましょう。');
+    (replayZipId ? 'このZIP専用AIの判断ルールは現在の画面では編集できません。' :
+      'このデモAIの判断ルールはここでは編集できません。')+
+      '自分の判断基準を振り返りましょう。');
 }
 element('quickReflectionForm').addEventListener('submit',event=>{
   event.preventDefault();
@@ -438,6 +443,20 @@ const imageReady = image => image.getAttribute('src')?.trim() &&
 function syncMini() {
   // Hide before changing any copy; reveal only the complete current composite.
   element('quickMini').hidden=true;
+  // A ZIP character uses its own saved portrait, never the original self artwork.
+  const imported=zipCharacters.find(item=>item.id===replayZipId);
+  if(imported && element('quickModel').value===replayZipId && !element('quickReplay').hidden) {
+    for(const slot of miniLayers) {
+      const part=element('quickMini'+slot);
+      part.hidden=true;part.removeAttribute('src');
+    }
+    const target=element('quickMiniPortrait');
+    if(target.getAttribute('src')!==imported.image_url)target.src=imported.image_url;
+    target.hidden=false;
+    element('quickMini').hidden=!imageReady(target);
+    syncReplayOwner();
+    return;
+  }
   // Never borrow the player's artwork for another model's result voice.
   if(!replay || !replayIsSelf || element('quickModel').value!=='self' || element('quickReplay').hidden ||
      imageVisible(element('chibi'))) {clearMini();return;}
@@ -502,6 +521,7 @@ function clearReplay() {
   clearPreReveal();
   clearSceneVoice();
   replayIsSelf=false;
+  replayZipId=null;
   replay=null;
   element('quickCompanionStrategy').hidden=true;
   element('quickCompanionStrategy').textContent='';
@@ -580,6 +600,18 @@ let busy = false;
 let touched = false;
 const amountField = element('quickAmount');
 const modelField = element('quickModel');
+let zipCharacters = [];
+function showLinkedZip() {
+  const record=zipCharacters.find(item=>item.id===modelField.value);
+  const panel=element('quickZipLinked'),portrait=element('quickZipPortrait');
+  panel.hidden=!record;
+  panel.style.display=record?'flex':'none';
+  if(record)portrait.src=record.image_url;
+  else portrait.removeAttribute('src');
+  element('quickZipDetails').textContent=record?
+    record.name+' ／ 専用AI '+record.ai_id.slice(0,12)+'… ／ '+record.model_version+
+    '。ZIPの外見と同じIDで登録されています。新規設定・未学習・架空練習専用。':'';
+}
 const leverageField = element('quickLeverage');
 const errorField = element('quickError');
 // Native dropdown: all integer settings, without adding another slider.
@@ -690,7 +722,14 @@ async function request(url,body) {
 async function loadModels() {
   try {
     const data=await request('/api/model-shop');
+    const importedWarning=!!data.imported_characters_error;
+    const imported=Array.isArray(data.imported_characters)?data.imported_characters:[];
+    zipCharacters=imported.filter(item=>
+      /^zip_[a-f0-9]{32}$/.test(item?.id) && item.ai_id===item.id &&
+      typeof item.name==='string' && typeof item.model_version==='string');
     const next=[{id:'self',name:'自分のAI（未作成なら標準AI）'}];
+    for(const character of zipCharacters)
+      next.push({id:character.id,name:character.name+'（ZIP専用AI・未学習）'});
     for(const model of data.models || []) {
       if(model.owned && typeof model.id==='string' && typeof model.name==='string')
         next.push({id:model.id,name:model.name+'（解放済み）'});
@@ -704,10 +743,12 @@ async function loadModels() {
       modelField.append(option);
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
+    showLinkedZip();
     if(prior && prior!==modelField.value)clearReplay();
-    statusField.textContent=next.length>1 ?
-      '自作AIと、解放済みのAIから選べます。' :
-      '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。';
+    statusField.textContent=(next.length>1 ?
+      '自作AIと、登録済み・解放済みのAIから選べます。' :
+      '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。')+
+      (importedWarning ? ' ZIPキャラ一覧の読み込みには失敗しました。' : '');
   } catch {
     clearFreeChatGPT();
     statusField.textContent='モデル一覧を読み込めません。自分のAIで練習できます。';
@@ -755,7 +796,8 @@ element('quickEdit').addEventListener('click',()=>{
 });
 amountField.addEventListener('input',()=>{resetReview();});
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
-modelField.addEventListener('change',resetReview);
+modelField.addEventListener('change',()=>{resetReview();showLinkedZip();});
+window.addEventListener('focus',()=>{if(!busy)void loadModels();});
 leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();});
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
@@ -816,6 +858,9 @@ function revealResult(value,ordered) {
       (index===0?'増えた日なし':'減った日なし');
   }
   replayIsSelf=isSelf;
+  replayZipId = /^zip_[a-f0-9]{32}$/.test(ordered.model_id) &&
+    value.model_id===ordered.model_id && zipCharacters.some(item=>item.id===ordered.model_id) ?
+    ordered.model_id : null;
   replay={...value,companion_strategy:validatedStrategy(value.companion_strategy,ordered.model_id,value.model_id)};
   replayDay=0;
   renderReplay();
