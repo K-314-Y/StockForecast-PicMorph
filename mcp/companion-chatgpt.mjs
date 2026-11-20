@@ -8,6 +8,7 @@
  * NEVER expose this listener using a public forwarding URL without auth.
  */
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
@@ -44,6 +45,7 @@ const lookSchema=z.object({
 }).strict();
 
 const partsHelper = fileURLToPath(new URL('./character_parts.py', import.meta.url));
+const segmentationHelper = fileURLToPath(new URL('./artwork_segment.py', import.meta.url));
 const generatedIdSchema = z.object({
   generated_id:z.string().length(35).regex(/^cp_[0-9a-f]{32}$/),
 }).strict();
@@ -53,6 +55,23 @@ const appearanceSchema = z.object({
   clothing_color:z.string().length(7).regex(/^#[a-fA-F0-9]{6}$/),
   accessory:z.enum(['none','ribbon','glasses','star']).default('none'),
   seed:z.number().int().min(0).max(65535).default(0),
+}).strict();
+const segmentSourceSchema=z.object({
+  generated_id:z.string().regex(/^cp_[0-9a-f]{32}$/),
+  source_part:z.enum(['body','ready','happy','cautious']),
+}).strict();
+const segmentationSchema=segmentSourceSchema.extend({
+  part_type:z.enum(['eyes','mouth','eyebrows','cheeks','hair','outfit',
+    'ribbon','glasses','hat','earrings','accessory']),
+  frame:z.number().int().min(0).max(5).default(0),
+  seeds:z.array(z.object({
+    x:z.number().int().min(0).max(191),
+    y:z.number().int().min(0).max(207),
+  }).strict()).min(1).max(6),
+  tolerance:z.number().int().min(0).max(64).default(24),
+}).strict();
+const confirmSegmentationSchema=segmentationSchema.extend({
+  expected_sha256:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const localWrite = {readOnlyHint:false,destructiveHint:false,openWorldHint:false};
 let partsBusy = false;
@@ -94,6 +113,111 @@ async function characterParts(operation, input, signal, message) {
   } finally {
     partsBusy = false;
   }
+}
+
+const MAX_CATALOG_IMAGE=512*1024;
+const MAX_SEGMENT_RESPONSE=750000;
+let segmentationBusy=false;
+
+// The source path is entirely fixed except for strictly validated catalog ID
+// and part role. The game verifies ALL four original PNG files by SHA-256.
+async function localCharacterAtlas(apiBase,{generated_id,source_part}) {
+  const url=apiBase+'/api/character-demos/'+generated_id+'/'+source_part+'.png';
+  const response=await fetch(url,{
+    method:'GET',headers:{Accept:'image/png'},redirect:'error',
+    signal:AbortSignal.timeout(4500),
+  });
+  if(!response.ok)throw Error(response.status===404 ?
+    'この登録キャラはありません。Linuxの登録済みキャラを確認してください。' :
+    'PNG画像を取得できません: '+response.status);
+  if(response.headers.get('content-type')?.split(';')[0]?.trim()!=='image/png')
+    throw Error('PNG以外の画像を受信しました');
+  const length=response.headers.get('content-length');
+  if(length!==null && (!/^\d+$/.test(length) || Number(length)>MAX_CATALOG_IMAGE)) {
+    await response.body?.cancel();
+    throw Error('画像サイズが上限を超えました');
+  }
+  const reader=response.body?.getReader();
+  if(!reader)throw Error('画像データを読み込めません');
+  let size=0;
+  const parts=[];
+  try {
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      size+=value.byteLength;
+      if(size>MAX_CATALOG_IMAGE)throw Error('画像サイズが上限を超えました');
+      parts.push(Buffer.from(value));
+    }
+  }finally{await reader.cancel().catch(()=>{});}
+  const image=Buffer.concat(parts,size);
+  if(image.length<33 || image.readUInt32BE(16)!==1152 ||
+     image.readUInt32BE(20)!==208 || image[24]!==8 || image[25]!==6)throw Error('画像形式を確認できません');
+  if(!image.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))
+    throw Error('画像形式を確認できません');
+  return image;
+}
+
+function segmentPython(payload,signal) {
+  return new Promise((resolve,reject)=>{
+    let done;
+    const child=execFile('python3',['-B','-E',segmentationHelper],{
+      env:{PATH:process.env.PATH??'/usr/bin:/bin',LANG:'C.UTF-8',
+        PYTHONDONTWRITEBYTECODE:'1'},
+      signal,timeout:12000,maxBuffer:MAX_SEGMENT_RESPONSE,killSignal:'SIGKILL',
+    },(error,stdout)=>{done={error,stdout};});
+    child.once('close',()=>{
+      if(!done || done.error)return reject(done?.error??Error('Segment helper failed'));
+      try {
+        const data=JSON.parse(done.stdout);
+        if(typeof data.error==='string')throw Error(data.error);
+        if(!data.result || typeof data.result!=='object')
+          throw Error('Segment result missing');
+        resolve(data.result);
+      }catch(error){reject(error);}
+    });
+    child.stdin.on('error',()=>child.kill('SIGKILL'));
+    child.stdin.end(JSON.stringify(payload)+'\n','utf8');
+  });
+}
+
+async function segmentWithImage(apiBase,mode,args,signal) {
+  if(segmentationBusy)return partsError('別のPNG候補を処理中です');
+  segmentationBusy=true;
+  try {
+    const {expected_sha256:expected, ...params}=args;
+    const bytes=await localCharacterAtlas(apiBase,params);
+    const digest=createHash('sha256').update(bytes).digest('hex');
+    if(mode==='save' && digest!==expected)
+      return partsError('元画像が変更されました。切り出しプレビューからやり直してください');
+    const result=await segmentPython({
+      ...params,mode,source_png:bytes.toString('base64'),
+      ...(mode==='save'?{expected_sha256:expected}:{}),
+    },signal);
+    if(mode==='preview'){
+      const preview=result.preview_png_base64;
+      if(typeof preview!=='string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(preview) ||
+         preview.length>MAX_CATALOG_IMAGE*2 || result.source_sha256!==digest)
+        throw Error('PNG候補の検証に失敗しました');
+      const {preview_png_base64,...details}=result;
+      return {content:[
+        {type:'text',text:'候補PNGを表示します。AIが選んだ座標の周辺色から切り出したため、部位を正確に認識した保証はありません。元画像・保存データは変更していません。確認後にだけ保存してください。'},
+        {type:'image',mimeType:'image/png',data:preview},
+      ],structuredContent:{...details,seeds:params.seeds,tolerance:params.tolerance,
+        source_id:params.generated_id,saved:false,review_required:true,
+        semantic_model_used:false}};
+    }
+    if(!/^sg_[a-f0-9]{32}$/.test(result.candidate_id) ||
+       !result.local_directory?.endsWith(result.candidate_id) ||
+       result.registered_in_game!==false)
+      throw Error('保存結果を確認できません');
+    return {content:[{type:'text',text:'確認済みの候補PNGを '+result.local_directory+
+      '/part.png に保存しました。ゲームの外見や元画像は変更していません。'}],
+      structuredContent:{...result,saved:true,source_id:params.generated_id}};
+  }catch(error){
+    return partsError(signal?.aborted?'分割処理が中止されました':
+      'PNG候補を処理できませんでした: '+String(error.message??error).slice(0,180));
+  }finally{segmentationBusy=false;}
 }
 
 function partsError(text) {
@@ -163,11 +287,11 @@ function errorResult(error) {
 export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
   if(typeof readOnly!=='boolean') throw new TypeError('readOnly must be boolean');
   const server = new McpServer(
-    {name:'creature-lab-companion',version:'1.4.0'},
+    {name:'creature-lab-companion',version:'1.5.0'},
     {instructions:readOnly
       ? 'Creature Labの非公開・読み取り専用メタデータ接続。保存済みキャラ、外見、画像の登録状況、育成、学習済みキャラ一覧のみ確認できる。名前やXPも個人情報として扱う。保存・プレビュー・画像本体の転送はできない。'
       :
-      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はユーザーと相談する推測であり自動認識・自動分割ではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。オリジナルのキャラ画像は generate_character_parts でローカル作成し、package_character_parts でブラウザ用ZIPにまとめられる。実取引・V6変更・XP操作なし。'}
+      '自作キャラを会話で設計する。get_my_character_sheet で今の設定をまとめて確認し、保存済みイラストは view_my_artwork_image で画像として確認できる。画像の意味づけや切り抜き範囲はAIの推測。inspect_character_image_for_parts→preview_segment_candidateで部位候補を見せ、ユーザー確認後だけsave_segment_candidateを使う。学習済みの自動分割モデルではない。提案時は preview_my_companion で未保存の架空相場練習を行い、本人が保存を希望した設定だけ save_my_companion/save_my_look で確定。オリジナルのキャラ画像は generate_character_parts でローカル作成し、package_character_parts でブラウザ用ZIPにまとめられる。実取引・V6変更・XP操作なし。'}
   );
   // Explicit metadata allowlist: readOnlyHint alone also permits previews/images.
   const registerTool=(name,config,handler)=>{
@@ -359,6 +483,33 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false}={}) {
         structuredContent:state};
     }catch(e){return errorResult(e);}
   });
+  registerTool('inspect_character_image_for_parts',{
+    title:'Creature Lab: 登録PNGをAIで確認する',
+    description:'指定した登録済みキャラのbody/ready/happy/cautiousの6コマPNGを表示。画像を見てAIが切り出し候補の位置を判断するための明示的な閲覧。元画像は変更せず、読み取り専用MCPでは非公開。',
+    inputSchema:segmentSourceSchema,
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },async args=>{
+    try {
+      const image=await localCharacterAtlas(apiBase,args);
+      return {content:[
+        {type:'text',text:'指定した登録画像（1152×208、6コマ）を表示します。各コマ192×208で、候補の座標は1コマ内のx=0～191、y=0～207で指定してください。閲覧のみで自動分割・保存はしていません。'},
+        {type:'image',mimeType:'image/png',data:image.toString('base64')},
+      ],structuredContent:{...args,bytes:image.length,frames:6,
+        cell_width:192,cell_height:208,read_only:true,review_required:true}};
+    }catch(error){return errorResult(error);}
+  });
+  registerTool('preview_segment_candidate',{
+    title:'Creature Lab: 顔・髪・アクセサリーの切り出し候補を表示',
+    description:'AIが登録済み画像を見て指定した不透明部分の座標から、近い色の領域を取り出す候補をプレビュー。目・口・髪・リボン等を指定できる。これは学習済み分割モデルではなくAIが位置を判断する補助方式。ファイル保存はしない。',
+    inputSchema:segmentationSchema,
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },(args,extra)=>segmentWithImage(apiBase,'preview',args,extra?.signal));
+  registerTool('save_segment_candidate',{
+    title:'Creature Lab: 確認した切り出し候補を別PNGで保存',
+    description:'ユーザーが候補プレビューを確認して保存を依頼した場合のみ呼ぶ。座標・範囲とプレビュー時の元画像SHA-256が一致する場合、新規の独立したPNGとして保存する。元イラスト、既存パーツ、ゲーム表示、株価予測やXPは一切更新しない。',
+    inputSchema:confirmSegmentationSchema,
+    annotations:localWrite,
+  },(args,extra)=>segmentWithImage(apiBase,'save',args,extra?.signal));
   registerTool('generate_character_parts',{
     title:'Creature Lab: オリジナルのキャラパーツを生成',
     description:'名前・髪色・服色・飾り・シードから、体と3表情の透過6コマPNG、GIF、manifestをローカル作成する。色は #RRGGBB。engine=original-template の手続き描画。',
@@ -405,7 +556,7 @@ export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
         .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,
-          tools:readOnly ? READ_ONLY_TOOLS.size : 13}));
+          tools:readOnly ? READ_ONLY_TOOLS.size : 16}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {

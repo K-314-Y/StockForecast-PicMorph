@@ -105,7 +105,7 @@ test('MCP reads artwork presence but never returns image bytes',async t=>{
   await c.connect(new StreamableHTTPClientTransport(new URL(mcpUrl+'/mcp')));
   try {
     const tools=(await c.listTools()).tools.map(x=>x.name);
-    assert.equal(tools.length,13);
+    assert.equal(tools.length,16);
     assert.ok(tools.includes('get_my_artwork'));
     assert.equal(tools.some(x=>x.includes('upload')||x.includes('write_artwork')),false);
     const before=await c.callTool({name:'get_my_artwork',arguments:{}});

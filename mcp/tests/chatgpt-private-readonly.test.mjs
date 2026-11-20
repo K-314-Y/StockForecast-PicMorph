@@ -15,6 +15,7 @@ const allowed=[
 const forbidden=[
   'save_my_companion','save_my_look','view_my_artwork_image','preview_my_companion',
   'generate_character_parts','package_character_parts','register_demo_character',
+  'inspect_character_image_for_parts','preview_segment_candidate','save_segment_candidate',
 ];
 
 function listen(server){
@@ -96,12 +97,12 @@ test('read-only bridge exposes exactly six metadata tools, never images/writes/p
   });
 });
 
-test('full local MCP exposes all thirteen tools',async t=>{
+test('full local MCP exposes all sixteen tools',async t=>{
   await fixture(t,false,async({client,bridgeUrl,upstreamRequests})=>{
     const health=await fetch(bridgeUrl+'/health').then(res=>res.json());
-    assert.equal(health.tools,13);
+    assert.equal(health.tools,16);
     const names=(await client.listTools()).tools.map(x=>x.name);
-    assert.equal(names.length,13);
+    assert.equal(names.length,16);
     for(const name of [...allowed,...forbidden])assert.ok(names.includes(name),name);
     assert.deepEqual(upstreamRequests,[]);
   });

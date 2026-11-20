@@ -9,7 +9,7 @@ import {verifyPluginTools} from '../../scripts/plugin-tool-contract.mjs';
 
 const entry=fileURLToPath(new URL('../companion-stdio.mjs',import.meta.url));
 for(const readOnly of [false,true]) {
-  test(`companion stdio lists exactly ${readOnly ? 6 : 13} tools`,async()=>{
+  test(`companion stdio lists exactly ${readOnly ? 6 : 16} tools`,async()=>{
     const transport=new StdioClientTransport({
       command:process.execPath,args:readOnly ? [entry,'--read-only'] : [entry],stderr:'pipe',
     });

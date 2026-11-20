@@ -4,10 +4,14 @@ const metadataTools=[
   'get_my_companion','get_my_creature_growth','get_my_look','get_my_artwork',
   'get_my_character_sheet','list_my_trained_brains',
 ];
-const privateReaders=['view_my_artwork_image','preview_my_companion'];
+const privateReaders=[
+  'view_my_artwork_image','preview_my_companion',
+  'inspect_character_image_for_parts','preview_segment_candidate',
+];
 const privateWriters=[
   'save_my_companion','save_my_look','generate_character_parts',
   'package_character_parts','register_demo_character',
+  'save_segment_candidate',
 ];
 
 export function verifyPluginTools(tools,{readOnly=false}={}) {

@@ -420,3 +420,35 @@ per-layer file picker accepts an aligned static hair/outfit PNG or six-frame
 atlas. The preview is client-only until explicit registration; import writes
 only to the private local PNG catalog and never changes active visuals,
 models or XP. Windows shows the interface but cannot register PNG files.
+
+
+## AI-guided part cutout (Sprint 93, SAME private MCP)
+
+This adds three tools to the existing creature-lab-companion MCP; there is
+no new MCP server. The full authorized endpoint offers 16 tools and the
+separate read-only metadata endpoint continues to expose only 6.
+
+Workflow:
+1. inspect_character_image_for_parts: explicitly read a registered local
+   1152x208 PNG (body, ready, happy or cautious), view it in the AI model,
+   and identify likely component positions in one 192x208 frame.
+2. preview_segment_candidate: specify the target category (eyes, mouth,
+   eyebrows, cheeks, hair, outfit, ribbon, glasses, hat, earrings,
+   accessory), frame 0..5, 1..6 point coordinates, and color tolerance 0..64.
+   Returns a transparent PNG preview, bbox, coverage and SHA-256.
+   No local files are created by preview.
+3. save_segment_candidate: user approval required; repeat identical inputs
+   with the preview's expected_sha256. If the source is unchanged, save
+   a candidate PNG and manifest to a new, isolated
+   local_state/segment_candidates/sg_<id> directory. Never overwrite
+   original art, character records, XP, or market data. The candidate is
+   not yet registered in the game, and registered source PNG is unchanged.
+
+LIMIT: No installed semantic segmentation neural model is used here.
+The AI (ChatGPT / an authorized vision model) chooses the part and point
+from the PNG; a local Pillow flood-fill extracts similar-color, connected
+opaque pixels from ONE frame. This fails on complicated overlaps, outlines
+and multi-frame movement, so preview and user correction are mandatory.
+No GPU, remote API, credential, external upload, or model download is added.
+The full 8896 endpoint must remain private. The 8897 read-only endpoint
+must never expose these tools or image contents.

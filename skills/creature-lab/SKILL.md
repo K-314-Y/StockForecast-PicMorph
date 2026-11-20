@@ -47,7 +47,27 @@ private local Creature Lab Node game. It has no real-trading capability.
    generate_character_parts and then register_demo_character on the
    authorized MCP. These procedural templates are not AI-generated art.
 
-6. Never expose private images publicly, automate account approvals, modify
+6. Use the SAME private Creature Lab MCP (no separate MCP) for AI-guided
+   component cutouts from already registered PNGs:
+   a) On explicit request to view a registered character, call
+      inspect_character_image_for_parts with generated_id and source_part.
+      It returns the actual six-frame PNG (each frame 192x208), so visual AI
+      can identify approximate component positions.
+   b) Call preview_segment_candidate with part_type (eyes, mouth, eyebrows,
+      cheeks, hair, outfit, ribbon, glasses, hat, earrings, accessory),
+      frame=0..5, seeds=[{x,y}] (1..6), tolerance=0..64.
+      Inspect the transparent PNG preview before proceeding.
+   c) Only after approval, call save_segment_candidate with the SAME args
+      and the preview's expected_sha256. It writes to isolated
+      local_state/segment_candidates/sg_<id>/part.png. No automatic game
+      registration or original art / XP / prediction mutation occurs.
+      Source SHA mismatch fails closed.
+   IMPORTANT: this is AI-guided, seed-based COLOR segmentation, not a trained
+   semantic image-segmentation model. The model chooses the region/label, but
+   the local algorithm may mix overlapping shapes. Never call it fully
+   automatic AI separation. Do not view private saved artwork without an
+   explicit user request. The metadata-only MCP cannot access these tools.
+7. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 
 Useful requests: “今の私のキャラを確認”, “保存前に12日間の模擬相場で
