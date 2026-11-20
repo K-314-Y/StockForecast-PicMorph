@@ -8,6 +8,9 @@ test('Windows viewer serves the Linux-developed game on Windows loopback only',a
  const js=await source('scripts/windows-preview-server.mjs');
  assert.match(js,/import \{createGameServer\} from '\.\.\/game_runtime\/server\.mjs'/);
  assert.match(js,/server\.listen\(8891,'127\.0\.0\.1'/);
+ assert.match(js,/previewCharacterStore/);
+ assert.match(js,/activeCharacterStore:previewCharacterStore/);
+ assert.match(js,/Windows viewer does not save active avatars/);
  assert.doesNotMatch(js,/0\.0\.0\.0|public_preview|localhost\.run|trycloudflare|:8890/);
 });
 

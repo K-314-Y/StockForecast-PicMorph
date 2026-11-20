@@ -17,7 +17,9 @@ const MAX_ENTRIES=32;
 const MAX_SCANNED=MAX_ENTRIES*5;
 const MAX_JSON=4096;
 const MAX_PNG=512*1024;
-const OWNER=process.geteuid();
+// POSIX ownership checks remain mandatory on Linux. Windows has no geteuid;
+// its independent viewer cannot open the Linux-only protected catalog/store.
+const OWNER=typeof process.geteuid==='function' ? process.geteuid() : null;
 const READ=constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK;
 const LAYOUT={frames:6,columns:6,rows:1,cell_width:192,cell_height:208};
 

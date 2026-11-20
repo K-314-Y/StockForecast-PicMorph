@@ -6,7 +6,9 @@ import {basename,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const DEFAULT_FILE=fileURLToPath(new URL('../local_state/node_game/active-character.json',import.meta.url));
-const OWNER=process.geteuid();
+// POSIX ownership checks remain mandatory on Linux. Windows has no geteuid;
+// its independent viewer cannot open the Linux-only protected catalog/store.
+const OWNER=typeof process.geteuid==='function' ? process.geteuid() : null;
 const READ=constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK;
 const MAX_BYTES=1024;
 const queues=new Map();
