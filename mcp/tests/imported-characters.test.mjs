@@ -49,6 +49,9 @@ test('appearance attributes create different actual forecast model weights and r
     const glasses=await register('眼鏡',{...look,accessory:'glasses'},colors);
     const ribbon=await register('リボン',{...look,accessory:'ribbon'},colors);
     assert.equal(star.model_origin,'appearance_features');
+    assert.deepEqual(star.accessory_analysis,{
+      accessory:'star',method:'bollinger_breakout',version:'accessory-analysis-v1',
+    });
     assert.equal(star.appearance.look.accessory,'star');
     assert.deepEqual(star.appearance.colors,colors);
     assert.ok(star.model.plugin_weights.volatility>glasses.model.plugin_weights.volatility);
@@ -107,7 +110,7 @@ test('two visual-trait models enter the actual predictor independently on the sa
     const inputs=[];
     const server=createGameServer({importedCharacterStore:store,
       loadSnapshot:async()=>snapshot(),
-      predict:async plan=>{inputs.push(plan.models.mine);return pythonPredict(plan);},
+      predict:async plan=>{inputs.push(plan);return pythonPredict(plan);},
     });
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     const base='http://127.0.0.1:'+server.address().port;
@@ -125,9 +128,13 @@ test('two visual-trait models enter the actual predictor independently on the sa
       assert.equal(right.status,200,JSON.stringify(right.body));
       assert.deepEqual(left.body.daily_synthetic_prices,right.body.daily_synthetic_prices);
       assert.equal(inputs.length,2);
-      assert.deepEqual(inputs[0],star.model);
-      assert.deepEqual(inputs[1],glasses.model);
-      assert.notDeepEqual(inputs[0].plugin_weights,inputs[1].plugin_weights);
+      assert.deepEqual(inputs[0].models.mine,star.model);
+      assert.deepEqual(inputs[1].models.mine,glasses.model);
+      assert.equal(inputs[0].accessory_strategy,'star');
+      assert.equal(inputs[1].accessory_strategy,'glasses');
+      assert.notDeepEqual(inputs[0].models.mine.plugin_weights,inputs[1].models.mine.plugin_weights);
+      assert.notDeepEqual(left.body.daily_ai_signals,right.body.daily_ai_signals,
+        'different accessory methods must actually change future-safe practice decisions');
       assert.equal(left.body.real_market,false);
       assert.equal(right.body.order_placed,false);
     }finally{await new Promise(resolve=>server.close(resolve));}

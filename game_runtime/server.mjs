@@ -741,14 +741,18 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
         const scenarioToken = payload.scenario_token ?? 'v1_'+randomBytes(8).toString('hex');
         const plan = await predict({...originals,models:{...originals.models,mine},
-          scenario_token:scenarioToken});
+          scenario_token:scenarioToken,
+          ...(imported?.accessory_strategy ?
+            {accessory_strategy:imported.accessory_strategy}:{}),
+        });
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
         const importedAfter = imported ? await importedCharacterStore.model(payload.model_id) : null;
         if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
            companion.revision !== currentCompanion.revision ||
            (imported && (imported.model_version !== importedAfter.model_version ||
-             imported.model_revision !== importedAfter.model_revision))) {
+             imported.model_revision !== importedAfter.model_revision ||
+             imported.accessory_strategy !== importedAfter.accessory_strategy))) {
           throw failure('練習中にモデルが変更されました。再度お試しください',409);
         }
         // Unallocated coins remain in cash; only the entered amount is simulated.

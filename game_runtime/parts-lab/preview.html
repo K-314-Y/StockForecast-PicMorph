@@ -71,8 +71,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <input id="zipName" type="text" maxlength="16" value="新しい相棒" autocomplete="off"></label>
 <p class="hint"><strong>外見の特徴からAIを作成</strong>：ZIPのmanifest.jsonに登録されたアクセサリー・髪色・服色を自動取得します。記録のない特徴は下の項目で指定してください。画像そのものをAI認識した結果ではありません。</p>
 <div class="controls">
-<label for="zipAccessory">アクセサリー（予測の特徴が変わります）
-<select id="zipAccessory"><option value="">選択してください</option><option value="star">⭐ 星：値動きの大きさ</option><option value="glasses">👓 眼鏡：反転</option><option value="ribbon">🎀 リボン：勢い</option><option value="none">なし：基本の特徴</option></select></label>
+<label for="zipAccessory">アクセサリー（予測の分析方法が変わります）
+<select id="zipAccessory"><option value="">選択してください</option><option value="star">⭐ 星：急な上昇を見つける（ボリンジャーバンド）</option><option value="glasses">👓 眼鏡：売られすぎを探す（RSI）</option><option value="ribbon">🎀 リボン：勢いの変化を見る（MACD）</option><option value="none">なし：短期と長期の流れを比較（移動平均）</option></select></label>
 <label for="zipHairStyle">髪型（分析の比率が変わります）
 <select id="zipHairStyle"><option value="">選択してください</option><option value="bob">ボブ：流れ</option><option value="long">ロング：反転</option><option value="twintails">ツインテール：勢い</option></select></label>
 <label for="zipExpression">性格・基本表情（資金の使用率に反映）

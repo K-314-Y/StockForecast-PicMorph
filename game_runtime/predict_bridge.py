@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine import Model, PLUGIN_IDS, SYNTHETIC_PRICES, prediction, python_source
+from game_runtime.accessory_analysis import METHODS, RULE_VERSION, accessory_signal
 
 SLOTS = ("mine", "owl", "turtle")
 FUTURE = (107, 106, 104, 101, 100, 104, 108, 112, 110, 114, 113, 117)
@@ -55,9 +56,14 @@ def scenario_prices(token: str) -> tuple:
 
 
 def create_prediction_plan(data: dict) -> dict:
-    if (type(data) is not dict or set(data) not in ({"base_model", "models"}, {"base_model", "models", "scenario_token"})
+    optional = {"scenario_token", "accessory_strategy"}
+    if (type(data) is not dict or not {"base_model", "models"}.issubset(data)
+            or not (set(data) - {"base_model", "models"}).issubset(optional)
             or type(data["models"]) is not dict or set(data["models"]) != set(SLOTS)):
         raise ValueError("invalid_prediction_request")
+    accessory = data.get("accessory_strategy")
+    if "accessory_strategy" in data and (type(accessory) is not str or accessory not in METHODS):
+        raise ValueError("invalid_accessory_strategy")
     base = model_from_record(data["base_model"])
     models = {key: model_from_record(data["models"][key]) for key in SLOTS}
     future = scenario_prices(data["scenario_token"]) if "scenario_token" in data else FUTURE
@@ -67,7 +73,10 @@ def create_prediction_plan(data: dict) -> dict:
         step = {}
         for key in SLOTS:
             p = prediction(models[key], tuple(history))
-            step[key] = "LONG" if p["UP"] > .52 and p["UP"] > p["DOWN"] + .05 else "CASH"
+            if key == "mine" and accessory is not None:
+                step[key] = accessory_signal(accessory, tuple(history), p["UP"])
+            else:
+                step[key] = "LONG" if p["UP"] > .52 and p["UP"] > p["DOWN"] + .05 else "CASH"
         signals.append(step)
         history.append(next_price)
     return {
@@ -81,7 +90,10 @@ def create_prediction_plan(data: dict) -> dict:
             "risk_fraction": m.risk_fraction,
             "plugin_weights": dict(zip(PLUGIN_IDS, m.plugin_weights)),
             "plugin_strengths": dict(zip(PLUGIN_IDS, m.plugin_strengths)),
-            "effective_sha256": hashlib.sha256(python_source(m).encode()).hexdigest(),
+            "effective_sha256": hashlib.sha256((
+                python_source(m) + (
+                    "\n" + RULE_VERSION + ":" + accessory if k == "mine" and accessory else ""
+                )).encode()).hexdigest(),
         } for k, m in models.items()},
         "model_sha256": hashlib.sha256(python_source(base).encode()).hexdigest(),
     }

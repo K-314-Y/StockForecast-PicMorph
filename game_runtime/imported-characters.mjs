@@ -16,6 +16,8 @@ export const IMPORTED_CHARACTER_ID=/^zip_[a-f0-9]{32}$/;
 export const MAX_IMPORTED_REQUEST=30*1024*1024;
 const MAX_IMAGE=5*1024*1024,MAX_PORTRAIT=1024*1024,MAX_TOTAL=21*1024*1024;
 const IMAGE_KEYS=['body','ready','happy','cautious','portrait'];
+const ACCESSORY_METHODS=Object.freeze({star:'bollinger_breakout',glasses:'rsi_oversold',
+  ribbon:'macd_momentum',none:'moving_average_trend'});
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,keys)=>object(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
@@ -75,6 +77,11 @@ function summary(record) {
     image_url:'/api/imported-characters/image/'+record.id,
     appearance:record.appearance??null,
     model_origin:record.appearance?'appearance_features':'legacy_manual',
+    accessory_analysis:record.appearance?{
+      accessory:record.appearance.look.accessory,
+      method:ACCESSORY_METHODS[record.appearance.look.accessory],
+      version:'accessory-analysis-v1',
+    }:null,
     frames:6,source:'ZIP_LOCAL',trained:false,live_market:false};
 }
 export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) {
@@ -145,7 +152,8 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
     },
     async model(id) {const record=await load(id);return {
       model:record.generation.model,model_version:record.generation.model_version,
-      model_revision:record.model_revision,name:record.name,ai_id:record.ai_id};},
+      model_revision:record.model_revision,name:record.name,ai_id:record.ai_id,
+      accessory_strategy:record.appearance?.look.accessory??null};},
     async image(id) {
       const item=(await load(id)).images.portrait;
       const validated=decodeImage({mime:item.mime,base64:item.base64},'portrait');

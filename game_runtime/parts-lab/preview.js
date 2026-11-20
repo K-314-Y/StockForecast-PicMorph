@@ -321,7 +321,7 @@ function refreshZipTraitStatus() {
   if(!currentZipFiles)return;
   $('zipTraitsStatus').textContent=missing.length ?
     '未指定：'+missing.join('・')+'。ZIPの情報にない特徴は選択してください。' :
-    '外見の特徴が揃いました。アクセサリー・髪型・色は予測の分析比率、表情は資金使用率に反映します。';
+    '特徴が揃いました。アクセサリーは分析方法そのものを切り替え、髪型・色は補助分析、表情は資金使用率に反映します。';
 }
 function applyZipAppearance(files) {
   const traits=files.appearance ?? {};
@@ -443,7 +443,13 @@ $('registerZip').addEventListener('click',async()=>{
     $('zipGameLink').hidden=false;
     const w=record.model.plugin_weights;
     $('zipRegisterStatus').textContent=name+'を登録しました。キャラID＝AI ID：'+
-      record.id+' ／ 流れ'+w.trend+'%・勢い'+w.momentum+
+      record.id+' ／ 主な分析：'+({
+        star:'ボリンジャーバンド（急な上抜け）',
+        glasses:'RSI（売られすぎ）',
+        ribbon:'MACD（勢いの変化）',
+        none:'移動平均（価格の流れ）',
+      }[record.accessory_analysis?.accessory]??'未設定')+
+      ' ／ 補助分析：流れ'+w.trend+'%・勢い'+w.momentum+
       '%・反転'+w.reversion+'%・変動'+w.volatility+
       '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+
       '%。外見の特徴で決まる新規モデルです（未学習・実株価未対応）。';

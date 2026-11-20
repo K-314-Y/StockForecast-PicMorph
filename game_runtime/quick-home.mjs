@@ -609,17 +609,24 @@ function showLinkedZip() {
   if(record)portrait.src=record.image_url;
   else portrait.removeAttribute('src');
   const accessoryLabel={star:'星',glasses:'眼鏡',ribbon:'リボン',none:'なし'};
+  const analysisLabel={
+    bollinger_breakout:'ボリンジャーバンドで急な上昇を検出',
+    rsi_oversold:'RSIで売られすぎを検出',
+    macd_momentum:'MACDで上昇の勢いを検出',
+    moving_average_trend:'移動平均で価格の流れを確認',
+  };
+  const primary=analysisLabel[record?.accessory_analysis?.method];
   const weights=record?.model?.plugin_weights;
   const appearance=record?.appearance;
   const traits=appearance && record.model_origin==='appearance_features' ?
     'アクセサリー：'+(accessoryLabel[appearance.look?.accessory]??'未設定')+' ／ ' :
     '';
   const strategy=weights&&Number.isFinite(record.model.risk_fraction) ?
-    '流れ'+weights.trend+'%・勢い'+weights.momentum+
+    (primary?'補助分析：':'分析比率：')+'流れ'+weights.trend+'%・勢い'+weights.momentum+
     '%・反転'+weights.reversion+'%・変動'+weights.volatility+
     '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+'%。' : '';
   element('quickZipDetails').textContent=record ?
-    record.name+' ／ '+traits+strategy+
+    record.name+' ／ '+traits+(primary?'主な分析：'+primary+' ／ ':'')+strategy+
     '専用AI '+record.ai_id.slice(0,12)+'…。'+
     (appearance ? '外見の特徴から予測設定を作成。' : '以前の手動設定。')+
     '未学習・架空練習専用。':'';
