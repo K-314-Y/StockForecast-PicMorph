@@ -8,7 +8,7 @@ import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adap
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardStore} from '../../game_runtime/forward-store.mjs';
 import {startFriendMockServer} from '../../game_runtime/friend-mock-server.mjs';
-import {friendPracticeScenario, provisionFriendMockRound} from './friend-mock-record-fixture.mjs';
+import {friendPracticeCampaign, friendPracticeScenario, provisionFriendMockRound} from './friend-mock-record-fixture.mjs';
 
 const character = '/friend/character';
 const summary = '/friend/forward/summary';
@@ -680,5 +680,134 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
     assert.equal(await node(id).textContent(), '', id);
   }
   assert.equal(await node('workspace').isHidden(), true);
+  assert.deepEqual(errors, []);
+});
+
+test('P9l Chromium completes three explicit rounds and clears campaign details on account changes', {timeout:35_000}, async t => {
+  const browser = await openChromium(t);
+  if (!browser) return;
+  const {server, ids} = await setup(t, undefined, ([id]) => [friendPracticeCampaign(id, [129, 112, 120])]);
+  const page = await browser.newPage({viewport:{width:380, height:844}});
+  page.setDefaultTimeout(5000);
+  const node = id => page.locator('#' + id);
+  const at = path => server.origin + path;
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  async function text(id, expected) {
+    await page.waitForFunction(([id, expected]) =>
+      document.getElementById(id).textContent.includes(expected), [id, expected]);
+  }
+  async function submit(id, path, expected = 200) {
+    const pending = page.waitForResponse(res => res.request().method() === 'POST' && res.url() === at(path));
+    await node(id).click();
+    const response = await pending;
+    assert.equal(response.status(), expected);
+    return response;
+  }
+  async function openAccount(id) {
+    await node('invite').fill(server.issueInvite(id).token);
+    const response = await submit('login-button', redeem);
+    await text('account-id', id);
+    return {Authorization:'Bearer ' + (await response.json()).sessionToken};
+  }
+  async function freezeRound(index) {
+    await submit('practice-start', '/friend/practice/start');
+    await text('practice-status', '予測を確定しました');
+    await text('practice-round-number', '第' + index + '/3ラウンド');
+    assert.equal(await node('practice-start').isHidden(), true);
+    assert.equal(await node('practice-target-price').textContent(), '');
+    assert.equal(await node('practice-result').isHidden(), true);
+    assert.equal(await node('practice-history').locator('li').count(), index - 1);
+  }
+  async function revealRound(index, price) {
+    await submit('practice-reveal', '/friend/practice/reveal');
+    await text('practice-target-price', String(price));
+    await text('practice-stats', '採点済み ' + index + '/3');
+    assert.equal(await node('practice-history').locator('li').count(), index);
+    assert.equal(await node('practice-reveal').isHidden(), true);
+  }
+  async function cleared() {
+    for (const id of ['practice-round-number', 'practice-stats', 'practice-model', 'practice-target-price', 'practice-history']) {
+      assert.equal(await node(id).textContent(), '', id);
+    }
+    assert.equal(await node('practice-history').locator('li').count(), 0);
+    assert.equal(await node('practice-history-panel').isHidden(), true);
+  }
+
+  await page.goto(at('/friend/'));
+  const bearer = await openAccount(ids[0]);
+  await text('practice-round-number', '第1/3ラウンド');
+  await text('practice-stats', '平均 Brier —');
+  await text('practice-stats', '判定なし');
+  assert.equal(await node('practice-start').isDisabled(), true);
+  await node('companion-name').fill(companion.name);
+  await node('approach').selectOption('momentum');
+  await submit('save-companion', character + '/companion');
+  await freezeRound(1);
+  await text('practice-model', 'companion-v1_0_100_0_0_35');
+  await revealRound(1, 129);
+  await text('practice-start', '次の練習へ');
+  assert.equal(await node('practice-start').evaluate(button => document.activeElement === button), true);
+  await node('accessory').selectOption('glasses');
+  assert.equal(await node('practice-start').isDisabled(), true);
+  await text('practice-requirement', '未保存の変更を解消');
+  await node('restore-look').click();
+  assert.equal(await node('practice-start').isEnabled(), true);
+
+  const {csrfToken} = (await call(server, session, {headers:bearer})).json();
+  const changed = await call(server, character + '/companion', {
+    method:'POST', headers:{...bearer, 'X-CSRF-Token':csrfToken},
+    body:{expected_revision:1, companion:{...companion, approach:'trend', risk_percent:60}},
+  });
+  assert.equal(changed.status, 200);
+  await page.route(at(character), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
+  await submit('practice-start', '/friend/practice/start', 409);
+  await text('message', '保存版を読み込めませんでした。入力は保持しています。');
+  assert.equal(await node('risk').inputValue(), '35');
+  assert.equal(await node('practice-start').isDisabled(), true);
+  await text('practice-target-price', '129');
+  await node('retry-reads').click();
+  await text('message', '再読み込みしました。');
+  assert.equal(await node('risk').inputValue(), '60');
+  await freezeRound(2);
+  await text('practice-model', 'companion-v1_100_0_0_0_60');
+  await text('practice-history', 'companion-v1_0_100_0_0_35');
+
+  await page.reload();
+  await cleared();
+  await openAccount(ids[0]);
+  await text('practice-round-number', '第2/3ラウンド');
+  assert.equal(await node('practice-reveal').isVisible(), true);
+  assert.equal(await node('practice-target-price').textContent(), '');
+  await node('accessory').selectOption('star');
+  await revealRound(2, 112);
+  assert.equal(await node('practice-start').isDisabled(), true);
+  assert.equal(await node('practice-refresh').evaluate(button => document.activeElement === button), true);
+  await node('restore-look').click();
+  await freezeRound(3);
+  await revealRound(3, 120);
+  await text('practice-status', '完走しました');
+  assert.equal(await node('practice-start').isHidden(), true);
+  for (const width of [380,390,1280]) {
+    await page.setViewportSize({width,height:900});
+    assert.equal(await page.evaluate(() => {
+      const history = document.getElementById('practice-history');
+      return document.documentElement.scrollWidth <= innerWidth && history.scrollWidth <= history.clientWidth;
+    }), true, String(width));
+  }
+
+  await submit('logout', logout);
+  await cleared();
+  await openAccount(ids[1]);
+  await text('practice-status', '架空練習は未接続');
+  await cleared();
+  await submit('logout', logout);
+  await openAccount(ids[0]);
+  await text('practice-status', '完走しました');
+  assert.equal(await node('practice-history').locator('li').count(), 3);
+  server.revokeAccount(ids[0]);
+  await node('practice-refresh').click();
+  await text('message', 'セッションが終了しました');
+  await cleared();
   assert.deepEqual(errors, []);
 });

@@ -171,7 +171,7 @@ function syncControls() {
   const practiceBlocked = unsaved || !groups.companion.saved?.created || failedReads.includes(profileRead);
   practiceStart.disabled = busy || practiceBlocked;
   practiceReveal.disabled = busy;
-  practiceRequirement.hidden = practiceState?.status !== 'ready' || !practiceBlocked;
+  practiceRequirement.hidden = !practiceCanStart(practiceState) || !practiceBlocked;
   practiceRequirement.textContent = practiceRequirement.hidden ? '' :
     '相棒と戦略を保存し、両方のフォームの未保存の変更を解消すると開始できます。';
   if (unsaved) window.addEventListener('beforeunload', warnBeforeLeaving);
@@ -254,6 +254,7 @@ async function run(pending, fallback, action) {
     if (operation === controller) {
       operation = undefined;
       syncControls();
+      if (typeof focus === 'function') focus = focus();
       focus?.focus();
     }
   }
@@ -424,18 +425,53 @@ const practiceLabels = {
   ready:'この口座で1ラウンド練習できます。',
   starting:'予測を確定しています。練習状態を再取得できます。',
   frozen:'予測を確定しました。結果を公開すると採点します。',
+  scored:'結果を公開しました。次の練習へ進めます。',
   exhausted:'結果を公開しました。このサーバーでの1ラウンドは終了です。',
 };
 
+const practiceCanStart = state => state?.status === 'ready' || state?.status === 'scored';
+const practiceRevealed = state => state?.status === 'scored' || state?.status === 'exhausted';
+const directionResult = value => value === null ? '判定なし' : value ? '的中' : '不的中';
+const validBrier = value => Number.isFinite(value) && value >= 0 && value <= 2;
+
+function validatePracticeProgress(data) {
+  const {progress, history, status} = data;
+  checked(status !== 'unconfigured' &&
+    exact(progress, ['current', 'total', 'completed', 'judged', 'correct', 'average_brier', 'hasNext']) &&
+    Array.isArray(history));
+  const {current, total, completed, judged, correct, average_brier, hasNext} = progress;
+  checked(Number.isSafeInteger(total) && total >= 2 && total <= 12 && history.length <= total &&
+    completed === history.length && current === (practiceRevealed(data) ? completed : completed + 1) &&
+    current >= 1 && current <= total && hasNext === (current < total) &&
+    (status !== 'ready' || completed === 0) &&
+    (status === 'exhausted') === (completed === total));
+  checked(history.every((item, index) =>
+    exact(item, ['round', 'model_version', 'companion_revision', 'direction',
+      'actualDirection', 'directionCorrect', 'brier']) && item.round === index + 1 &&
+    matches(modelPattern, item.model_version) &&
+    Number.isSafeInteger(item.companion_revision) && item.companion_revision > 0 &&
+    (item.direction === null || directions.includes(item.direction)) && directions.includes(item.actualDirection) &&
+    item.directionCorrect === (item.direction === null ? null : item.direction === item.actualDirection) &&
+    validBrier(item.brier)));
+  checked(judged === history.filter(round => round.directionCorrect !== null).length &&
+    correct === history.filter(round => round.directionCorrect === true).length &&
+    average_brier === (completed ? history.reduce((sum, round) => sum + round.brier, 0) / completed : null));
+}
+
 function validatePractice(data) {
   checked(isObject(data) && Object.hasOwn(practiceLabels, data.status));
+  const fields = ['status'];
+  const campaign = Object.hasOwn(data, 'progress') || Object.hasOwn(data, 'history');
+  if (campaign) fields.push('progress', 'history');
+  if (campaign) validatePracticeProgress(data);
+  else checked(data.status !== 'scored');
   if (['unconfigured', 'ready', 'starting'].includes(data.status)) {
-    checked(exact(data, ['status']));
+    checked(exact(data, fields));
     return data;
   }
-  const fields = ['status', 'round_id', 'companion_revision', 'model_version', 'risk_percent',
-    'issuedAt', 'targetAt', 'probabilities', 'direction'];
-  const revealed = data.status === 'exhausted';
+  fields.push('round_id', 'companion_revision', 'model_version', 'risk_percent',
+    'issuedAt', 'targetAt', 'probabilities', 'direction');
+  const revealed = practiceRevealed(data);
   if (revealed) fields.push('result');
   const {probabilities, direction, result} = data;
   checked(exact(data, fields) && matches(practiceIdPattern, data.round_id) &&
@@ -457,7 +493,13 @@ function validatePractice(data) {
       result.scoredAt === data.targetAt && Number.isFinite(result.actualChangePct) &&
       directions.includes(result.actualDirection) &&
       result.directionCorrect === (direction === null ? null : direction === result.actualDirection) &&
-      Number.isFinite(result.brier) && result.brier >= 0 && result.brier <= 2);
+      validBrier(result.brier));
+    if (campaign) {
+      const last = data.history.at(-1);
+      checked(last.model_version === data.model_version && last.companion_revision === data.companion_revision &&
+        last.direction === direction && last.actualDirection === result.actualDirection &&
+        last.directionCorrect === result.directionCorrect && last.brier === result.brier);
+    }
   }
   return data;
 }
@@ -465,16 +507,47 @@ function validatePractice(data) {
 const practicePrediction = byId('practice-prediction');
 const practiceResult = byId('practice-result');
 const practiceValues = document.querySelectorAll('.practice dd');
+const practiceHistory = byId('practice-history');
+
+function renderPracticeProgress(state) {
+  const progress = state?.progress;
+  const history = state?.history ?? [];
+  byId('practice-progress').hidden = !progress;
+  byId('practice-round-number').textContent = progress ? '第' + progress.current + '/' + progress.total + 'ラウンド' : '';
+  let stats = '';
+  if (progress) {
+    const {completed, total, correct, judged, average_brier} = progress;
+    const average = average_brier === null ? '—' : number.format(average_brier);
+    const hits = judged ? '的中 ' + correct + '/' + judged + '（判定あり）' : '判定なし';
+    stats = '採点済み ' + completed + '/' + total + ' · ' + hits + ' · 平均 Brier ' + average;
+  }
+  byId('practice-stats').textContent = stats;
+  byId('practice-history-panel').hidden = history.length === 0;
+  practiceHistory.replaceChildren(...history.map(round => {
+    const item = document.createElement('li');
+    item.textContent = '予測 ' + (round.direction ?? '未判定') + ' / 結果 ' + round.actualDirection +
+      ' · ' + directionResult(round.directionCorrect) + ' · Brier ' + number.format(round.brier);
+    const model = document.createElement('small');
+    model.textContent = round.model_version + ' · 保存版 ' + round.companion_revision;
+    item.append(model);
+    return item;
+  }));
+}
 
 function renderPractice(state, failed = false) {
   practiceState = state;
   const status = state?.status;
-  byId('practice-status').textContent = failed ? '練習状態を取得できませんでした。' : practiceLabels[status] ?? '';
+  let caption = practiceLabels[status] ?? '';
+  if (state?.progress && status === 'ready') caption = 'この口座で全' + state.progress.total + 'ラウンド練習できます。';
+  if (state?.progress && status === 'exhausted') caption = '完走しました。全ラウンドの採点結果を公開しました。';
+  byId('practice-status').textContent = failed ? '練習状態を取得できませんでした。' : caption;
   practiceRefresh.hidden = !status || status === 'unconfigured';
-  practiceStart.hidden = status !== 'ready';
+  practiceStart.hidden = !practiceCanStart(state);
+  practiceStart.textContent = status === 'scored' ? '次の練習へ' : '架空練習を開始';
   practiceReveal.hidden = status !== 'frozen';
-  practicePrediction.hidden = status !== 'frozen' && status !== 'exhausted';
-  practiceResult.hidden = status !== 'exhausted';
+  practicePrediction.hidden = status !== 'frozen' && !practiceRevealed(state);
+  practiceResult.hidden = !practiceRevealed(state);
+  renderPracticeProgress(state);
   for (const value of practiceValues) value.textContent = '';
   if (!practicePrediction.hidden) fillRecord({
     'practice-model':state.model_version,
@@ -492,7 +565,7 @@ function renderPractice(state, failed = false) {
       'practice-target-price':number.format(targetPrice),
       'practice-actual':actualDirection,
       'practice-change':signedNumber.format(actualChangePct) + '%',
-      'practice-correct':directionCorrect === null ? '判定なし' : directionCorrect ? '的中' : '不的中',
+      'practice-correct':directionResult(directionCorrect),
       'practice-brier':number.format(brier),
     });
   }
@@ -574,7 +647,7 @@ practiceRefresh.addEventListener('click', () => {
 });
 
 practiceStart.addEventListener('click', () => {
-  if (!session || operation || practiceStart.disabled || practiceState?.status !== 'ready' || hasUnsaved()) return;
+  if (!session || operation || practiceStart.disabled || !practiceCanStart(practiceState) || hasUnsaved()) return;
   const expected = groups.companion.saved.revision;
   void run('架空の予測を計算中…', '練習を開始できませんでした。練習状態を再取得してください。', async controller => {
     let data;
@@ -586,10 +659,11 @@ practiceStart.addEventListener('click', () => {
       if (error.status !== 409) throw error;
       await readPanels(controller, [practiceRead]);
       controller.signal.throwIfAborted();
-      if (practiceState?.status === 'ready') {
-        await readPanels(controller, [profileRead]);
+      if (practiceCanStart(practiceState)) {
+        const ok = await readPanels(controller, [profileRead]);
         controller.signal.throwIfAborted();
-        feedback('保存版を確認し直しました。相棒の設定を確認して開始してください。', true);
+        feedback(ok ? '保存版を確認し直しました。相棒の設定を確認して開始してください。' :
+          '保存版を読み込めませんでした。入力は保持しています。取得できなかった項目を再読み込みしてください。', true);
       } else {
         feedback('練習の進行状態を確認してください。', true);
       }
@@ -609,10 +683,10 @@ practiceReveal.addEventListener('click', () => {
     const data = validatePractice(await request('/friend/practice/reveal', controller, {
       method:'POST', auth:session, body:{round_id},
     }));
-    checked(data.status === 'exhausted' && data.round_id === round_id);
+    checked(practiceRevealed(data) && data.round_id === round_id);
     renderPractice(data);
     feedback('架空の結果を公開しました。');
-    return practiceRefresh;
+    return () => !practiceStart.hidden && !practiceStart.disabled ? practiceStart : practiceRefresh;
   });
 });
 

@@ -161,11 +161,15 @@
 
       <section class="card mock practice" aria-labelledby="practice-title">
         <div class="mock-heading">
-          <h2 id="practice-title">架空練習 · 1ラウンド</h2>
+          <h2 id="practice-title">架空練習</h2>
           <button id="practice-refresh" type="button" class="secondary" hidden>練習状態を再取得</button>
         </div>
         <p class="hint">保存済みの戦略で予測を先に確定し、別の操作で結果を公開します。架空の成績で、財布への反映はありません。サーバーを再起動すると練習結果は消えます。</p>
         <p id="practice-status" class="practice-status" role="status"></p>
+        <div id="practice-progress" class="practice-progress" hidden>
+          <b id="practice-round-number"></b>
+          <span id="practice-stats"></span>
+        </div>
         <p id="practice-requirement" class="hint" hidden></p>
         <div class="record-grid">
           <section id="practice-prediction" class="record-panel" aria-labelledby="practice-prediction-title" hidden>
@@ -177,7 +181,7 @@
               <div><dt>確定日時（架空・日本時間）</dt><dd id="practice-issued"></dd></div>
               <div><dt>予測先日時（架空・日本時間）</dt><dd id="practice-target"></dd></div>
               <div><dt>予測方向</dt><dd id="practice-direction"></dd></div>
-              <div><dt>方向の確率</dt><dd id="practice-probabilities"></dd></div>
+              <div class="practice-odds"><dt>方向の確率</dt><dd id="practice-probabilities"></dd></div>
             </dl>
             <p class="hint">リスク設定は記録用です。既存モデルの方向確率は戦略と履歴で決まります。</p>
           </section>
@@ -197,6 +201,10 @@
           <button id="practice-start" type="button" hidden>架空練習を開始</button>
           <button id="practice-reveal" type="button" hidden>結果を公開</button>
         </div>
+        <section id="practice-history-panel" class="record-panel practice-history" aria-labelledby="practice-history-title" hidden>
+          <h3 id="practice-history-title">過去のラウンド結果</h3>
+          <ol id="practice-history"></ol>
+        </section>
       </section>
 
       <section class="card mock" aria-labelledby="mock-title">
@@ -209,7 +217,7 @@
           <div><dt>ポケット財布（模擬）</dt><dd id="wallet"></dd></div>
           <div><dt>模擬予測の状態</dt><dd id="forecast"></dd></div>
         </dl>
-        <p id="mock-unconnected" class="hint" hidden>架空予測の実行を画面につなぐ機能は今後の予定です。</p>
+        <p id="mock-unconnected" class="hint" hidden>P4 の予測実行を画面につなぐ機能は今後の予定です。</p>
         <div id="mock-record" class="record-grid" hidden>
           <section class="record-panel" aria-labelledby="frozen-title">
             <h3 id="frozen-title">確定済みの架空予測</h3>

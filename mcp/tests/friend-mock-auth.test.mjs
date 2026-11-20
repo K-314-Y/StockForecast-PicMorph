@@ -16,7 +16,7 @@ import {createGameServer} from '../../game_runtime/server.mjs';
 import {deriveForwardCompanionModel} from '../../game_runtime/forward-model.mjs';
 import {openForwardMockLifecycle} from '../../game_runtime/forward-mock-lifecycle.mjs';
 import {openForwardStore} from '../../game_runtime/forward-store.mjs';
-import {friendPracticeScenario, provisionFriendMockRound} from './friend-mock-record-fixture.mjs';
+import {friendPracticeCampaign, friendPracticeScenario, provisionFriendMockRound} from './friend-mock-record-fixture.mjs';
 
 const redeemPath = '/friend/invite/redeem';
 const sessionPath = '/friend/session';
@@ -940,9 +940,8 @@ function observePracticeBridge(t) {
   }};
 }
 
-test('P9k freezes once, sends only history to Python, reveals idempotently and leaves P4/FX byte-identical', async t => {
-  const {walletRoot, accounts, start} = await setup(t);
-  const p4 = await provisionFriendMockRound(accounts.get('Alice'), {companion:exampleCompanion, pending:true});
+async function preparePracticeRecords(walletRoot, walletFile) {
+  const p4 = await provisionFriendMockRound(walletFile, {companion:exampleCompanion, pending:true});
   const journalDirectory = join(walletRoot, 'fx');
   const auditAnchorDirectory = join(walletRoot, 'fx-anchor');
   for (const path of [journalDirectory, auditAnchorDirectory]) await mkdir(path, {mode:0o700});
@@ -953,14 +952,6 @@ test('P9k freezes once, sends only history to Python, reveals idempotently and l
   await fx.commitRound();
   await p4.finish(fx.reserve);
   await fx.settle(p4.config.forecastId);
-  const scenarioA = friendPracticeScenario('Alice', 129.876543);
-  const scenarioB = {...structuredClone(scenarioA), accountId:'Bob', targetPrice:103.123456};
-  const practiceScenarios = [scenarioA, scenarioB];
-  const local = await start({practiceScenarios, accountRecordSources:new Map([
-    ['Alice', {...p4.config, fxSource:fx.fxSource}],
-  ])});
-  const [a, b] = await Promise.all(['Alice', 'Bob'].map(id => editor(local, id)));
-  for (const user of [a,b]) assert.equal((await user.save(companionEdit, firstCompanion)).status, 200);
   async function digest() {
     const files = [[p4.options.walletFile]];
     for (const directory of [p4.options.directory, journalDirectory, auditAnchorDirectory]) {
@@ -968,6 +959,18 @@ test('P9k freezes once, sends only history to Python, reveals idempotently and l
     }
     return Promise.all(files.flat().map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')]));
   }
+  return {digest, accountRecordSources:new Map([['Alice', {...p4.config, fxSource:fx.fxSource}]])};
+}
+
+test('P9k freezes once, sends only history to Python, reveals idempotently and leaves P4/FX byte-identical', async t => {
+  const {walletRoot, accounts, start} = await setup(t);
+  const {digest, accountRecordSources} = await preparePracticeRecords(walletRoot, accounts.get('Alice'));
+  const scenarioA = friendPracticeScenario('Alice', 129.876543);
+  const scenarioB = {...structuredClone(scenarioA), accountId:'Bob', targetPrice:103.123456};
+  const practiceScenarios = [scenarioA, scenarioB];
+  const local = await start({practiceScenarios, accountRecordSources});
+  const [a, b] = await Promise.all(['Alice', 'Bob'].map(id => editor(local, id)));
+  for (const user of [a,b]) assert.equal((await user.save(companionEdit, firstCompanion)).status, 200);
   const before = await digest();
   const read = user => authenticated(local, practicePath, user.sessionToken);
   const projected = await authenticated(local, recordsPath, a.sessionToken);
@@ -1068,4 +1071,171 @@ test('P9k revocation and changed companion revisions prevent a running calculati
   const frozen = await next.save(practiceStart, beginAt(2));
   assert.equal(frozen.status, 200);
   assert.equal(frozen.body.risk_percent, 75);
+});
+
+test('P9l validates account campaign shape, ordering and twelve-round boundary at startup', async t => {
+  const {config, start} = await setup(t);
+  const full = friendPracticeCampaign('Alice', Array(12).fill(129));
+  const [first, second] = full.rounds;
+  for (const invalid of [
+    {...full, rounds:[]},
+    friendPracticeCampaign('Alice', Array(13).fill(129)),
+    {...full, rounds:[first, first]},
+    {...full, rounds:[second, first]},
+    {...full, rounds:[first, {...second, issuedAt:first.targetAt, history:first.history}]},
+    {...full, rounds:[first, {...second, accountId:'Bob'}]},
+    {...full, rounds:[first, {...second, targetPrice:0}]},
+    {...full, rounds:[first, {...second, sourceMode:'LIVE'}]},
+    {...full, rounds:[first, {...second, history:[...second.history].reverse()}]},
+  ]) {
+    await assert.rejects(startFriendMockServer({...config, practiceScenarios:[invalid]}), /friend practice/);
+  }
+  await assert.rejects(startFriendMockServer({
+    ...config, practiceScenarios:[full, friendPracticeScenario('Alice')],
+  }), /duplicate friend practice account/);
+  const server = await start({practiceScenarios:[full, friendPracticeCampaign('Bob', [118])]});
+  const [a, b] = await Promise.all(['Alice', 'Bob'].map(id => editor(server, id)));
+  const read = user => authenticated(server, practicePath, user.sessionToken);
+  assert.deepEqual((await read(a)).body, {status:'ready',
+    progress:{current:1, total:12, completed:0, judged:0, correct:0, average_brier:null, hasNext:true},
+    history:[],
+  });
+  assert.deepEqual((await read(b)).body, {status:'ready'});
+});
+
+test('P9l advances only on reveal, keeps model snapshots and history private, and leaves P4/FX unchanged', async t => {
+  const {walletRoot, accounts, start} = await setup(t);
+  const {digest, accountRecordSources} = await preparePracticeRecords(walletRoot, accounts.get('Alice'));
+  const campaignA = friendPracticeCampaign('Alice', [129.765432, 76.54321, 109.87654]);
+  const campaignB = friendPracticeCampaign('Bob', [129.765432, 88.23456, 114.32109]);
+  // This history produces an exact UP/DOWN tie for the real volatility model.
+  const tieRound = campaignA.rounds[1];
+  tieRound.history = tieRound.history.map((point, i) => ({...point, price:i === 11 ? 64.1 : 100}));
+  const practiceScenarios = [campaignA, campaignB];
+  const server = await start({practiceScenarios, accountRecordSources});
+  let [a, b] = await Promise.all(['Alice', 'Bob'].map(id => editor(server, id)));
+  for (const user of [a,b]) assert.equal((await user.save(companionEdit, firstCompanion)).status, 200);
+  const initial = await digest();
+  const read = user => authenticated(server, practicePath, user.sessionToken);
+  const records = user => authenticated(server, recordsPath, user.sessionToken);
+  const summary = user => authenticated(server, summaryPath, user.sessionToken);
+  const oldRecords = (await records(a)).body;
+  const oldSummary = (await summary(a)).body;
+  assert.ok(oldRecords.records[0].fx);
+  const watch = observePracticeBridge(t);
+  const ready = {status:'ready',
+    progress:{current:1, total:3, completed:0, judged:0, correct:0, average_brier:null, hasNext:true},
+    history:[],
+  };
+  assert.deepEqual((await read(a)).body, ready);
+  assert.deepEqual((await read(a)).body, ready);
+  assert.deepEqual(watch.inputs, []);
+  const resultOf = (user, round_id) => user.save(practiceReveal, {round_id});
+  for (const extra of [{cursor:0}, {round_number:2}, {scenario:1}, {reset:true}, {history:[]}]) {
+    assert.equal((await a.save(practiceStart, {...beginAt(1), ...extra})).status, 400);
+    assert.equal((await a.save(practiceReveal, {round_id:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', ...extra})).status, 400);
+  }
+  const f1 = await a.save(practiceStart, beginAt(1));
+  const b1 = await b.save(practiceStart, beginAt(1));
+  assert.equal(f1.status, 200);
+  assert.equal(b1.status, 200);
+  assert.equal(f1.body.status, 'frozen');
+  assert.deepEqual(f1.body.progress, ready.progress);
+  assert.deepEqual(f1.body.history, []);
+  for (const response of [f1, b1, await read(a), await read(b)]) {
+    assert.doesNotMatch(response.text, /76\.54321|109\.87654|88\.23456|114\.32109|129\.765432|referencePrice|targetPrice|nonce|01:48|02:18/);
+  }
+  assert.deepEqual(f1.body.probabilities, b1.body.probabilities);
+  const bridgeInput = (companion, round) => ({
+    model:deriveForwardCompanionModel(companion).model, prices:round.history.map(point => point.price),
+  });
+  assert.deepEqual(watch.inputs, [bridgeInput(exampleCompanion, campaignA.rounds[0]),
+    bridgeInput(exampleCompanion, campaignB.rounds[0])]);
+  assert.equal((await resultOf(b, f1.body.round_id)).status, 409);
+  assert.equal((await a.save(practiceStart, beginAt(1))).status, 409);
+
+  const revoked = a;
+  a = await editor(server, 'Alice');
+  assert.equal((await read(revoked)).status, 401);
+  assert.deepEqual((await read(a)).body, f1.body);
+  const [r1, replay] = await Promise.all([resultOf(a, f1.body.round_id), resultOf(a, f1.body.round_id)]);
+  assert.equal(r1.status, 200);
+  assert.deepEqual(replay.body, r1.body);
+  assert.equal(r1.body.status, 'scored');
+  assert.deepEqual(r1.body.progress, {current:1, total:3, completed:1, judged:1, correct:1,
+    average_brier:r1.body.result.brier, hasNext:true});
+  assert.equal(r1.body.result.targetPrice, 129.765432);
+  assert.deepEqual((await read(a)).body, r1.body);
+  assert.equal(watch.inputs.length, 2);
+
+  const changed = {...exampleCompanion, approach:'volatility', risk_percent:75};
+  assert.equal((await a.save(companionEdit, {expected_revision:1, companion:changed})).status, 200);
+  const stale = await a.save(practiceStart, beginAt(1));
+  assert.equal(stale.status, 409);
+  assert.doesNotMatch(stale.text, /76\.54321|109\.87654|targetPrice/);
+  assert.deepEqual((await read(a)).body, r1.body);
+
+  const gate = watch.hold();
+  const next = a.save(practiceStart, beginAt(2));
+  let f2;
+  try {
+    await gate.started.promise;
+    const starting = await read(a);
+    assert.equal(starting.body.status, 'starting');
+    assert.equal(starting.body.progress.current, 2);
+    assert.deepEqual(starting.body.history, r1.body.history);
+    assert.doesNotMatch(starting.text, /76\.54321|109\.87654|01:48|02:18|targetPrice/);
+    assert.equal((await a.save(practiceStart, beginAt(2))).status, 409);
+    assert.equal((await resultOf(a, f1.body.round_id)).status, 409);
+  } finally {
+    gate.release.resolve();
+    f2 = await next;
+  }
+  assert.equal(f2.status, 200);
+  assert.equal(f2.body.status, 'frozen');
+  assert.equal(f2.body.direction, null);
+  assert.equal(f2.body.companion_revision, 2);
+  assert.equal(f2.body.model_version, deriveForwardCompanionModel(changed).model_version);
+  assert.equal(f2.body.issuedAt, tieRound.issuedAt);
+  assert.deepEqual(f2.body.history, r1.body.history);
+  assert.doesNotMatch(f2.text, /76\.54321|109\.87654|02:18|referencePrice|targetPrice/);
+  assert.equal((await resultOf(a, f1.body.round_id)).status, 409);
+  assert.deepEqual(watch.inputs.at(-1), bridgeInput(changed, tieRound));
+
+  const r2 = await resultOf(a, f2.body.round_id);
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.status, 'scored');
+  assert.equal(r2.body.result.directionCorrect, null);
+  assert.deepEqual(r2.body.progress, {current:2, total:3, completed:2, judged:1, correct:1,
+    average_brier:(r1.body.result.brier + r2.body.result.brier) / 2, hasNext:true});
+  assert.equal(r2.body.result.targetPrice, tieRound.targetPrice);
+  assert.deepEqual((await resultOf(a, f2.body.round_id)).body, r2.body);
+  assert.equal((await resultOf(a, f1.body.round_id)).status, 409);
+
+  const f3 = await a.save(practiceStart, beginAt(2));
+  assert.equal(f3.status, 200);
+  assert.equal(f3.body.progress.current, 3);
+  assert.equal(f3.body.progress.hasNext, false);
+  assert.deepEqual(f3.body.history, r2.body.history);
+  assert.deepEqual(watch.inputs.at(-1), bridgeInput(changed, campaignA.rounds[2]));
+  assert.doesNotMatch(f3.text, /109\.87654|targetPrice/);
+  const r3 = await resultOf(a, f3.body.round_id);
+  assert.equal(r3.status, 200);
+  assert.equal(r3.body.status, 'exhausted');
+  assert.equal(r3.body.progress.completed, 3);
+  assert.equal(r3.body.progress.hasNext, false);
+  assert.deepEqual(r3.body.history.slice(0, 2), r2.body.history);
+  assert.deepEqual((await resultOf(a, f3.body.round_id)).body, r3.body);
+  assert.equal((await a.save(practiceStart, beginAt(2))).status, 409);
+  assert.deepEqual((await read(b)).body, b1.body);
+  assert.equal((await a.save(logoutPath, undefined)).status, 200);
+  a = await editor(server, 'Alice');
+  assert.deepEqual((await read(a)).body, r3.body);
+  assert.deepEqual((await records(a)).body, oldRecords);
+  assert.deepEqual((await summary(a)).body, oldSummary);
+  assert.deepEqual(await digest(), initial);
+  const restarted = await start({practiceScenarios});
+  const fresh = await editor(restarted, 'Alice');
+  assert.deepEqual((await authenticated(restarted, practicePath, fresh.sessionToken)).body, ready);
+  assert.equal((await resultOf(fresh, f3.body.round_id)).status, 409);
 });

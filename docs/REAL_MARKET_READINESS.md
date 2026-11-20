@@ -143,11 +143,18 @@ Gemini Web版との設計レビュー後、公式のデータ利用条件も照�
 
 - 管理者が `startFriendMockServer({practiceScenarios})` に口座ごとに1本の固定シナリオを設定する。既定は未接続。シナリオは `accountId`、`sourceMode: 'MOCK_NONLIVE'`、9〜200件の時系列 `history: [{at, price}]`、`issuedAt`、`targetAt`、`targetPrice` を持つ。日時は UTC で、履歴は狭義の昇順、最終履歴時刻は確定時刻以前、目標時刻は確定時刻より後とする。
 - `GET /friend/practice` は同一口座の状態を読む。`POST /friend/practice/start` は `{expected_companion_revision}` で本人の保存版を照合し、既存モデルに履歴価格だけを渡して予測を確定する。`POST /friend/practice/reveal` は `{round_id}` でその確定済みラウンドを指定し、架空の未来価格を公開して採点する。両 POST は Bearer、CSRF、同一オリジンが必須。
-- 口座当たり1ラウンドをサーバープロセスのメモリーに保持する。同じプロセスではログインし直しても結果を再取得でき、公開をやり直しても同じ結果が返る。サーバー再起動で消失する。保存済みリスク値はモデル版と一緒に記録する。既存の方向確率は戦略と履歴で決まり、練習は現実の実績や売買、P4・FX・財布の更新を伴わない。
+- 練習結果はサーバープロセスのメモリーに保持する。同じプロセスではログインし直しても結果を再取得できる。サーバー再起動で消失する。保存済みリスク値はモデル版と一緒に記録する。既存の方向確率は戦略と履歴で決まり、練習は現実の実績や売買、P4・FX・財布の更新を伴わない。
+
+### P9l 固定順の架空練習キャンペーン
+
+- `practiceScenarios` の口座設定に `{accountId, rounds:[...]}` を渡せる。各ラウンドは P9k シナリオから `accountId` を除いた形で、口座当たり1〜12件。次の確定時刻は前のラウンドの目標時刻より後とする。P9k の単一シナリオ設定と単一ラウンドの API 応答も利用できる。
+- 各ラウンドは相棒の保存済みモデルを開始時に固定する。結果公開の完了でのみ次へ進める。次の開始は明示操作が必要。空き状態で直前の公開を再送すると同じ結果が返り、それより古いラウンド ID や次のラウンド確定中の旧 ID は409となる。
+- 複数ラウンドの応答には `progress` と公開済みの `history` を付ける。全体と現在の位置、採点済み数、判定ありの回数、的中数、平均 Brier を表示する。方向が同率の回は的中率の分母から除き、平均 Brier には含める。未公開のシナリオと価格はサーバー内に保持する。
+- ローカルの架空練習専用。実データ API、使える FX 残高、外部公開は未完成。
 
 #### ローカルデモ
 
-Linux のリポジトリルートで実行する。一時領域に架空の1ラウンドを用意し、招待コードを端末に一度だけ表示する。URL を Linux 側のブラウザーで開き、相棒と戦略を保存して「架空練習を開始」、続けて「結果を公開」を押す。Ctrl+C または SIGTERM で一時領域を削除する。
+Linux のリポジトリルートで実行する。一時領域に固定順の架空3ラウンドを用意し、招待コードを端末に一度だけ表示する。URL を Linux 側のブラウザーで開き、相棒と戦略を保存して「架空練習を開始」、「結果を公開」を押す。2回目と3回目は「次の練習へ」から開始する。Ctrl+C または SIGTERM で一時領域を削除する。
 
 ```sh
 node --input-type=module <<'NODE'
@@ -169,12 +176,16 @@ try {
     await mkdir(directory, {mode:0o700});
     accounts.set(accountId, join(directory, 'wallet.json'));
   }
-  const history = [100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120]
-    .map((price, i) => ({at:new Date(Date.UTC(2030, 0, 7, 1, i)).toISOString(), price}));
-  server = await startFriendMockServer({accounts, walletRoot, practiceScenarios:[{
-    accountId:'Demo', sourceMode:'MOCK_NONLIVE', history,
-    issuedAt:'2030-01-07T01:12:00Z', targetAt:'2030-01-07T01:18:00Z', targetPrice:129,
-  }]});
+  const rounds = [
+    {prices:[100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120], targetPrice:129},
+    {prices:[129, 127, 128, 126, 125, 124, 121, 122, 118, 115, 113, 111], targetPrice:107},
+    {prices:[107, 106, 108, 107, 109, 108, 107, 108, 109, 108, 109, 110], targetPrice:110},
+  ].map(({prices, targetPrice}, round) => {
+    const at = minute => new Date(Date.UTC(2030, 0, 7, 1, round * 30 + minute)).toISOString();
+    return {sourceMode:'MOCK_NONLIVE', history:prices.map((price, i) => ({at:at(i), price})),
+      issuedAt:at(12), targetAt:at(18), targetPrice};
+  });
+  server = await startFriendMockServer({accounts, walletRoot, practiceScenarios:[{accountId:'Demo', rounds}]});
   console.log(server.origin + '/friend/');
   console.log('一度限りの招待コード ' + server.issueInvite('Demo').token);
   await stop;

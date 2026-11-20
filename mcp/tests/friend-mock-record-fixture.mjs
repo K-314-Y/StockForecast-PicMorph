@@ -61,12 +61,19 @@ export async function provisionFriendMockRound(walletFile, {
   return {state, options, config:{forecastId, source:lifecycle.recordSource}, finish};
 }
 
-export function friendPracticeScenario(accountId, targetPrice = 129) {
+export function friendPracticeScenario(accountId, targetPrice = 129, offsetMinutes = 0) {
+  const at = minute => new Date(Date.UTC(2030, 0, 7, 1, offsetMinutes + minute)).toISOString();
   return {
     accountId, sourceMode:MOCK_MARKET_SOURCE,
-    history:[100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120].map((price, i) => ({
-      at:new Date(Date.UTC(2030, 0, 7, 1, i)).toISOString(), price,
-    })),
-    issuedAt:'2030-01-07T01:12:00.000Z', targetAt:'2030-01-07T01:18:00.000Z', targetPrice,
+    history:[100, 103, 101, 104, 106, 108, 105, 109, 112, 116, 118, 120].map((price, i) => ({at:at(i), price})),
+    issuedAt:at(12), targetAt:at(18), targetPrice,
   };
+}
+
+export function friendPracticeCampaign(accountId, targetPrices) {
+  const rounds = targetPrices.map((price, index) => {
+    const {accountId:_, ...round} = friendPracticeScenario(accountId, price, index * 30);
+    return round;
+  });
+  return {accountId, rounds};
 }
