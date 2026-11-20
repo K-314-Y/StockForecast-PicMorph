@@ -258,7 +258,7 @@ function clearChatGPT() {
   dialogueController?.abort();
   element('quickChatGPT').hidden=true;
   element('quickChatGPTReply').textContent='';
-  element('quickChatGPTAsk').disabled=!!dialogueController;
+  element('quickChatGPTAsk').disabled=!!dialogueController || multiComparisonRunning();
 }
 function chatGPTConfigured() {
   return element('quickChatGPT').dataset.chatgptDialogue==='enabled';
@@ -276,7 +276,7 @@ for(const id of ['quickHumanChoice','quickHumanReason','quickHumanNote']) {
 }
 element('quickChatGPTAsk').addEventListener('click',async()=>{
   const saved=reflections.get(replayDay);
-  if(!chatGPTConfigured() || element('quickChatGPT').hidden || dialogueController)return;
+  if(!chatGPTConfigured() || element('quickChatGPT').hidden || dialogueController || multiComparisonRunning())return;
   if(!replay || !saved || replayDay<1 || replayDay>12 ||
       saved.choice!==element('quickHumanChoice').value ||
       saved.reason!==element('quickHumanReason').value ||
@@ -286,7 +286,7 @@ element('quickChatGPTAsk').addEventListener('click',async()=>{
   const epoch=dialogueEpoch;
   const controller=new AbortController();
   dialogueController=controller;
-  element('quickChatGPTAsk').disabled=true;
+  updateCompareControls();
   element('quickChatGPTReply').textContent='ChatGPTが振り返りを考えています… 最大55秒ほどお待ちください。日付の変更や入力の編集で中断できます。';
   const timer=setTimeout(()=>controller.abort(),55000);
   try {
@@ -312,7 +312,7 @@ element('quickChatGPTAsk').addEventListener('click',async()=>{
       'ChatGPTの応答を取得できませんでした。共有許可・接続・利用上限を確認して、必要ならもう一度ボタンを押してください。';
   } finally {
     clearTimeout(timer);
-    if(dialogueController===controller){dialogueController=null;element('quickChatGPTAsk').disabled=false;}
+    if(dialogueController===controller){dialogueController=null;updateCompareControls();}
   }
 });
 const sessionPanel=element('quickChatGPTConnection');
@@ -320,12 +320,12 @@ sessionPanel.hidden=sessionPanel.dataset.chatgptSession!=='enabled';
 let sessionController=null;
 let sessionEpoch=0;
 element('quickChatGPTStatusCheck').addEventListener('click',async()=>{
-  if(sessionPanel.hidden || sessionController)return;
+  if(sessionPanel.hidden || sessionController || multiComparisonRunning())return;
   clearChatGPT();
   const epoch=++sessionEpoch;
   const controller=new AbortController();
   sessionController=controller;
-  element('quickChatGPTStatusCheck').disabled=true;
+  updateCompareControls();
   element('quickChatGPTStatus').textContent='ChatGPTプランの接続状態を確認中…';
   const timer=setTimeout(()=>controller.abort(),4000);
   try {
@@ -344,11 +344,12 @@ element('quickChatGPTStatusCheck').addEventListener('click',async()=>{
   } finally {
     clearTimeout(timer);
     sessionController=null;
-    element('quickChatGPTStatusCheck').disabled=false;
+    updateCompareControls();
   }
 });
 window.addEventListener('pagehide',()=>{
   // Discard page-only practice data without rerunning form validation on departure.
+  modelListEpoch++;
   lastScenarioToken=null;
   clearPracticeView();
   element('quickResult').replaceChildren();
@@ -886,18 +887,31 @@ const compareModel = element('quickCompareModel');
 const compareRun = element('quickCompareRun');
 const compareStatus = element('quickCompareStatus');
 const compareResults = element('quickCompareResults');
+const multiPanel = element('quickCompareMulti');
+const multiRun = element('quickCompareMultiRun');
+const multiStatus = element('quickCompareMultiStatus');
+const multiResults = element('quickCompareMultiResults');
+const multiCards = element('quickCompareMultiCards');
 const compareAnnouncement = document.createElement('span');
 compareAnnouncement.className='quick-status-announcement';
 let compareBase = null;
+let comparePair = null;
 let compareEpoch = 0;
 let compareController = null;
 let compareBusy = false;
 
+function clearMultiResults() {
+  multiResults.hidden=true;
+  multiCards.replaceChildren();
+  multiStatus.textContent='';
+}
 function resetCompareResult() {
   compareEpoch++;
   compareController?.abort();
   compareController=null;
   compareBusy=false;
+  comparePair=null;
+  clearMultiResults();
   compareResults.hidden=true;
   compareResults.replaceChildren();
   compareStatus.textContent='';
@@ -908,21 +922,36 @@ function clearCompare() {
   element('quickCompare').hidden=true;
   resetCompareResult();
   compareModel.replaceChildren();
-  compareModel.disabled=compareRun.disabled=true;
+  updateCompareControls();
 }
 function selectedCompareModel() {
   const id=compareModel.value;
   return id!==compareBase?.model_id && compareChoices.has(id) ? id : null;
 }
+function multiComparisonRunning() {
+  // A running single comparison has already cleared the previous pair.
+  return compareBusy && comparePair!==null;
+}
 function updateCompareControls() {
   compareModel.disabled=!compareBase || compareBusy || compareModel.children.length<=1;
   compareRun.disabled=compareModel.disabled || !selectedCompareModel();
+  multiPanel.hidden=!comparePair || comparePair.b.model_id!==selectedCompareModel();
+  multiRun.disabled=multiPanel.hidden || compareBusy || !!dialogueController || !!sessionController;
+  element('quickChatGPTAsk').disabled=multiComparisonRunning() || !!dialogueController;
+  element('quickChatGPTStatusCheck').disabled=multiComparisonRunning() || !!sessionController;
 }
 function refreshCompareModels() {
+  const baseLabel=compareChoices.get(compareBase.model_id);
+  if(baseLabel===undefined) {
+    clearCompare();
+    return;
+  }
+  const baseRenamed=compareBase.choice_label!==baseLabel;
+  if(baseRenamed)compareBase={...compareBase,choice_label:baseLabel};
   const prior=compareModel.value;
   const choices=[...compareChoices].filter(([id])=>id!==compareBase.model_id);
   const options=compareModel.children;
-  if(options.length===choices.length+1 && choices.every(([id,name],index)=>
+  if(!baseRenamed && options.length===choices.length+1 && choices.every(([id,name],index)=>
     options[index+1].value===id && options[index+1].textContent===name))return;
   const placeholder=document.createElement('option');
   placeholder.value='';
@@ -945,17 +974,23 @@ function refreshCompareModels() {
   else if(!prior)compareStatus.textContent='';
   updateCompareControls();
 }
-function setCompareMessage(message) {
-  compareStatus.textContent=message;
+function setCompareMessage(status,message) {
+  status.textContent=message;
   if(compareAnnouncement.parentNode!==statusField)statusField.append(compareAnnouncement);
   compareAnnouncement.textContent=message;
 }
+function compareStrategy(value) {
+  if(value.model_id!=='self' || value.companion_strategy===null)return null;
+  return validatedStrategy(value.companion_strategy,value.model_id,value.model_id) ?? undefined;
+}
 function showCompare(value,ordered,modelName) {
-  if(!validCompareOutcome(value,ordered.model_id))return;
+  if(!validCompareOutcome(value,ordered.model_id) || !compareChoices.has(ordered.model_id))return;
   compareBase={model_id:ordered.model_id,model_name:modelName,
+    choice_label:compareChoices.get(ordered.model_id),
     amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
-    max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step};
+    max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
+    strategy:compareStrategy(value)};
   refreshCompareModels();
   element('quickCompare').hidden=false;
 }
@@ -975,8 +1010,34 @@ function compareCard(label,name,value) {
   }
   return card;
 }
+function validCompareReply(value,ordered,scenario) {
+  return !!value && typeof value==='object' && Object.getPrototypeOf(value)===Object.prototype &&
+    validPracticeResult(value,ordered) && validCompareOutcome(value,ordered.model_id) &&
+    value.initial_balance===BALANCE && value.cash_held===BALANCE-ordered.amount &&
+    value.scenario_kind===(scenario ? 'replay' : 'new') && validScenarioToken(value.scenario_token) &&
+    (!scenario || value.scenario_token===scenario.scenario_token) &&
+    value.daily_synthetic_prices.every((price,index)=>Object.hasOwn(value.daily_synthetic_prices,index) &&
+      (!scenario || Object.is(price,scenario.daily_synthetic_prices[index])));
+}
+function beginCompareRequest(modelId) {
+  const controller=new AbortController();
+  const baseEpoch=practiceEpoch,reqEpoch=++compareEpoch;
+  compareController=controller;
+  compareBusy=true;
+  updateCompareControls();
+  return {
+    signal:controller.signal,
+    current:()=>practiceEpoch===baseEpoch && compareEpoch===reqEpoch && selectedCompareModel()===modelId,
+    finish:()=>{
+      if(compareEpoch!==reqEpoch)return;
+      compareController=null;
+      compareBusy=false;
+      updateCompareControls();
+    },
+  };
+}
 compareModel.addEventListener('change',()=>{
-  if(!compareBase || compareModel.disabled)return;
+  if(!compareBase)return;
   resetCompareResult();
   updateCompareControls();
 });
@@ -984,40 +1045,91 @@ compareRun.addEventListener('click',async()=>{
   const base=compareBase,modelId=selectedCompareModel();
   if(busy || compareBusy || !base || !modelId)return;
   resetCompareResult();
-  const controller=new AbortController();
-  compareController=controller;
-  compareBusy=true;
-  const baseEpoch=practiceEpoch,reqEpoch=compareEpoch;
+  const {signal,current,finish}=beginCompareRequest(modelId);
   const ordered={model_id:modelId,amount:base.amount,leverage:base.leverage,
     scenario_token:base.scenario_token};
   const modelName=compareChoices.get(modelId);
-  const current=()=>practiceEpoch===baseEpoch && compareEpoch===reqEpoch &&
-    selectedCompareModel()===modelId;
-  updateCompareControls();
   compareStatus.textContent='比較を計算しています…';
   try {
-    const value=await request('/api/quick-practice',ordered,controller.signal);
+    const value=await request('/api/quick-practice',ordered,signal);
     if(!current())return;
-    if(!value || typeof value!=='object' || Object.getPrototypeOf(value)!==Object.prototype ||
-       !validPracticeResult(value,ordered) || !validCompareOutcome(value,modelId) ||
-       value.scenario_kind!=='replay' || value.scenario_token!==base.scenario_token ||
-       value.initial_balance!==BALANCE || value.cash_held!==BALANCE-base.amount ||
-       !base.daily_synthetic_prices.every((price,index)=>Object.hasOwn(value.daily_synthetic_prices,index) &&
-         Object.is(price,value.daily_synthetic_prices[index]))) {
-      throw Error('比較条件を確認できませんでした');
-    }
+    if(!validCompareReply(value,ordered,base))throw Error('比較条件を確認できませんでした');
+    const strategy=compareStrategy(value);
     compareResults.replaceChildren(compareCard('A',base.model_name,base),
       compareCard('B',practiceModelName(value,{...ordered,model_name:modelName}),value));
     compareResults.hidden=false;
-    setCompareMessage('架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）');
+    setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）');
+    if(base.strategy!==undefined && strategy!==undefined)
+      comparePair={a:base,b:{model_id:modelId,strategy}};
   } catch {
-    if(current())setCompareMessage('比較できませんでした。もう一度お試しください。');
+    if(current())setCompareMessage(compareStatus,'比較できませんでした。もう一度お試しください。');
   } finally {
-    if(compareEpoch===reqEpoch) {
-      compareController=null;
-      compareBusy=false;
-      updateCompareControls();
+    finish();
+  }
+});
+function validMultiOutcome(value,model) {
+  const strategy=compareStrategy(value);
+  return strategy!==undefined && strategy?.approach===model.strategy?.approach &&
+    strategy?.risk_percent===model.strategy?.risk_percent &&
+    value.daily_balances.every(balance=>balance>=value.cash_held) &&
+    Math.abs(value.final_balance-(BALANCE+value.profit_coins))<=0.02;
+}
+function multiCard(title,outcomes,average=false) {
+  const card=document.createElement('article');
+  const heading=document.createElement('h5');
+  heading.textContent=title;
+  card.append(heading);
+  const profitLabel=average ? '参考平均損益' : '架空の損益';
+  const drawdownLabel=average ? '最大下落率の平均' : '最大下落率';
+  for(const [index,value] of outcomes.entries()) {
+    const line=document.createElement('p');
+    const profit=money(value.profit_coins);
+    const signed=profit==='-0' || profit==='0' ? '0' : (value.profit_coins>0 ? '+' : '')+profit;
+    line.textContent=(index===0 ? 'A' : 'B')+'：'+profitLabel+' '+signed+' C ／ '+drawdownLabel+' '+
+      money(value.max_drawdown_pct || 0)+'%';
+    card.append(line);
+  }
+  return card;
+}
+multiRun.addEventListener('click',async()=>{
+  if(busy || multiRun.disabled || compareBusy || !comparePair ||
+     dialogueController || sessionController)return;
+  const {a,b}=comparePair;
+  if(selectedCompareModel()!==b.model_id || !compareChoices.has(a.model_id))return;
+  clearMultiResults();
+  compareAnnouncement.textContent='';
+  const {signal,current,finish}=beginCompareRequest(b.model_id);
+  multiStatus.textContent='追加の3例を計算しています…';
+  const tokens=new Set([a.scenario_token]);
+  const pairs=[];
+  const orderedA={model_id:a.model_id,amount:a.amount,leverage:a.leverage};
+  try {
+    for(let trial=0;trial<3;trial++) {
+      const valueA=await request('/api/quick-practice',orderedA,signal);
+      if(!current())return;
+      if(!validCompareReply(valueA,orderedA,null) || !validMultiOutcome(valueA,a) ||
+         tokens.has(valueA.scenario_token))throw Error('追加の比較条件を確認できませんでした');
+      tokens.add(valueA.scenario_token);
+      const orderedB={model_id:b.model_id,amount:a.amount,leverage:a.leverage,
+        scenario_token:valueA.scenario_token};
+      const valueB=await request('/api/quick-practice',orderedB,signal);
+      if(!current())return;
+      if(!validCompareReply(valueB,orderedB,valueA) || !validMultiOutcome(valueB,b))
+        throw Error('追加の比較条件を確認できませんでした');
+      pairs.push([valueA,valueB]);
     }
+    const averages=pairs[0].map((_,index)=>({
+      profit_coins:pairs.reduce((sum,pair)=>sum+pair[index].profit_coins,0)/pairs.length,
+      max_drawdown_pct:pairs.reduce((sum,pair)=>sum+pair[index].max_drawdown_pct,0)/pairs.length,
+    }));
+    multiCards.replaceChildren(...pairs.map((pair,index)=>multiCard('シナリオ'+(index+1),pair)),
+      multiCard('モデル別の参考平均',averages,true));
+    multiResults.hidden=false;
+    setCompareMessage(multiStatus,'追加の3例の比較が完了しました。');
+  } catch {
+    if(current())setCompareMessage(multiStatus,'追加の比較ができませんでした。もう一度お試しください。');
+  } finally {
+    finish();
   }
 });
 function revealResult(value,ordered) {

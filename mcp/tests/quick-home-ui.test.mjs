@@ -61,7 +61,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,order_placed:false,xp_awarded:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
     scenario_kind:body.scenario_token?'replay':'new',
-    model_id:body.model_id,initial_balance:10000,cash_held:10000-body.amount,
+    model_id:body.model_id,initial_balance:10000,cash_held:10000-body.amount,companion_strategy:null,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
     daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
@@ -85,7 +85,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     assert.equal(path,'/api/quick-practice');
     assert.equal(options.method,'POST');
     const value=await state.practice(body,options);
-    return {ok:!value?.error && !state.practiceHttpError,json:async()=>{
+    return {ok:!value?.error && !state.practiceHttpError,status:state.practiceHttpError??200,json:async()=>{
       if(state.practiceNonJson)throw SyntaxError('invalid JSON');
       return parseJson(JSON.stringify(value));
     }};
@@ -3216,4 +3216,422 @@ test('model refresh invalidates completed comparison if either model disappears'
     assert.equal(get('quickCompareResults').children.length,0);
     assert.equal(get('quickCompareRun').disabled,true);
   }
+});
+
+const multiTokens=['v1_1111111111111111','v1_2222222222222222','v1_3333333333333333'];
+const savedCompareStrategy={source:'saved_companion',approach:'trend',risk_percent:35};
+const practiceCalls=ui=>ui.calls.filter(({path})=>path==='/api/quick-practice').map(({body})=>body);
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+async function completeSingleCompare(ui,modelId=compareDemo.id) {
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui,modelId);
+  await ui.fire('quickCompareRun');
+}
+
+function multiPracticeFixture(practice) {
+  let current=-1;
+  return async(body,options)=>{
+    const replay=Object.hasOwn(body,'scenario_token');
+    if(!replay)current++;
+    const trial=current;
+    const value=await practice(body,options);
+    const profit=replay ? [0,12,-3][trial] : [15,-6,30][trial];
+    return {...value,scenario_kind:replay?'replay':'new',scenario_token:multiTokens[trial],
+      profit_coins:profit,final_balance:10000+profit,
+      daily_balances:[...value.daily_balances.slice(0,12),10000+profit],
+      max_drawdown_pct:(replay?2:1)*(trial+1),
+      daily_synthetic_prices:value.daily_synthetic_prices.map(price=>price+trial),
+    };
+  };
+}
+
+function assertMultiEmpty(get) {
+  assert.equal(get('quickCompareMultiResults').hidden,true);
+  assert.equal(get('quickCompareMultiCards').children.length,0);
+}
+
+test('P9r uses a native button and an existing live region, and explains the sample and mean',()=>{
+  const nodes=htmlNodes(),get=id=>nodes.find(node=>node.id===id);
+  for(const id of ['quickCompareMultiRun','quickCompareMultiStatus','quickCompareMultiResults']) {
+    assert.ok(get(id).parents.includes('quickCompare'));
+    assert.ok(!get(id).parents.includes('quickCompareResults'));
+    assert.doesNotMatch(get(id).attributes,/role=|aria-live=/);
+  }
+  assert.equal(get('quickCompareMultiRun').tag,'button');
+  assert.match(get('quickCompareMultiRun').attributes,/\btype="button"/);
+  assert.match(get('quickCompareMultiRun').attributes,/\bdisabled\b/);
+  assert.match(html,/別の3つの架空相場でも比較/);
+  assert.match(html,/追加の3例（結果を見た後に選んだAIでの練習）/);
+  assert.match(html,/3個の独立した試算の算術平均/);
+  assert.match(html,/累計利益や現実の最大下落率/);
+  assert.match(html,/同一モデル版は保証されません/);
+  assert.match(html,/@media\(max-width:550px\)\{[^}]*#quickCompareMultiCards\{grid-template-columns:1fr/);
+});
+
+test('P9r sends six sequential requests with four distinct tokens and displays three pairs and means together',async()=>{
+  const zipId='zip_'+'a'.repeat(32),markup='<img src=x onerror=alert(1)>';
+  const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:markup,model_version:'v1'}]);
+  const {get,fire,state,calls,focus,storageWrites}=ui;
+  get('quickAmount').value='1250';
+  get('quickLeverage').value='7';
+  assert.equal(get('quickCompareMultiRun').disabled,true);
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui,zipId);
+  await fire('quickCompareMultiRun');
+  assert.equal(get('quickCompareMultiRun').disabled,true);
+  assert.equal(practiceCalls(ui).length,1);
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareMultiRun').disabled,false);
+  await fire('quickFollowing');
+  await shareReflection(get,fire);
+  const original=[get('quickResult').children,get('quickCompareResults').children,
+    get('quickReplayDay').textContent,get('quickFreePrompt').value,get('scene').dataset.mood];
+  assert.match(original[1][1].children[0].textContent,/<img src=x onerror=alert\(1\)>/);
+  assert.equal(original[1][1].children[0].children.length,0);
+  const fixture=multiPracticeFixture(state.practice),pending=[],responses=[];
+  state.practice=async(body,options)=>{
+    const {promise,resolve}=Promise.withResolvers();
+    pending.push({resolve,signal:options.signal});
+    const value=await fixture(body,options);
+    await promise;
+    responses.push(value);
+    return value;
+  };
+  const running=fire('quickCompareMultiRun');
+  for(let index=0;index<6;index++) {
+    assert.equal(practiceCalls(ui).length,3+index);
+    assert.equal(pending.length,index+1);
+    assertMultiEmpty(get);
+    assert.equal(get('quickCompareMultiRun').disabled,true);
+    assert.equal(get('quickCompareRun').disabled,true);
+    await fire('quickCompareMultiRun');
+    await fire('quickCompareRun');
+    await fire('quickRun');
+    if(index===2) {
+      focus();
+      await tick();
+      assert.equal(calls.at(-1).path,'/api/model-shop');
+      assert.equal(pending[index].signal.aborted,false);
+      assert.equal(get('quickCompareResults').children,original[1]);
+    }
+    pending[index].resolve();
+    await tick();
+  }
+  await running;
+  assert.deepEqual(practiceCalls(ui).slice(2),multiTokens.flatMap(token=>[
+    {model_id:'self',amount:1250,leverage:7},
+    {model_id:zipId,amount:1250,leverage:7,scenario_token:token},
+  ]));
+  assert.deepEqual(responses.map(({scenario_kind})=>scenario_kind),['new','replay','new','replay','new','replay']);
+  assert.equal(new Set([practiceCalls(ui)[1].scenario_token,...responses.filter((_,i)=>i%2===0)
+    .map(value=>value.scenario_token)]).size,4);
+  assert.equal(get('quickCompareMultiResults').hidden,false);
+  const cards=get('quickCompareMultiCards').children;
+  assert.deepEqual(cards.map(card=>card.children.map(row=>row.textContent)),[
+    ['シナリオ1','A：架空の損益 +15 C ／ 最大下落率 1%','B：架空の損益 0 C ／ 最大下落率 2%'],
+    ['シナリオ2','A：架空の損益 -6 C ／ 最大下落率 2%','B：架空の損益 +12 C ／ 最大下落率 4%'],
+    ['シナリオ3','A：架空の損益 +30 C ／ 最大下落率 3%','B：架空の損益 -3 C ／ 最大下落率 6%'],
+    ['モデル別の参考平均','A：参考平均損益 +13 C ／ 最大下落率の平均 2%','B：参考平均損益 +3 C ／ 最大下落率の平均 4%'],
+  ]);
+  focus();
+  await tick();
+  assert.equal(get('quickCompareMultiCards').children,cards);
+  assert.deepEqual([get('quickResult').children,get('quickCompareResults').children,
+    get('quickReplayDay').textContent,get('quickFreePrompt').value,get('scene').dataset.mood],original);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('P9r discards the entire batch on malformed replies, HTTP errors, price drift and duplicate tokens',async()=>{
+  const cases=[
+    ['malformed A',2,()=>null],
+    ['malformed JSON',5,()=>({})],
+    ['403',3,()=>({error:'モデルが利用できません'})],
+    ['503',4,()=>({error:'メンテナンス中'})],
+    ['429',2,()=>({error:'混雑中'})],
+    ['one different price',5,v=>({...v,daily_synthetic_prices:v.daily_synthetic_prices.map((p,i)=>i===12?p+1e-12:p)})],
+    ['sparse prices',3,v=>{delete v.daily_synthetic_prices[2];return v;}],
+    ['original token',2,v=>({...v,scenario_token:'v1_0123456789abcdef'})],
+    ['duplicate new token',4,v=>({...v,scenario_token:multiTokens[0]})],
+    ['wrong replay token',5,v=>({...v,scenario_token:multiTokens[0]})],
+    ['invalid token',2,v=>({...v,scenario_token:'invalid'})],
+    ['wrong A kind',2,v=>({...v,scenario_kind:'replay'})],
+    ['wrong B kind',3,v=>({...v,scenario_kind:'new'})],
+    ['wrong model',5,v=>({...v,model_id:'demo_reversion'})],
+    ['wrong amount',2,v=>({...v,invested_coins:'1000'})],
+    ['wrong leverage',3,v=>({...v,leverage:2})],
+    ['wrong initial balance',2,v=>({...v,initial_balance:9999})],
+    ['wrong cash held',3,v=>({...v,cash_held:0})],
+    ['spent reserve',2,v=>({...v,daily_balances:v.daily_balances.map((b,i)=>i===1?8999:b)})],
+    ['profit overflow',4,v=>({...v,profit_coins:Number.MAX_VALUE})],
+    ['mismatched balance',5,v=>({...v,profit_coins:v.profit_coins+0.03})],
+    ['drawdown out of range',2,v=>({...v,max_drawdown_pct:101})],
+    ['wrong liquidation date type',3,v=>({...v,liquidated_at_step:'2'})],
+    ['wrong daily count',3,v=>({...v,daily_balances:v.daily_balances.slice(1)})],
+    ['placed order',3,v=>({...v,order_placed:true})],
+    ['awarded XP',4,v=>({...v,xp_awarded:undefined})],
+    ['persisted',3,v=>({...v,persisted:true})],
+    ['real market',2,v=>({...v,real_market:true})],
+  ];
+  for(const [label,index,mutate] of cases) {
+    const ui=await mount([compareDemo]);
+    const {get,fire,state}=ui;
+    await completeSingleCompare(ui);
+    const single=get('quickCompareResults').children,original=get('quickResult').children;
+    const singleStatus=get('quickCompareStatus').textContent;
+    const fixture=multiPracticeFixture(state.practice);
+    let requestIndex=0;
+    state.practice=async(body,options)=>{
+      const value=await fixture(body,options);
+      if(requestIndex++!==index)return value;
+      if(/^\d{3}$/.test(label))state.practiceHttpError=Number(label);
+      if(label==='malformed JSON')state.practiceNonJson=true;
+      return mutate(value);
+    };
+    await fire('quickCompareMultiRun');
+    assert.equal(practiceCalls(ui).length,3+index,label);
+    assertMultiEmpty(get);
+    assert.match(get('quickCompareMultiStatus').textContent,/追加の比較ができませんでした/);
+    assert.equal(get('quickCompareStatus').textContent,singleStatus,label);
+    assert.equal(get('quickCompareResults').children,single,label);
+    assert.equal(get('quickResult').children,original,label);
+    assert.equal(get('quickReplay').hidden,false,label);
+    assert.equal(get('quickCompareMultiRun').disabled,false,label);
+  }
+});
+
+test('P9r validates the saved self strategy for either orientation, including null transitions',async()=>{
+  for(const selfIsA of [true,false]) {
+    for(const [initial,updated] of [
+      [null,savedCompareStrategy],
+      [savedCompareStrategy,null],
+      [savedCompareStrategy,{...savedCompareStrategy,risk_percent:40}],
+      [savedCompareStrategy,{...savedCompareStrategy,approach:'momentum'}],
+      [null,undefined],
+      [null,{...savedCompareStrategy,risk_percent:37}],
+      [savedCompareStrategy,{...savedCompareStrategy}],
+    ]) {
+      const ui=await mount([compareDemo]);
+      const {get,fire,state}=ui;
+      const practice=state.practice;
+      state.practice=async body=>({...await practice(body),
+        companion_strategy:body.model_id==='self'?initial:null});
+      if(!selfIsA)get('quickModel').value=compareDemo.id;
+      await completeSingleCompare(ui,selfIsA?compareDemo.id:'self');
+      const single=get('quickCompareResults').children;
+      const fixture=multiPracticeFixture(state.practice);
+      let index=0;
+      state.practice=async(body,options)=>{
+        const value=await fixture(body,options);
+        if(index++>=2 && body.model_id==='self')value.companion_strategy=updated;
+        return value;
+      };
+      await fire('quickCompareMultiRun');
+      if(updated?.approach===initial?.approach && updated?.risk_percent===initial?.risk_percent &&
+         updated!==undefined && updated!==null) {
+        assert.equal(get('quickCompareMultiResults').hidden,false);
+      } else {
+        assertMultiEmpty(get);
+        assert.match(get('quickCompareMultiStatus').textContent,/追加の比較ができませんでした/);
+        assert.equal(practiceCalls(ui).length,selfIsA?5:6);
+      }
+      assert.equal(get('quickCompareResults').children,single);
+    }
+  }
+});
+
+test('P9r stays hidden for failed P9q, legacy self and unavailable B models',async()=>{
+  for(const scenario of ['failed B','legacy self','locked demo','unregistered ZIP']) {
+    const zipId='zip_'+'c'.repeat(32);
+    const ui=await mount([compareDemo,{id:'demo_reversion',name:'未解放',owned:false},{id:zipId,name:'未登録',owned:true}]);
+    const {get,fire,state}=ui;
+    const practice=state.practice;
+    state.practice=async body=>{
+      const value=await practice(body);
+      if(scenario==='legacy self')delete value.model_id;
+      if(scenario==='failed B' && body.scenario_token)return {...value,order_placed:true};
+      return value;
+    };
+    await completeSingleCompare(ui,scenario==='unregistered ZIP'?zipId:scenario==='locked demo'?'demo_reversion':compareDemo.id);
+    assert.equal(get('quickCompareMulti').hidden,true,scenario);
+    assert.equal(get('quickCompareMultiRun').disabled,true,scenario);
+    await fire('quickCompareMultiRun');
+    assert.equal(practiceCalls(ui).length,scenario==='failed B'?2:1);
+    assertMultiEmpty(get);
+  }
+});
+
+test('P9r aborts on model or form changes, quickAgain and pagehide, ignoring late A and B replies',async()=>{
+  for(const change of ['B changed','B disappeared','A disappeared','A renamed','list renamed','form edited','form submit','quickAgain','pagehide']) {
+    for(const waitingForB of [false,true]) {
+      const secondDemo={id:'demo_reversion',name:'反転AI',owned:true};
+      const ui=await mount([compareDemo,secondDemo]);
+      const {get,fire,state,pagehide,focus}=ui;
+      const changeA=change==='A disappeared' || change==='A renamed';
+      if(changeA)get('quickModel').value=compareDemo.id;
+      await completeSingleCompare(ui,changeA?'self':compareDemo.id);
+      assert.equal(get('quickCompareMultiRun').disabled,false);
+      const fixture=multiPracticeFixture(state.practice);
+      const {promise,resolve}=Promise.withResolvers();
+      let signal;
+      state.practice=async(body,options)=>{
+        const value=await fixture(body,options);
+        if(Object.hasOwn(body,'scenario_token')===waitingForB) {
+          signal=options.signal;
+          await promise;
+        }
+        return value;
+      };
+      const running=fire('quickCompareMultiRun');
+      const original=get('quickResult').children;
+      await tick();
+      assert.equal(practiceCalls(ui).length,waitingForB?4:3,change);
+      assert.equal(signal.aborted,false,change);
+      if(change==='B changed')await chooseCompareModel(ui,'demo_reversion');
+      else if(change.endsWith('disappeared') || change.endsWith('renamed')) {
+        state.models=change.endsWith('renamed')?[{...compareDemo,name:'改名済み'},secondDemo]:[];
+        focus();
+        await tick();
+        if(change==='A renamed') {
+          assert.equal(get('quickResult').children,original);
+          assert.equal(get('quickCompareResults').hidden,true);
+          assert.equal(get('quickCompareRun').disabled,false);
+          assert.equal(get('quickCompareModel').value,'self');
+        }
+      } else if(change==='form edited')await fire('quickAmount','input');
+      else if(change==='form submit')await fire('quickForm','submit');
+      else if(change==='pagehide')pagehide();
+      else await fire('quickAgain');
+      assert.equal(signal.aborted,true,change);
+      assert.equal(get('quickCompareMulti').hidden,true,change);
+      assert.equal(get('quickCompareMultiRun').disabled,true,change);
+      const count=practiceCalls(ui).length;
+      resolve();
+      await running;
+      await fire('quickCompareMultiRun');
+      assert.equal(practiceCalls(ui).length,count,change);
+      assertMultiEmpty(get);
+      assert.equal(get('quickCompareMultiStatus').textContent,'',change);
+    }
+  }
+});
+
+test('P9r late replies never render into a fresh page or unlock a restarted batch',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui,practice=state.practice;
+  await completeSingleCompare(ui);
+  const oldGate=Promise.withResolvers(),newGate=Promise.withResolvers();
+  let oldSignal;
+  state.practice=async(body,options)=>{
+    oldSignal=options.signal;
+    const value=await practice(body);
+    await oldGate.promise;
+    return {...value,scenario_token:multiTokens[0]};
+  };
+  const old=fire('quickCompareMultiRun');
+  await fire('quickAgain');
+  assert.equal(oldSignal.aborted,true);
+  state.practice=practice;
+  await completeSingleCompare(ui);
+  const fixture=multiPracticeFixture(practice);
+  state.practice=async(body,options)=>{
+    await newGate.promise;
+    return fixture(body,options);
+  };
+  const current=fire('quickCompareMultiRun');
+  const fresh=await mount([compareDemo]);
+  oldGate.resolve();
+  await old;
+  assertMultiEmpty(fresh.get);
+  assert.equal(fresh.get('quickCompareMultiRun').disabled,true);
+  assertMultiEmpty(get);
+  assert.equal(get('quickCompareMultiRun').disabled,true);
+  assert.equal(get('quickCompareRun').disabled,true);
+  assert.match(get('quickCompareMultiStatus').textContent,/計算しています/);
+  await fire('quickCompareMultiRun');
+  assert.equal(practiceCalls(ui).length,6);
+  newGate.resolve();
+  await current;
+  assert.equal(practiceCalls(ui).length,11);
+  assert.equal(get('quickCompareMultiResults').hidden,false);
+  assert.equal(get('quickCompareMultiRun').disabled,false);
+});
+
+test('P9r clears old results at the start of a retry and a fresh P9q failure',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui,practice=state.practice;
+  await completeSingleCompare(ui);
+  state.practice=multiPracticeFixture(practice);
+  await fire('quickCompareMultiRun');
+  assert.equal(get('quickCompareMultiResults').hidden,false);
+  const gate=Promise.withResolvers();
+  state.practice=()=>gate.promise;
+  const retry=fire('quickCompareMultiRun');
+  assertMultiEmpty(get);
+  gate.resolve({error:'unavailable'});
+  await retry;
+  assertMultiEmpty(get);
+  assert.equal(get('quickCompareResults').hidden,false);
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareMulti').hidden,true);
+  assert.equal(get('quickCompareMultiStatus').textContent,'');
+});
+
+test('P9r and optional session or dialogue requests never overlap',async()=>{
+  const ui=await mount([compareDemo],'session');
+  const {get,fire,state,calls}=ui;
+  await completeSingleCompare(ui);
+  await fire('quickFollowing');
+  await shareReflection(get,fire);
+  for(const [id,key,result] of [
+    ['quickChatGPTAsk','dialogue',{status:'ok',commentary:'何を重視しましたか？'}],
+    ['quickChatGPTStatusCheck','session',{connected:true,sharing:true}],
+  ]) {
+    const gate=Promise.withResolvers();
+    state[key]=()=>gate.promise;
+    const session=fire(id);
+    assert.equal(get('quickCompareMultiRun').disabled,true);
+    await fire('quickCompareMultiRun');
+    assert.equal(practiceCalls(ui).length,2);
+    gate.resolve(result);
+    await session;
+    assert.equal(get('quickCompareMultiRun').disabled,false);
+  }
+  await shareReflection(get,fire);
+  const gate=Promise.withResolvers();
+  const fixture=multiPracticeFixture(state.practice);
+  state.practice=async(body,options)=>{
+    await gate.promise;
+    return fixture(body,options);
+  };
+  const running=fire('quickCompareMultiRun');
+  for(const id of ['quickChatGPTAsk','quickChatGPTStatusCheck']) {
+    assert.equal(get(id).disabled,true);
+    const count=calls.length;
+    await fire(id);
+    assert.equal(calls.length,count,id);
+  }
+  gate.resolve();
+  await running;
+  assert.equal(get('quickCompareMultiResults').hidden,false);
+  assert.equal(get('quickChatGPTAsk').disabled,false);
+  assert.equal(get('quickChatGPTStatusCheck').disabled,false);
+});
+
+test('P9r formats zero without a negative sign when a mean rounds to zero',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui;
+  await completeSingleCompare(ui);
+  const fixture=multiPracticeFixture(state.practice);
+  state.practice=async(body,options)=>{
+    const value=await fixture(body,options);
+    const profit=value.scenario_token===multiTokens[0]?-0.01:0;
+    return {...value,profit_coins:profit,final_balance:10000+profit,max_drawdown_pct:-0,
+      daily_balances:[...value.daily_balances.slice(0,12),10000+profit]};
+  };
+  await fire('quickCompareMultiRun');
+  const average=get('quickCompareMultiCards').children.at(-1);
+  assert.deepEqual(average.children.slice(1).map(row=>row.textContent),[
+    'A：参考平均損益 0 C ／ 最大下落率の平均 0%','B：参考平均損益 0 C ／ 最大下落率の平均 0%',
+  ]);
 });
