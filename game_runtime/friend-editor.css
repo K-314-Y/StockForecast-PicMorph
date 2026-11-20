@@ -67,6 +67,7 @@ h2 { font-size: 1.15rem; }
   background-color: #faf6fc;
   overflow-wrap: anywhere;
 }
+.practice-milestones[data-complete] { border-color: var(--accent); }
 .practice-milestones h3 { margin: 0 0 .35rem; font-size: 1rem; }
 .practice-milestones progress {
   display: block;

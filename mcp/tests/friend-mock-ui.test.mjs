@@ -836,6 +836,9 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   await node('accessory').selectOption('star');
   await revealRound(2, 112);
   await achievement(2, '練習を続ける', '全3回完走');
+  const milestones = node('practice-milestones');
+  const borderColor = () => milestones.evaluate(el => getComputedStyle(el).borderTopColor);
+  const inProgressBorder = await borderColor();
   assert.equal(await node('accessory').inputValue(), 'star');
   await text('look-dirty', '未保存の変更あり');
   assert.equal(await highlightCount(), 0);
@@ -858,8 +861,13 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   assert.doesNotMatch(await memories.nth(2).textContent(), /不的中/);
   assert.match(await memories.nth(2).textContent(), /予測 未判定.*結果 UP.*Brier.*companion-v1/);
   await page.waitForFunction(() => window.journeyHighlights === 1);
+  await page.waitForFunction(() => !document.getElementById('practice-milestones').classList.contains('journey-highlight'));
+  const completedBorder = await borderColor();
+  assert.notEqual(completedBorder, inProgressBorder);
+  assert.equal(completedBorder, await node('practice-journey-badge').evaluate(el => getComputedStyle(el).color));
   await page.emulateMedia({reducedMotion:'reduce'});
   assert.equal(await node('practice-milestones').evaluate(el => getComputedStyle(el).animationName), 'none');
+  assert.equal(await borderColor(), completedBorder);
   await page.emulateMedia({reducedMotion:'no-preference'});
   await node('practice-refresh').click();
   await text('message', '練習状態を再取得しました。');
