@@ -16,9 +16,19 @@
       </div>
       <div class="account" id="account" hidden>
         <span>口座 <b id="account-id"></b></span>
+        <button type="button" id="retry-reads" class="secondary" hidden>取得できなかった項目を再読み込み</button>
         <button type="button" id="logout" class="secondary">ログアウト</button>
       </div>
     </header>
+
+    <dialog id="logout-dialog" class="card" aria-labelledby="logout-title" aria-describedby="logout-detail">
+      <h2 id="logout-title">未保存の変更を破棄しますか？</h2>
+      <p id="logout-detail">ログアウトすると、この画面の下書きは消えます。</p>
+      <form method="dialog" class="actions">
+        <button type="submit" class="secondary" value="cancel" autofocus>編集を続ける</button>
+        <button type="submit" id="discard-logout" value="discard">破棄してログアウト</button>
+      </form>
+    </dialog>
 
     <p id="feedback" class="feedback" role="status"><span id="spinner" aria-hidden="true" hidden></span><span id="message"></span></p>
 
@@ -26,7 +36,7 @@
       <h2 id="login-title">招待でログイン</h2>
       <p>管理者から受け取った一度限りのコードを入力してください。</p>
       <label for="invite">招待コード</label>
-      <input id="invite" type="password" autocomplete="off" spellcheck="false" maxlength="43" required disabled>
+      <input id="invite" type="password" autocomplete="off" spellcheck="false" maxlength="128" required disabled>
       <button id="login-button" type="submit" disabled>アトリエに入る</button>
       <noscript><p>ログインには JavaScript が必要です。</p></noscript>
     </form>
@@ -83,7 +93,10 @@
         <div id="profile" class="forms" hidden>
           <form id="companion-form" class="card" aria-labelledby="companion-title" autocomplete="off">
             <h2 id="companion-title">相棒と戦略</h2>
-            <p class="revision">保存版 <b id="companion-revision"></b></p>
+            <div class="revision-row">
+              <p class="revision">保存版 <b id="companion-revision"></b></p>
+              <span id="companion-dirty" class="dirty" role="status"></span>
+            </div>
             <fieldset id="companion-fields" disabled>
               <label for="companion-name">相棒の名前</label>
               <input id="companion-name" type="text" maxlength="32" required aria-describedby="name-hint">
@@ -103,13 +116,21 @@
               <input id="risk" type="range" min="5" max="100" step="5">
               <button id="save-companion" type="submit">相棒と戦略を保存</button>
             </fieldset>
+            <p id="companion-conflict" class="hint" hidden>最新の保存内容を表示しています。下書きを再適用してから内容を確認できます。</p>
+            <div class="actions">
+              <button id="restore-companion" type="button" class="secondary" disabled>保存内容に戻す</button>
+              <button id="reapply-companion" type="button" class="secondary" hidden>下書きを再適用</button>
+            </div>
             <p class="hint">戦略の変更は次回以降の予測候補に反映されます。</p>
             <p class="model">編集設定のモデル版 <span id="editable-version"></span></p>
           </form>
 
           <form id="look-form" class="card" aria-labelledby="look-title" autocomplete="off">
             <h2 id="look-title">外見パーツ</h2>
-            <p class="revision">保存版 <b id="look-revision"></b></p>
+            <div class="revision-row">
+              <p class="revision">保存版 <b id="look-revision"></b></p>
+              <span id="look-dirty" class="dirty" role="status"></span>
+            </div>
             <fieldset id="look-fields" disabled>
               <label for="hair-style">髪型</label>
               <select id="hair-style"><option value="bob">ボブ</option><option value="long">ロング</option><option value="twintails">ツインテール</option></select>
@@ -119,6 +140,11 @@
               <select id="accessory"><option value="ribbon">リボン</option><option value="glasses">めがね</option><option value="star">星</option><option value="none">なし</option></select>
               <button id="save-look" type="submit">外見パーツを保存</button>
             </fieldset>
+            <p id="look-conflict" class="hint" hidden>最新の保存内容を表示しています。下書きを再適用してから内容を確認できます。</p>
+            <div class="actions">
+              <button id="restore-look" type="button" class="secondary" disabled>保存内容に戻す</button>
+              <button id="reapply-look" type="button" class="secondary" hidden>下書きを再適用</button>
+            </div>
           </form>
         </div>
       </div>

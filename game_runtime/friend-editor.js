@@ -22,6 +22,12 @@ const groups = {
     inputs:{hair_style:byId('hair-style'), expression:byId('expression'), accessory:byId('accessory')},
   },
 };
+for (const [kind, group] of Object.entries(groups)) {
+  group.dirtyStatus = byId(kind + '-dirty');
+  group.conflict = byId(kind + '-conflict');
+  group.restore = byId('restore-' + kind);
+  group.reapply = byId('reapply-' + kind);
+}
 const options = input => Array.from(input.options, option => option.value);
 const approaches = options(groups.companion.inputs.approach);
 const lookChoices = Object.entries(groups.look.inputs).map(([key, input]) => [key, options(input)]);
@@ -69,6 +75,8 @@ const profileError = byId('profile-error');
 const account = byId('account');
 const accountId = byId('account-id');
 const logout = byId('logout');
+const logoutDialog = byId('logout-dialog');
+const retryReads = byId('retry-reads');
 const wallet = byId('wallet');
 const forecast = byId('forecast');
 const frozen = byId('frozen');
@@ -100,7 +108,32 @@ function previewEdits() {
 // previous page/session cannot render after the UI has been cleared.
 let session;
 let operation;
-const revisions = {companion:null, look:null};
+let failedReads = [];
+
+function draftValues(group) {
+  return Object.fromEntries(Object.entries(group.inputs).map(([key, input]) =>
+    [key, input.type === 'range' ? input.valueAsNumber : input.value]));
+}
+
+function writeValues(group, values) {
+  for (const [key, input] of Object.entries(group.inputs)) {
+    if (Object.hasOwn(values, key)) input.value = values[key];
+  }
+}
+
+function isDirty(group) {
+  return Boolean(group.pendingDraft || (group.saved &&
+    Object.entries(draftValues(group)).some(([key, value]) => value !== group.saved[key])));
+}
+
+function hasUnsaved() {
+  return Object.values(groups).some(isDirty);
+}
+
+function warnBeforeLeaving(event) {
+  event.preventDefault();
+  event.returnValue = true;
+}
 
 function feedback(message = '', error = false) {
   byId('message').textContent = message;
@@ -113,19 +146,32 @@ function syncControls() {
   invite.disabled = busy;
   byId('login-button').disabled = busy;
   logout.disabled = busy;
-  for (const [kind, group] of Object.entries(groups)) {
-    group.fields.disabled = busy || revisions[kind] === null;
+  retryReads.disabled = busy;
+  retryReads.hidden = failedReads.length === 0;
+  for (const group of Object.values(groups)) {
+    const dirty = isDirty(group);
+    const hasConflict = Boolean(group.pendingDraft);
+    group.fields.disabled = busy || !group.saved || hasConflict;
+    group.restore.disabled = busy || !dirty;
+    group.reapply.disabled = busy;
+    group.reapply.hidden = group.conflict.hidden = !hasConflict;
+    const text = hasConflict ? '未保存の下書きあり' : dirty ? '未保存の変更あり' : '';
+    if (group.dirtyStatus.textContent !== text) group.dirtyStatus.textContent = text;
   }
+  if (hasUnsaved()) window.addEventListener('beforeunload', warnBeforeLeaving);
+  else window.removeEventListener('beforeunload', warnBeforeLeaving);
 }
 
 function clearAccount() {
   session = undefined;
+  failedReads = [];
+  if (logoutDialog.open) logoutDialog.close('');
   login.hidden = false;
   for (const panel of [workspace, account, profile, preview, profileError, frozen]) panel.hidden = true;
   for (const element of [accountId, wallet, forecast, frozenVersion, editableVersion, previewName,
     profileError, groups.companion.revision, groups.look.revision]) element.textContent = '';
-  for (const [kind, group] of Object.entries(groups)) {
-    revisions[kind] = null;
+  for (const group of Object.values(groups)) {
+    group.saved = group.pendingDraft = undefined;
     group.form.reset();
   }
   for (const part of parts) part.classList.remove('selected');
@@ -198,9 +244,10 @@ async function run(pending, fallback, action) {
 function renderGroup(kind, data) {
   const group = groups[kind];
   const record = data[group.apiKey];
-  for (const [key, input] of Object.entries(group.inputs)) input.value = record[key];
-  revisions[kind] = record.revision;
-  group.revision.textContent = record.created ? String(record.revision) : '0（未保存）';
+  group.saved = record;
+  group.pendingDraft = undefined;
+  writeValues(group, record);
+  group.revision.textContent = record.created ? String(record.revision) : '0（初期値）';
   if (kind === 'companion') editableVersion.textContent = data.model_version ?? '未作成';
 }
 
@@ -209,6 +256,8 @@ function renderProfile(data) {
   renderGroup('look', data);
   profile.hidden = false;
   preview.hidden = false;
+  profileError.hidden = true;
+  profileError.textContent = '';
   previewEdits();
 }
 
@@ -233,6 +282,53 @@ function forecastInfo(data) {
   return {text:record.status === 'PENDING' ? '確定済み・採点待ち' : '採点済み', version:record.model_version};
 }
 
+const panelReads = [
+  {
+    path:'/friend/character', validate:validateProfile, render:renderProfile,
+    fail() {
+      profileError.textContent = '編集設定を読み込めませんでした。再読み込みをお試しください。';
+      profileError.hidden = false;
+    },
+  },
+  {
+    path:'/friend/forward/summary', validate:walletText,
+    render(value) { wallet.textContent = value; },
+    fail() { wallet.textContent = '財布を読み込めませんでした。'; },
+  },
+  {
+    path:'/friend/forward/records', validate:forecastInfo,
+    render({text, version}) {
+      forecast.textContent = text;
+      frozenVersion.textContent = version ?? '';
+      frozen.hidden = !version;
+    },
+    fail() { forecast.textContent = '予測記録を読み込めませんでした。'; },
+  },
+];
+
+async function readPanels(controller, panels) {
+  const results = await Promise.allSettled(panels.map(({path, validate}) =>
+    request(path, controller, {auth:session}).then(validate)));
+  controller.signal.throwIfAborted();
+  failedReads = panels.filter((panel, index) => {
+    const result = results[index];
+    if (result.status === 'fulfilled') panel.render(result.value);
+    else panel.fail();
+    return result.status === 'rejected';
+  });
+}
+
+retryReads.addEventListener('click', () => {
+  if (!session || operation || !failedReads.length) return;
+  void run('再読み込み中…', '再読み込みできませんでした。', async controller => {
+    await readPanels(controller, failedReads);
+    controller.signal.throwIfAborted();
+    feedback(failedReads.length ? '取得できない項目があります。もう一度お試しください。' : '再読み込みしました。',
+      Boolean(failedReads.length));
+    return failedReads.length ? retryReads : logout;
+  });
+});
+
 login.addEventListener('submit', event => {
   event.preventDefault();
   if (operation || !login.reportValidity()) return;
@@ -254,45 +350,49 @@ login.addEventListener('submit', event => {
       matches(accountPattern, info.accountId) && matches(tokenPattern, info.csrfToken) &&
       Number.isSafeInteger(info.expiresAt) && info.expiresAt > 0);
     session = {token, csrf:info.csrfToken};
-    const [character, summary, records] = await Promise.allSettled([
-      request('/friend/character', controller, {auth:session}).then(validateProfile),
-      request('/friend/forward/summary', controller, {auth:session}).then(walletText),
-      request('/friend/forward/records', controller, {auth:session}).then(forecastInfo),
-    ]);
+    await readPanels(controller, panelReads);
     controller.signal.throwIfAborted();
-    if (character.status === 'fulfilled') renderProfile(character.value);
-    else {
-      profileError.textContent = '編集設定を読み込めませんでした。再度ログインしてお試しください。';
-      profileError.hidden = false;
-    }
-    wallet.textContent = summary.status === 'fulfilled' ? summary.value : '財布を読み込めませんでした。';
-    forecast.textContent = records.status === 'fulfilled' ? records.value.text : '予測記録を読み込めませんでした。';
-    if (records.status === 'fulfilled' && records.value.version) {
-      frozenVersion.textContent = records.value.version;
-      frozen.hidden = false;
-    }
     accountId.textContent = info.accountId;
     login.hidden = true;
     account.hidden = false;
     workspace.hidden = false;
     feedback('ログインしました。');
-    return character.status === 'fulfilled' ? groups.companion.inputs.name : logout;
+    return profile.hidden ? retryReads : groups.companion.inputs.name;
   });
 });
 
 for (const [kind, group] of Object.entries(groups)) {
-  group.form.addEventListener('input', previewEdits);
+  function refreshDraft() {
+    previewEdits();
+    syncControls();
+  }
+  group.form.addEventListener('input', refreshDraft);
+  group.restore.addEventListener('click', () => {
+    if (operation || !isDirty(group)) return;
+    writeValues(group, group.saved);
+    group.pendingDraft = undefined;
+    refreshDraft();
+    Object.values(group.inputs)[0].focus();
+    feedback(group.label + 'を保存内容に戻しました。');
+  });
+  group.reapply.addEventListener('click', () => {
+    if (operation || !group.pendingDraft) return;
+    writeValues(group, group.pendingDraft);
+    group.pendingDraft = undefined;
+    refreshDraft();
+    Object.values(group.inputs)[0].focus();
+    feedback('下書きを再適用しました。内容を確認してから保存してください。');
+  });
   group.form.addEventListener('submit', event => {
     event.preventDefault();
-    if (!session || operation || revisions[kind] === null || !group.form.reportValidity()) return;
-    const draft = Object.fromEntries(Object.entries(group.inputs).map(([key, input]) =>
-      [key, input.type === 'range' ? input.valueAsNumber : input.value]));
+    if (!session || operation || !group.saved || group.pendingDraft || !group.form.reportValidity()) return;
+    const draft = draftValues(group);
     if (!(kind === 'companion' ? validCompanion(draft) : validLook(draft))) {
       feedback('名前は制御文字を含まない1〜16文字で入力し、各設定を確認してください。', true);
       return;
     }
     const button = event.submitter;
-    const expected = revisions[kind];
+    const expected = group.saved.revision;
     void run('保存中…', '保存結果を確認できませんでした。時間をおいてお試しください。', async controller => {
       try {
         const data = validateProfile(await request('/friend/character/' + kind, controller, {
@@ -307,24 +407,25 @@ for (const [kind, group] of Object.entries(groups)) {
         let latest;
         try {
           latest = validateProfile(await request('/friend/character', controller, {auth:session}));
-        } catch (reloadError) {
+        } catch {
           controller.signal.throwIfAborted();
-          // Don't keep editing against a revision we couldn't verify.
-          revisions.companion = revisions.look = null;
-          profile.hidden = preview.hidden = true;
-          profileError.textContent = '最新の編集設定を取得できませんでした。再度ログインしてお試しください。';
-          profileError.hidden = false;
-          throw reloadError;
+          feedback('最新の保存内容を取得できませんでした。入力を保持しました。時間をおいて保存をお試しください。', true);
+          return button;
         }
-        renderProfile(latest);
-        feedback('同時編集がありました。最新の設定を読み込みました。変更を入力し直して保存してください。', true);
+        const changed = Object.entries(draft).filter(([key, value]) =>
+          value !== group.saved[key] && value !== latest[group.apiKey][key]);
+        renderGroup(kind, latest);
+        if (changed.length) group.pendingDraft = Object.fromEntries(changed);
+        previewEdits();
+        feedback('同時編集がありました。' + group.label + 'の最新の保存内容を表示しました。', true);
+        return group.pendingDraft ? group.reapply : button;
       }
       return button;
     });
   });
 }
 
-logout.addEventListener('click', () => {
+function signOut() {
   if (!session || operation) return;
   const auth = session;
   clearAccount();
@@ -334,6 +435,20 @@ logout.addEventListener('click', () => {
     feedback('ログアウトしました。');
     return invite;
   });
+}
+
+logout.addEventListener('click', () => {
+  if (!session || operation) return;
+  if (hasUnsaved()) {
+    logoutDialog.returnValue = '';
+    logoutDialog.showModal();
+  } else signOut();
+});
+
+logoutDialog.addEventListener('close', () => {
+  const choice = logoutDialog.returnValue;
+  logoutDialog.returnValue = '';
+  if (choice === 'discard') signOut();
 });
 
 window.addEventListener('pagehide', () => invalidate());

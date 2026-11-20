@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  scroll-padding-top: 4rem;
   font-family: system-ui, sans-serif;
   line-height: 1.5;
   color: #30253d;
@@ -42,7 +43,14 @@ h2 { font-size: 1.15rem; }
   padding: .2rem .6rem;
   border-radius: .55rem;
 }
-.revision { width: fit-content; margin: .4rem 0 .8rem; }
+.revision-row, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.revision-row { margin: .4rem 0 .8rem; }
+.dirty { color: #84294d; font-size: .85rem; font-weight: 700; }
+.actions { margin-top: .6rem; }
+.actions + .hint { margin-top: .55rem; }
+dialog.card { color: inherit; max-width: min(26rem, calc(100% - 2rem)); }
+dialog p { margin-top: .5rem; }
+dialog::backdrop { background: #30253d80; }
 .preview { background: linear-gradient(155deg, #f3e8fb, #e9f7f4); text-align: center; }
 .preview svg { display: block; width: min(100%, 17rem); margin: .5rem auto 0; }
 .preview p { color: var(--muted); }

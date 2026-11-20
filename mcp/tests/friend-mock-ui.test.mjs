@@ -144,7 +144,7 @@ test('P9h editor endpoints persist both independent revisions and isolate accoun
   assert.deepEqual(await read(await login(server, ids[0])), appearance.json());
 });
 
-test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
+test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_000}, async t => {
   let playwright;
   try {
     playwright = await import(process.env.FRIEND_UI_PLAYWRIGHT ?? 'playwright');
@@ -180,7 +180,7 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   }
   async function openAccount(id) {
     const code = server.issueInvite(id).token;
-    await page.locator('#invite').fill(code);
+    await page.locator('#invite').fill('  ' + code + '  ');
     const response = page.waitForResponse(res => res.url() === at(redeem));
     await page.locator('#login-button').click();
     const redeemed = await response;
@@ -211,6 +211,8 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   await page.locator('#clothing-color').fill(companion.clothing_color);
   await page.locator('#approach').selectOption(companion.approach);
   await page.locator('#risk').fill(String(companion.risk_percent));
+  await text('companion-dirty', '未保存の変更あり');
+  assert.equal(await page.locator('#look-dirty').textContent(), '');
   await page.locator('#hair-style').selectOption(look.hair_style);
   await page.locator('#expression').selectOption(look.expression);
   await page.locator('#accessory').selectOption(look.accessory);
@@ -239,6 +241,8 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   }
   assert.equal((await saveResponse).status(), 200);
   await text('message', '相棒と戦略を保存しました');
+  assert.equal(await page.locator('#companion-dirty').textContent(), '');
+  await text('look-dirty', '未保存の変更あり');
   await text('editable-version', 'companion-v1_0_100_0_0_45');
   await text('frozen-version', 'appearance-v1_0_0_0_100_35');
   assert.equal(await page.locator('#accessory').inputValue(), look.accessory);
@@ -247,6 +251,28 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   await text('companion-revision', '1');
   await text('look-revision', '1');
 
+  await page.locator('#companion-name').fill('未保存の相棒');
+  await page.locator('#accessory').selectOption('none');
+  await page.locator('#restore-look').click();
+  assert.equal(await page.locator('#accessory').inputValue(), look.accessory);
+  assert.equal(await page.locator('[data-accessory="star"]').isVisible(), true);
+  assert.equal(await page.locator('#look-dirty').textContent(), '');
+  await text('preview-name', '未保存の相棒');
+  await page.locator('#logout').click();
+  const confirmation = page.locator('#logout-dialog');
+  assert.equal(await confirmation.isVisible(), true);
+  assert.equal(await confirmation.getByRole('button', {name:'編集を続ける'}).evaluate(button =>
+    document.activeElement === button), true);
+  await confirmation.getByRole('button', {name:'編集を続ける'}).click();
+  assert.equal(await confirmation.isHidden(), true);
+  await text('companion-dirty', '未保存の変更あり');
+  const navigationWarning = page.waitForEvent('dialog');
+  await page.evaluate(() => setTimeout(() => location.reload(), 0));
+  const navigationDialog = await navigationWarning;
+  assert.equal(navigationDialog.type(), 'beforeunload');
+  await navigationDialog.dismiss();
+  assert.equal(await page.locator('#companion-name').inputValue(), '未保存の相棒');
+
   // Revoking the current account makes the subsequent save return a real 401.
   server.revokeAccount(ids[0]);
   await submit('#save-look', character + '/look', 401);
@@ -254,14 +280,38 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   assert.equal(await page.locator('#account-id').textContent(), '');
   assert.equal(await page.locator('#frozen-version').textContent(), '');
   assert.equal(await page.locator('#companion-name').inputValue(), '');
+  assert.equal(await page.locator('#companion-dirty').textContent(), '');
   assert.equal(await page.locator('#workspace').isHidden(), true);
 
-  await page.route(at(summary), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
+  const unavailable = route => route.fulfill({status:503, json:{error:'unavailable'}});
+  await page.route(at(character), unavailable, {times:1});
+  await page.route(at(records), unavailable, {times:1});
+  await page.route(at(summary), unavailable, {times:2});
   await openAccount(ids[1]);
+  await text('profile-error', '編集設定を読み込めませんでした');
   await text('wallet', '財布を読み込めませんでした');
+  await text('forecast', '予測記録を読み込めませんでした');
+  await page.locator('#retry-reads').click();
+  await text('message', '取得できない項目があります');
+  assert.equal(await page.locator('#profile-error').isHidden(), true);
   await text('forecast', '予測記録は未接続');
   await text('preview-name', '私の相棒');
-  assert.equal(await page.locator('#companion-name').inputValue(), '私の相棒');
+  await page.locator('#companion-name').fill('そのままの下書き');
+  const retried = [];
+  const captureRead = request => {
+    if (request.method() === 'GET') retried.push(new URL(request.url()).pathname);
+  };
+  page.on('request', captureRead);
+  await page.locator('#retry-reads').click();
+  await text('message', '再読み込みしました');
+  page.off('request', captureRead);
+  assert.deepEqual(retried, [summary]);
+  await text('wallet', '財布は未作成');
+  assert.equal(await page.locator('#retry-reads').isHidden(), true);
+  await text('preview-name', 'そのままの下書き');
+  await page.locator('#restore-companion').click();
+  await text('preview-name', '私の相棒');
+  assert.equal(await page.locator('#companion-dirty').textContent(), '');
   await submit('#logout', logout, 200);
   await text('message', 'ログアウトしました');
   assert.equal(await page.locator('#wallet').textContent(), '');
@@ -270,22 +320,41 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   assert.equal(await page.locator('#companion-name').inputValue(), companion.name);
   assert.equal(await page.locator('#accessory').inputValue(), look.accessory);
   const {csrfToken} = (await call(server, session, {headers:bearer})).json();
-  const newer = {...look, accessory:'glasses'};
+  const newer = {...look, expression:'determined', accessory:'glasses'};
   const otherSave = await call(server, character + '/look', {
     method:'POST', headers:{...bearer, 'X-CSRF-Token':csrfToken},
     body:{expected_revision:1, look:newer},
   });
   assert.equal(otherSave.status, 200);
+  await page.locator('#companion-name').fill('戦略側の下書き');
   await page.locator('#accessory').selectOption('none');
+  await page.route(at(character), unavailable, {times:1});
   await submit('#save-look', character + '/look', 409);
-  await text('message', '最新の設定を読み込みました');
+  await text('message', '入力を保持しました');
+  assert.equal(await page.locator('#accessory').inputValue(), 'none');
+  await submit('#save-look', character + '/look', 409);
+  await text('message', '最新の保存内容を表示しました');
   assert.equal(await page.locator('#accessory').inputValue(), newer.accessory);
   await text('look-revision', '2');
-  await page.locator('#accessory').selectOption('none');
+  assert.equal(await page.locator('#companion-name').inputValue(), '戦略側の下書き');
+  await text('companion-dirty', '未保存の変更あり');
+  await text('look-dirty', '未保存の下書きあり');
+  assert.equal(await page.locator('#save-look').isDisabled(), true);
+  await submit('#save-companion', character + '/companion', 200);
+  await text('message', '相棒と戦略を保存しました');
+  await text('look-dirty', '未保存の下書きあり');
+  await page.locator('#reapply-look').click();
+  await text('look-dirty', '未保存の変更あり');
+  assert.equal(await page.locator('#accessory').inputValue(), 'none');
+  assert.equal(await page.locator('#expression').inputValue(), newer.expression);
+  assert.equal((await call(server, character, {headers:bearer})).json().looks.accessory, newer.accessory);
   await submit('#save-look', character + '/look', 200);
   await text('look-revision', '3');
+  assert.equal(await page.locator('#companion-name').inputValue(), '戦略側の下書き');
+  await page.locator('#companion-name').fill('破棄する下書き');
   await page.route(at(logout), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
-  await submit('#logout', logout, 503);
+  await page.locator('#logout').click();
+  await submit('#discard-logout', logout, 503);
   await text('message', 'サーバーへの通知は確認できませんでした');
   assert.equal(await page.locator('#workspace').isHidden(), true);
   assert.equal(await page.locator('#companion-name').inputValue(), '');
@@ -320,6 +389,26 @@ test('P9h isolated Chromium browser smoke', {timeout:35_000}, async t => {
   await text('wallet', '財布は未作成');
   assert.equal(await page.locator('#account-id').textContent(), ids[1]);
   assert.equal(await page.locator('#companion-name').inputValue(), '私の相棒');
+
+  const cleanDialogs = [];
+  page.on('dialog', async dialog => {
+    cleanDialogs.push(dialog.type());
+    await dialog.accept();
+  });
+  await page.reload();
+  assert.deepEqual(cleanDialogs, []);
+  assert.equal(await page.locator('#workspace').isHidden(), true);
+  await page.route(at(records), unavailable, {times:1});
+  await openAccount(ids[0]);
+  await page.locator('#companion-name').fill('失効時の下書き');
+  server.revokeAccount(ids[0]);
+  await page.locator('#retry-reads').click();
+  await text('message', 'セッションが終了しました');
+  assert.equal(await page.locator('#companion-name').inputValue(), '');
+  assert.equal(await page.locator('#companion-dirty').textContent(), '');
+  assert.equal(await page.locator('#retry-reads').isHidden(), true);
+  await page.reload();
+  assert.deepEqual(cleanDialogs, []);
 
   assert.deepEqual(await page.evaluate(() => ({
     cookies:document.cookie, session:sessionStorage.length, local:localStorage.length, url:location.href,
