@@ -13,6 +13,7 @@
       <div>
         <h1>相棒アトリエ</h1>
         <p>ちび相棒の姿と予測スタイルを育てよう。</p>
+        <p class="hint">ローカル専用の試作 · 架空データ（MOCK_NONLIVE） · 本番未完成</p>
       </div>
       <div class="account" id="account" hidden>
         <span>口座 <b id="account-id"></b></span>
@@ -42,6 +43,16 @@
     </form>
 
     <div id="workspace" class="workspace" hidden>
+      <section class="card journey" aria-labelledby="journey-title">
+        <h2 id="journey-title">相棒の予測ノート</h2>
+        <ol class="journey-steps">
+          <li><b>相棒を編集</b><span id="saved-companion"></span></li>
+          <li><b>次回向けモデル候補版</b><span id="editable-version"></span></li>
+          <li><b>確定済みの架空予測</b><span id="prediction-step"></span></li>
+          <li><b>結果・成績</b><span id="result-step"></span></li>
+        </ol>
+      </section>
+
       <section id="preview" class="card preview" aria-labelledby="preview-title" hidden>
         <h2 id="preview-title">プレビュー</h2>
         <svg id="avatar" viewBox="0 0 280 280" aria-hidden="true">
@@ -122,7 +133,6 @@
               <button id="reapply-companion" type="button" class="secondary" hidden>下書きを再適用</button>
             </div>
             <p class="hint">戦略の変更は次回以降の予測候補に反映されます。</p>
-            <p class="model">編集設定のモデル版 <span id="editable-version"></span></p>
           </form>
 
           <form id="look-form" class="card" aria-labelledby="look-title" autocomplete="off">
@@ -150,12 +160,50 @@
       </div>
 
       <section class="card mock" aria-labelledby="mock-title">
-        <div class="mock-heading"><h2 id="mock-title">模擬記録</h2><span>MOCK_NONLIVE</span></div>
-        <dl>
-          <div><dt>ポケット財布</dt><dd id="wallet"></dd></div>
-          <div><dt>模擬予測</dt><dd id="forecast"></dd></div>
-          <div id="frozen" hidden><dt>確定予測のモデル版</dt><dd id="frozen-version" class="model"></dd></div>
+        <div class="mock-heading">
+          <h2 id="mock-title">模擬記録</h2>
+          <button id="refresh-mock" type="button" class="secondary">模擬記録を再取得</button>
+        </div>
+        <p class="hint">検証済みの架空記録を読み取り専用で表示します。予測の新規実行・確定、自動売買は準備中です。</p>
+        <dl class="mock-summary">
+          <div><dt>ポケット財布（模擬）</dt><dd id="wallet"></dd></div>
+          <div><dt>模擬予測の状態</dt><dd id="forecast"></dd></div>
         </dl>
+        <p id="mock-unconnected" class="hint" hidden>架空予測の実行を画面につなぐ機能は今後の予定です。</p>
+        <div id="mock-record" class="record-grid" hidden>
+          <section class="record-panel" aria-labelledby="frozen-title">
+            <h3 id="frozen-title">確定済みの架空予測</h3>
+            <dl>
+              <div class="record-model"><dt>確定予測のモデル版</dt><dd id="frozen-version"></dd></div>
+              <div><dt>予測AI</dt><dd id="record-ai"></dd></div>
+              <div><dt>銘柄コード</dt><dd id="record-symbol"></dd></div>
+              <div><dt>予測方向</dt><dd id="record-direction"></dd></div>
+              <div><dt>予測変化率</dt><dd id="record-change"></dd></div>
+              <div><dt>確定日時（日本時間）</dt><dd id="record-confirmed"></dd></div>
+              <div><dt>予測先日時（日本時間）</dt><dd id="record-target"></dd></div>
+            </dl>
+          </section>
+          <section class="record-panel" aria-labelledby="result-title">
+            <h3 id="result-title">結果・成績</h3>
+            <p id="record-pending" class="hint" hidden>採点結果はまだ記録されていません。</p>
+            <dl id="record-score" hidden>
+              <div><dt>実際の方向（模擬）</dt><dd id="score-direction"></dd></div>
+              <div><dt>方向の当否</dt><dd id="score-correct"></dd></div>
+              <div><dt>Brier スコア</dt><dd id="score-brier"></dd></div>
+              <div><dt>変化率の絶対誤差</dt><dd id="score-error"></dd></div>
+              <div><dt>採点日時（日本時間）</dt><dd id="score-time"></dd></div>
+            </dl>
+          </section>
+          <section id="record-pnl" class="record-panel record-pnl" aria-labelledby="pnl-title" hidden>
+            <h3 id="pnl-title">仮想損益</h3>
+            <dl>
+              <div><dt>元の仮想損益</dt><dd id="raw-pnl"></dd></div>
+              <div id="fx-rate-row" hidden><dt>FX倍率</dt><dd id="fx-rate"></dd></div>
+              <div id="fx-pnl-row" hidden><dt>FX後の仮想損益</dt><dd id="fx-pnl"></dd></div>
+            </dl>
+            <p id="fx-note" class="hint" hidden>FX後の仮想損益は表示専用で、ポケット財布には反映されません。</p>
+          </section>
+        </div>
       </section>
     </div>
   </main>

@@ -77,11 +77,13 @@ const accountId = byId('account-id');
 const logout = byId('logout');
 const logoutDialog = byId('logout-dialog');
 const retryReads = byId('retry-reads');
+const refreshMock = byId('refresh-mock');
 const wallet = byId('wallet');
 const forecast = byId('forecast');
-const frozen = byId('frozen');
-const frozenVersion = byId('frozen-version');
+const savedCompanion = byId('saved-companion');
 const editableVersion = byId('editable-version');
+const predictionStep = byId('prediction-step');
+const resultStep = byId('result-step');
 const previewName = byId('preview-name');
 const riskValue = byId('risk-value');
 
@@ -148,6 +150,7 @@ function syncControls() {
   logout.disabled = busy;
   retryReads.disabled = busy;
   retryReads.hidden = failedReads.length === 0;
+  refreshMock.disabled = busy;
   for (const group of Object.values(groups)) {
     const dirty = isDirty(group);
     const hasConflict = Boolean(group.pendingDraft);
@@ -167,9 +170,10 @@ function clearAccount() {
   failedReads = [];
   if (logoutDialog.open) logoutDialog.close('');
   login.hidden = false;
-  for (const panel of [workspace, account, profile, preview, profileError, frozen]) panel.hidden = true;
-  for (const element of [accountId, wallet, forecast, frozenVersion, editableVersion, previewName,
-    profileError, groups.companion.revision, groups.look.revision]) element.textContent = '';
+  for (const panel of [workspace, account, profile, preview, profileError]) panel.hidden = true;
+  for (const element of [accountId, wallet, forecast, savedCompanion, editableVersion, previewName,
+    predictionStep, resultStep, profileError, groups.companion.revision, groups.look.revision]) element.textContent = '';
+  clearRecord();
   for (const group of Object.values(groups)) {
     group.saved = group.pendingDraft = undefined;
     group.form.reset();
@@ -248,7 +252,10 @@ function renderGroup(kind, data) {
   group.pendingDraft = undefined;
   writeValues(group, record);
   group.revision.textContent = record.created ? String(record.revision) : '0（初期値）';
-  if (kind === 'companion') editableVersion.textContent = data.model_version ?? '未作成';
+  if (kind === 'companion') {
+    savedCompanion.textContent = record.created ? '保存済み · ' + record.name : '相棒は初期設定';
+    editableVersion.textContent = data.model_version ?? '戦略を保存すると表示';
+  }
 }
 
 function renderProfile(data) {
@@ -272,37 +279,148 @@ function walletText(data) {
   return '未配分 ' + format.format(summary.unallocated) + ' 枚 ／ 初期 ' + format.format(summary.initialMedals) + ' 枚';
 }
 
-function forecastInfo(data) {
-  checked(exact(data, ['status', 'records']) && Array.isArray(data.records));
-  if (data.status === 'unconnected' && data.records.length === 0) return {text:'予測記録は未接続です。'};
-  const [record] = data.records;
-  checked(data.status === 'MOCK_NONLIVE' && data.records.length === 1 && isObject(record) &&
-    record.sourceMode === 'MOCK_NONLIVE' && ['PENDING', 'SCORED_MOCK_NONLIVE'].includes(record.status) &&
-    matches(frozenModelPattern, record.model_version));
-  return {text:record.status === 'PENDING' ? '確定済み・採点待ち' : '採点済み', version:record.model_version};
+const directions = ['UP', 'FLAT', 'DOWN'];
+const symbolPattern = /^[0-9A-Z]{4,5}$/;
+const aiPattern = /^[a-z][a-z0-9_-]{1,39}$/;
+const timestampPattern = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+
+function validTimestamp(value) {
+  return matches(timestampPattern, value) && Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value;
 }
 
-const panelReads = [
-  {
-    path:'/friend/character', validate:validateProfile, render:renderProfile,
-    fail() {
-      profileError.textContent = '編集設定を読み込めませんでした。再読み込みをお試しください。';
-      profileError.hidden = false;
-    },
+function validOrder(order, filledStatus) {
+  return exact(order, ['status', 'at']) && ['NONE', 'QUEUED', 'CANCELLED', filledStatus].includes(order.status) &&
+    (order.status === 'NONE' ? order.at === null : validTimestamp(order.at));
+}
+
+function validScore(record) {
+  const {score, open, close, targetAt, direction, predictedChangePct} = record;
+  if (record.status === 'PENDING') return score === null;
+  return record.status === 'SCORED_MOCK_NONLIVE' &&
+    exact(score, ['brier', 'directionCorrect', 'actualDirection', 'absoluteChangeErrorPctPoints', 'scoredAt']) &&
+    open.status === 'OPENED' && close.status === 'CLOSED' && close.at === targetAt &&
+    directions.includes(score.actualDirection) &&
+    score.directionCorrect === (direction === null ? null : direction === score.actualDirection) &&
+    Number.isFinite(score.brier) && score.brier >= 0 && score.brier <= 2 &&
+    (predictedChangePct === null ? score.absoluteChangeErrorPctPoints === null :
+      Number.isFinite(score.absoluteChangeErrorPctPoints) && score.absoluteChangeErrorPctPoints >= 0) &&
+    validTimestamp(score.scoredAt) && Date.parse(score.scoredAt) >= Date.parse(targetAt);
+}
+
+function validFx(record) {
+  const {fx} = record;
+  return fx === undefined || fx === null || (record.score !== null &&
+    exact(fx, ['rawPnl', 'gamePnl', 'basisPoints', 'commitment']) && fx.rawPnl === record.realizedPnl &&
+    Number.isFinite(fx.gamePnl) && [9800, 9900, 10000, 10100, 10200].includes(fx.basisPoints) &&
+    matches(/^[a-f0-9]{64}$/, fx.commitment));
+}
+
+function validateForecast(data) {
+  checked(exact(data, ['status', 'records']) && Array.isArray(data.records));
+  if (data.status === 'unconnected' && data.records.length === 0) return null;
+  const [record] = data.records;
+  const fields = ['aiId', 'model_version', 'symbol', 'sourceMode', 'confirmedAt', 'targetAt',
+    'direction', 'predictedChangePct', 'open', 'close', 'realizedPnl', 'score', 'status'];
+  if (isObject(record) && Object.hasOwn(record, 'fx')) fields.push('fx');
+  checked(data.status === 'MOCK_NONLIVE' && data.records.length === 1 && exact(record, fields));
+  const {predictedChangePct:change, direction} = record;
+  const pointDirection = change > 0 ? 'UP' : change < 0 ? 'DOWN' : 'FLAT';
+  checked(record.sourceMode === 'MOCK_NONLIVE' && matches(aiPattern, record.aiId) &&
+    matches(frozenModelPattern, record.model_version) && matches(symbolPattern, record.symbol) &&
+    validTimestamp(record.confirmedAt) && validTimestamp(record.targetAt) &&
+    Date.parse(record.confirmedAt) < Date.parse(record.targetAt) &&
+    (direction === null || directions.includes(direction)) &&
+    (change === null || (Number.isFinite(change) && change > -100 && change <= 10_000 &&
+      direction === pointDirection)) &&
+    validOrder(record.open, 'OPENED') && validOrder(record.close, 'CLOSED') &&
+    (record.close.status === 'NONE' || record.open.status === 'OPENED') &&
+    (record.close.status === 'CLOSED' ? Number.isFinite(record.realizedPnl) : record.realizedPnl === null) &&
+    validScore(record) && validFx(record));
+  return record;
+}
+
+const recordPanel = byId('mock-record');
+const unconnected = byId('mock-unconnected');
+const scorePanel = byId('record-score');
+const pendingScore = byId('record-pending');
+const pnlPanel = byId('record-pnl');
+const fxRows = ['fx-rate-row', 'fx-pnl-row', 'fx-note'].map(byId);
+const recordValues = recordPanel.querySelectorAll('dd');
+const number = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6});
+const signedNumber = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6, signDisplay:'exceptZero'});
+const japanTime = new Intl.DateTimeFormat('ja-JP', {
+  timeZone:'Asia/Tokyo', dateStyle:'medium', timeStyle:'medium',
+});
+
+function clearRecord() {
+  for (const value of recordValues) value.textContent = '';
+  for (const panel of [recordPanel, unconnected, scorePanel, pendingScore, pnlPanel, ...fxRows]) panel.hidden = true;
+}
+
+function fillRecord(values) {
+  for (const [id, value] of Object.entries(values)) byId(id).textContent = value;
+}
+
+function renderForecast(record, failed = false) {
+  clearRecord();
+  if (!record) {
+    forecast.textContent = failed ? '予測記録を読み込めませんでした。' : '予測記録は未接続です。';
+    predictionStep.textContent = failed ? '取得できませんでした' : '未接続 · 準備中';
+    resultStep.textContent = failed ? '取得できませんでした' : 'まだ記録なし';
+    unconnected.hidden = failed;
+    return;
+  }
+  const {score, realizedPnl, fx} = record;
+  forecast.textContent = score ? '採点済み' : '確定済み・採点待ち';
+  predictionStep.textContent = record.symbol + ' · 確定済み';
+  resultStep.textContent = score ? '採点済み' : '採点待ち';
+  fillRecord({
+    'record-ai':record.aiId,
+    'frozen-version':record.model_version,
+    'record-symbol':record.symbol,
+    'record-direction':record.direction ?? '方向未判定',
+    'record-change':record.predictedChangePct === null ? '未記録' : signedNumber.format(record.predictedChangePct) + '%',
+    'record-confirmed':japanTime.format(new Date(record.confirmedAt)),
+    'record-target':japanTime.format(new Date(record.targetAt)),
+  });
+  if (score) fillRecord({
+    'score-direction':score.actualDirection,
+    'score-correct':score.directionCorrect === null ? '判定なし' : score.directionCorrect ? '的中' : '不的中',
+    'score-brier':number.format(score.brier),
+    'score-error':score.absoluteChangeErrorPctPoints === null ? '未記録' :
+      number.format(score.absoluteChangeErrorPctPoints) + ' ポイント',
+    'score-time':japanTime.format(new Date(score.scoredAt)),
+  });
+  if (realizedPnl !== null) fillRecord({'raw-pnl':signedNumber.format(realizedPnl) + ' 枚'});
+  if (fx) fillRecord({
+    'fx-rate':number.format(fx.basisPoints / 10_000) + ' 倍',
+    'fx-pnl':signedNumber.format(fx.gamePnl) + ' 枚',
+  });
+  pendingScore.hidden = Boolean(score);
+  scorePanel.hidden = !score;
+  pnlPanel.hidden = realizedPnl === null;
+  for (const row of fxRows) row.hidden = !fx;
+  recordPanel.hidden = false;
+}
+
+const profileRead = {
+  path:'/friend/character', validate:validateProfile, render:renderProfile,
+  fail() {
+    savedCompanion.textContent = editableVersion.textContent = '取得できませんでした';
+    profileError.textContent = '編集設定を読み込めませんでした。再読み込みをお試しください。';
+    profileError.hidden = false;
   },
+};
+const mockReads = [
   {
     path:'/friend/forward/summary', validate:walletText,
     render(value) { wallet.textContent = value; },
     fail() { wallet.textContent = '財布を読み込めませんでした。'; },
   },
   {
-    path:'/friend/forward/records', validate:forecastInfo,
-    render({text, version}) {
-      forecast.textContent = text;
-      frozenVersion.textContent = version ?? '';
-      frozen.hidden = !version;
-    },
-    fail() { forecast.textContent = '予測記録を読み込めませんでした。'; },
+    path:'/friend/forward/records', validate:validateForecast, render:renderForecast,
+    fail() { renderForecast(null, true); },
   },
 ];
 
@@ -310,13 +428,30 @@ async function readPanels(controller, panels) {
   const results = await Promise.allSettled(panels.map(({path, validate}) =>
     request(path, controller, {auth:session}).then(validate)));
   controller.signal.throwIfAborted();
-  failedReads = panels.filter((panel, index) => {
+  const failed = new Set(failedReads);
+  for (const [index, panel] of panels.entries()) {
     const result = results[index];
-    if (result.status === 'fulfilled') panel.render(result.value);
-    else panel.fail();
-    return result.status === 'rejected';
-  });
+    if (result.status === 'fulfilled') {
+      panel.render(result.value);
+      failed.delete(panel);
+    } else {
+      panel.fail();
+      failed.add(panel);
+    }
+  }
+  failedReads = [...failed];
+  return results.every(result => result.status === 'fulfilled');
 }
+
+refreshMock.addEventListener('click', () => {
+  if (!session || operation) return;
+  void run('模擬記録を取得中…', '模擬記録を取得できませんでした。', async controller => {
+    const ok = await readPanels(controller, mockReads);
+    controller.signal.throwIfAborted();
+    feedback(ok ? '模擬記録を再取得しました。' : '取得できない模擬記録があります。', !ok);
+    return refreshMock;
+  });
+});
 
 retryReads.addEventListener('click', () => {
   if (!session || operation || !failedReads.length) return;
@@ -350,7 +485,7 @@ login.addEventListener('submit', event => {
       matches(accountPattern, info.accountId) && matches(tokenPattern, info.csrfToken) &&
       Number.isSafeInteger(info.expiresAt) && info.expiresAt > 0);
     session = {token, csrf:info.csrfToken};
-    await readPanels(controller, panelReads);
+    await readPanels(controller, [profileRead, ...mockReads]);
     controller.signal.throwIfAborted();
     accountId.textContent = info.accountId;
     login.hidden = true;

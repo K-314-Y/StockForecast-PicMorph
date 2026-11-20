@@ -30,13 +30,31 @@ h2 { font-size: 1.15rem; }
 #login p { color: var(--muted); }
 #login label { margin-bottom: -.55rem; }
 .workspace { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(0, 2.4fr); align-items: start; gap: 1rem; }
-.forms, .mock dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.forms, .mock dl, .record-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .forms { align-items: start; }
-.mock { grid-column: 1 / -1; }
-.mock dl { margin-top: .75rem; }
-.mock dt { font-weight: 700; }
-.mock dd { color: var(--muted); }
-.mock-heading span, .revision {
+.journey, .mock, .record-pnl { grid-column: 1 / -1; }
+.journey { container-type: inline-size; }
+.journey-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .65rem;
+  margin: .75rem 0 0;
+  padding: 0;
+  list-style-position: inside;
+}
+.journey-steps li { padding: .65rem .75rem; border-radius: .7rem; background: #f6effa; overflow-wrap: anywhere; }
+.journey-steps li::marker { color: var(--accent); font-weight: 750; }
+.journey-steps span { display: block; margin-top: .25rem; color: var(--muted); font-size: .85rem; }
+@container (max-width: 44rem) { .journey-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mock > .hint, .record-panel > .hint { margin-top: .45rem; }
+.mock-summary { margin: .9rem 0; }
+.mock dt { color: var(--muted); font-size: .82rem; font-weight: 650; }
+.mock dd { overflow-wrap: anywhere; }
+.record-panel { min-width: 0; border: 1px solid var(--border); border-radius: .85rem; padding: .85rem 1rem; }
+.record-panel h3 { margin: 0 0 .7rem; font-size: 1rem; }
+.record-panel dl { gap: .65rem 1rem; }
+.record-pnl { background: #faf6fc; }
+.revision {
   color: #58426b;
   font-size: .82rem;
   background: #f4ebfa;
@@ -120,7 +138,9 @@ fieldset + .hint, .hint + .model { margin-top: .55rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 56rem) { .forms { grid-template-columns: 1fr; } }
 @media (max-width: 39rem) {
-  .workspace, .mock dl { grid-template-columns: 1fr; }
+  .workspace, .record-grid { grid-template-columns: 1fr; }
+  .mock dl { gap: .65rem; }
+  .record-model { grid-column: 1 / -1; }
   .preview {
     display: grid;
     grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
@@ -131,4 +151,5 @@ fieldset + .hint, .hint + .model { margin-top: .55rem; }
   }
   .preview svg { grid-area: 1 / 1 / span 3; margin: 0; }
 }
+@media (max-width: 22rem) { .mock dl { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .chibi, #spinner { animation: none; } }

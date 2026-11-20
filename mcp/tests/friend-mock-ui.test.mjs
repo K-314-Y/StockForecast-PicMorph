@@ -8,6 +8,7 @@ import {createForwardMarketAdapter} from '../../game_runtime/forward-market-adap
 import {MOCK_MARKET_PAPER_MODE, MOCK_MARKET_SOURCE} from '../../game_runtime/forward-market-guard.mjs';
 import {openForwardStore} from '../../game_runtime/forward-store.mjs';
 import {startFriendMockServer} from '../../game_runtime/friend-mock-server.mjs';
+import {provisionFriendMockRound} from './friend-mock-record-fixture.mjs';
 
 const character = '/friend/character';
 const summary = '/friend/forward/summary';
@@ -16,7 +17,7 @@ const redeem = '/friend/invite/redeem';
 const session = '/friend/session';
 const logout = '/friend/logout';
 
-async function setup(t) {
+async function setup(t, prepareSources) {
   const walletRoot = await mkdtemp(join(tmpdir(), 'p9h-friends-'));
   t.after(() => rm(walletRoot, {recursive:true, force:true}));
   const ids = ['AliceFixture', 'BobFixture'];
@@ -26,7 +27,8 @@ async function setup(t) {
     await mkdir(folder, {mode:0o700});
     accounts.set(id, join(folder, 'wallet.json'));
   }
-  const server = await startFriendMockServer({walletRoot, accounts});
+  const accountRecordSources = await prepareSources?.(accounts);
+  const server = await startFriendMockServer({walletRoot, accounts, accountRecordSources});
   t.after(() => server.close());
   return {server, ids, accounts};
 }
@@ -144,7 +146,7 @@ test('P9h editor endpoints persist both independent revisions and isolate accoun
   assert.deepEqual(await read(await login(server, ids[0])), appearance.json());
 });
 
-test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_000}, async t => {
+async function openChromium(t) {
   let playwright;
   try {
     playwright = await import(process.env.FRIEND_UI_PLAYWRIGHT ?? 'playwright');
@@ -154,12 +156,18 @@ test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_
     }
     throw error;
   }
-  const {server, ids, accounts} = await setup(t);
   const browser = await playwright.chromium.launch({
     executablePath:process.env.FRIEND_UI_CHROME,
     args:['--host-resolver-rules=MAP friend.localhost 127.0.0.1', '--no-proxy-server'],
   });
   t.after(() => browser.close());
+  return browser;
+}
+
+test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_000}, async t => {
+  const browser = await openChromium(t);
+  if (!browser) return;
+  const {server, ids, accounts} = await setup(t);
   const marketAdapter = createForwardMarketAdapter({
     sourceId:MOCK_MARKET_SOURCE, licenseRef:'Local P9h fixture', observationIntervalMs:60_000,
     maxAgeMs:60_000, maxPublicationDelayMs:1000, verifyUsage:() => true,
@@ -199,12 +207,24 @@ test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_
     contentType:'application/json; charset=utf-8',
     json:{status:'MOCK_NONLIVE', records:[{
       status:'SCORED_MOCK_NONLIVE', sourceMode:'MOCK_NONLIVE', model_version:'appearance-v1_0_0_0_100_35',
+      aiId:'fixture_ai', symbol:'TEST', confirmedAt:'2030-01-07T01:00:00.000Z', targetAt:'2030-01-07T01:10:00.000Z',
+      direction:'UP', predictedChangePct:4.5, open:{status:'OPENED', at:'2030-01-07T01:05:00.000Z'},
+      close:{status:'CLOSED', at:'2030-01-07T01:10:00.000Z'}, realizedPnl:-50,
+      score:{brier:1.46, directionCorrect:false, actualDirection:'DOWN',
+        absoluteChangeErrorPctPoints:54.5, scoredAt:'2030-01-07T01:10:01.000Z'},
+      fx:{rawPnl:-50, basisPoints:10200, gamePnl:-51, commitment:'b'.repeat(64)},
     }]},
   }), {times:1});
   await openAccount(ids[0]);
   await text('wallet', '未配分 750 枚 ／ 初期 1,000 枚');
   await text('forecast', '採点済み');
   await text('frozen-version', 'appearance-v1_0_0_0_100_35');
+  await text('record-symbol', 'TEST');
+  await text('record-change', '+4.5%');
+  await text('raw-pnl', '-50 枚');
+  await text('fx-rate', '1.02 倍');
+  await text('fx-pnl', '-51 枚');
+  assert.equal(await page.locator('#fx-note').isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.locator('#companion-name').fill(companion.name);
   await page.locator('#hair-color').fill(companion.hair_color);
@@ -279,6 +299,8 @@ test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_
   await text('message', 'セッションが終了しました');
   assert.equal(await page.locator('#account-id').textContent(), '');
   assert.equal(await page.locator('#frozen-version').textContent(), '');
+  assert.equal(await page.locator('#fx-pnl').textContent(), '');
+  assert.equal(await page.locator('#record-score').isHidden(), true);
   assert.equal(await page.locator('#companion-name').inputValue(), '');
   assert.equal(await page.locator('#companion-dirty').textContent(), '');
   assert.equal(await page.locator('#workspace').isHidden(), true);
@@ -414,4 +436,131 @@ test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_
     cookies:document.cookie, session:sessionStorage.length, local:localStorage.length, url:location.href,
   })), {cookies:'', session:0, local:0, url:at('/friend/')});
   assert.deepEqual(pageErrors, []);
+});
+
+test('P9j Chromium reads a verified P4 record as it moves from pending to scored', {timeout:35_000}, async t => {
+  const browser = await openChromium(t);
+  if (!browser) return;
+  let round;
+  const {server, ids} = await setup(t, async accounts => {
+    const [id] = accounts.keys();
+    round = await provisionFriendMockRound(accounts.get(id), {
+      companion, pending:true, predictedChangePct:-4,
+    });
+    return new Map([[id, round.config]]);
+  });
+  const page = await browser.newPage({viewport:{width:1280, height:900}});
+  page.setDefaultTimeout(5000);
+  const at = path => server.origin + path;
+  const node = id => page.locator('#' + id);
+  async function text(id, expected) {
+    await page.waitForFunction(([id, expected]) =>
+      document.getElementById(id).textContent.includes(expected), [id, expected]);
+  }
+  async function openAccount(id) {
+    await node('invite').fill(server.issueInvite(id).token);
+    await node('login-button').click();
+    await text('account-id', id);
+  }
+  async function refresh() {
+    await node('refresh-mock').click();
+    await text('message', '模擬記録を再取得しました');
+  }
+  async function fitsViewport() {
+    return page.evaluate(() => {
+      const panel = document.getElementById('mock-record');
+      return document.documentElement.scrollWidth <= innerWidth && panel.scrollWidth <= panel.clientWidth;
+    });
+  }
+
+  await page.goto(at('/friend/'));
+  await openAccount(ids[0]);
+  await text('prediction-step', 'FAKE · 確定済み');
+  await text('result-step', '採点待ち');
+  await text('record-confirmed', '2030/01/07 10:00:00');
+  await text('record-target', '2030/01/07 10:10:00');
+  await text('record-direction', 'DOWN');
+  await text('record-change', '-4%');
+  await text('frozen-version', 'companion-v1_0_100_0_0_45');
+  assert.equal(await node('record-pending').isVisible(), true);
+  assert.equal(await node('record-score').isHidden(), true);
+  assert.equal(await node('record-pnl').isHidden(), true);
+
+  const literalName = '<b>ミント</b>';
+  await node('companion-name').fill(literalName);
+  await node('approach').selectOption('trend');
+  await node('risk').fill('45');
+  await node('save-companion').click();
+  await text('message', '相棒と戦略を保存しました');
+  await text('editable-version', 'companion-v1_100_0_0_0_45');
+  assert.equal(await node('saved-companion').textContent(), '保存済み · ' + literalName);
+  assert.equal(await node('saved-companion').locator('b').count(), 0);
+  assert.equal(await node('preview-name').locator('b').count(), 0);
+  await node('companion-name').fill('編集中の相棒');
+  await node('accessory').selectOption('glasses');
+
+  await round.finish();
+  const refreshedRequests = [];
+  const capture = req => refreshedRequests.push([req.method(), new URL(req.url()).pathname]);
+  page.on('request', capture);
+  await refresh();
+  page.off('request', capture);
+  assert.deepEqual(refreshedRequests.sort((a, b) => a[1].localeCompare(b[1])), [['GET', records], ['GET', summary]]);
+  await text('result-step', '採点済み');
+  await text('score-direction', 'UP');
+  await text('score-correct', '不的中');
+  await text('score-brier', '1.46');
+  await text('score-error', '12 ポイント');
+  await text('score-time', '2030/01/07 10:10:00');
+  await text('raw-pnl', '-8 枚');
+  assert.equal(await node('fx-rate-row').isHidden(), true);
+  assert.equal(await node('fx-note').isHidden(), true);
+  assert.equal(await node('record-pending').isHidden(), true);
+  await text('frozen-version', 'companion-v1_0_100_0_0_45');
+  await text('editable-version', 'companion-v1_100_0_0_0_45');
+  assert.equal(await node('companion-name').inputValue(), '編集中の相棒');
+  assert.equal(await node('accessory').inputValue(), 'glasses');
+  await text('companion-dirty', '未保存の変更あり');
+  await text('look-dirty', '未保存の変更あり');
+  assert.equal(await fitsViewport(), true);
+  await page.setViewportSize({width:390, height:844});
+  assert.equal(await fitsViewport(), true);
+
+  // A malformed response must hide all prior details, and a later GET can recover.
+  await page.route(at(records), async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.records[0].symbol = '<b>偽</b>';
+    await route.fulfill({response, json:data});
+  }, {times:1});
+  await node('refresh-mock').click();
+  await text('forecast', '予測記録を読み込めませんでした');
+  assert.equal(await node('mock-record').isHidden(), true);
+  assert.equal(await node('record-symbol').textContent(), '');
+  assert.equal(await node('score-brier').textContent(), '');
+  assert.equal(await node('raw-pnl').textContent(), '');
+  await refresh();
+  await text('record-symbol', 'FAKE');
+  assert.equal(await node('retry-reads').isHidden(), true);
+  assert.equal(await node('companion-name').inputValue(), '編集中の相棒');
+  assert.equal(await node('accessory').inputValue(), 'glasses');
+
+  server.revokeAccount(ids[0]);
+  await node('refresh-mock').click();
+  await text('message', 'セッションが終了しました');
+  assert.equal(await node('mock-record').isHidden(), true);
+  for (const id of ['account-id', 'saved-companion', 'editable-version', 'frozen-version',
+    'record-symbol', 'score-direction', 'score-brier', 'raw-pnl', 'prediction-step', 'result-step']) {
+    assert.equal(await node(id).textContent(), '', id);
+  }
+  assert.equal(await node('companion-name').inputValue(), '');
+  await openAccount(ids[1]);
+  await text('forecast', '予測記録は未接続です。');
+  await text('prediction-step', '未接続 · 準備中');
+  await text('result-step', 'まだ記録なし');
+  assert.equal(await node('mock-unconnected').isVisible(), true);
+  assert.equal(await node('mock-record').isHidden(), true);
+  assert.equal(await node('frozen-version').textContent(), '');
+  await text('wallet', '財布は未作成です。');
+  assert.equal(await round.state.reads, 2);
 });
