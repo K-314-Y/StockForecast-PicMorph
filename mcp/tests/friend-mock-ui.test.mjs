@@ -103,6 +103,7 @@ test('P9h serves precisely three public resources with scoped CSP and no account
       assert.match(res.text, /type="password" autocomplete="off"/);
       assert.doesNotMatch(res.text, /\bon\w+\s*=|<style|\sstyle=|sessionToken|csrfToken/i);
     }
+    if (type === 'text/javascript') assert.doesNotMatch(res.text, /\binnerHTML\b/);
   }
   for (const path of ['/friend', '/friend/friend-editor.js', '/friend/../friend/editor.js',
     '/friend/%65ditor.js', '/friend/editor.js/', '/favicon.ico', '/game', '/api/companion', '/assets/test.png']) {
@@ -225,6 +226,9 @@ test('P9h/P9i isolated Chromium editor, unsaved changes and retry', {timeout:35_
   await text('raw-pnl', '-50 枚');
   await text('fx-rate', '1.02 倍');
   await text('fx-pnl', '-51 枚');
+  await text('performance-pnl', '元の仮想損益 -50 枚');
+  await text('performance-fx', 'FX調整後（参照専用・支出不可） -51 枚');
+  await text('performance-accuracy', '練習未接続');
   assert.equal(await page.locator('#fx-note').isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.locator('#companion-name').fill(companion.name);
@@ -467,6 +471,17 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
     await node('refresh-mock').click();
     await text('message', '模擬記録を再取得しました');
   }
+  async function interceptRecord(edit) {
+    await page.route(at(records), async route => {
+      const response = await route.fetch();
+      const data = await response.json();
+      edit(data.records[0]);
+      // Preserve the upstream MIME type and let Playwright size the rewritten body.
+      const headers = response.headers();
+      delete headers['content-length'];
+      await route.fulfill({response, headers, body:JSON.stringify(data)});
+    }, {times:1});
+  }
   async function fitsViewport() {
     return page.evaluate(() => {
       const panel = document.getElementById('mock-record');
@@ -478,6 +493,8 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   await openAccount(ids[0]);
   await text('prediction-step', 'FAKE · 確定済み');
   await text('result-step', '採点待ち');
+  await text('performance-pnl', '仮想損益は未確定');
+  assert.equal(await node('performance-fx').textContent(), '');
   await text('record-confirmed', '2030/01/07 10:00:00');
   await text('record-target', '2030/01/07 10:10:00');
   await text('record-direction', 'DOWN');
@@ -516,6 +533,8 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   await text('score-error', '12 ポイント');
   await text('score-time', '2030/01/07 10:10:00');
   await text('raw-pnl', '-8 枚');
+  await text('performance-pnl', '元の仮想損益 -8 枚');
+  assert.equal(await node('performance-fx').textContent(), '');
   assert.equal(await node('fx-rate-row').isHidden(), true);
   assert.equal(await node('fx-note').isHidden(), true);
   assert.equal(await node('record-pending').isHidden(), true);
@@ -531,15 +550,20 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   await page.setViewportSize({width:390, height:844});
   assert.equal(await fitsViewport(), true);
 
+  // A closed record can have realized P&L before scoring, including exactly zero.
+  await interceptRecord(record => Object.assign(record, {status:'PENDING', score:null, realizedPnl:0}));
+  await node('refresh-mock').click();
+  await page.waitForFunction(() => !document.getElementById('refresh-mock').disabled);
+  assert.deepEqual(await Promise.all(['message', 'forecast', 'performance-pnl'].map(id => node(id).textContent())), [
+    '模擬記録を再取得しました。', '確定済み・採点待ち', '元の仮想損益 0 枚',
+  ]);
+  assert.equal(await node('performance-fx').textContent(), '');
+
   // A malformed response must hide all prior details, and a later GET can recover.
-  await page.route(at(records), async route => {
-    const response = await route.fetch();
-    const data = await response.json();
-    data.records[0].symbol = '<b>偽</b>';
-    await route.fulfill({response, json:data});
-  }, {times:1});
+  await interceptRecord(record => { record.symbol = '<b>偽</b>'; });
   await node('refresh-mock').click();
   await text('forecast', '予測記録を読み込めませんでした');
+  await text('performance-pnl', '取得失敗');
   assert.equal(await node('mock-record').isHidden(), true);
   assert.equal(await node('record-symbol').textContent(), '');
   assert.equal(await node('score-brier').textContent(), '');
@@ -561,6 +585,7 @@ test('P9j Chromium reads a verified P4 record as it moves from pending to scored
   assert.equal(await node('companion-name').inputValue(), '');
   await openAccount(ids[1]);
   await text('forecast', '予測記録は未接続です。');
+  await text('performance-pnl', 'P4未接続');
   await text('prediction-step', '未接続 · 準備中');
   await text('result-step', 'まだ記録なし');
   assert.equal(await node('mock-unconnected').isVisible(), true);
@@ -607,6 +632,8 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   await page.goto(at('/friend/'));
   const bearer = await openAccount(ids[0]);
   await text('practice-status', '1ラウンド練習できます');
+  await text('performance-accuracy', '採点待ち');
+  await text('performance-participation', '単発練習（連続ラウンドの記録なし）');
   assert.equal(await node('practice-milestones').isHidden(), true);
   assert.deepEqual(await node('practice-journey-meter').evaluate(meter => [meter.value, meter.max]), [0,1]);
   assert.equal(await node('practice-start').isDisabled(), true);
@@ -656,6 +683,9 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   assert.equal(await node('practice-history').locator('li').count(), 0);
   await text('practice-actual', 'UP');
   await text('practice-brier', String(new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6}).format(revealed.result.brier)));
+  await text('performance-accuracy', '単発1件 · 的中');
+  assert.equal(await node('performance-brier').textContent(), 'Brier ' + await node('practice-brier').textContent());
+  assert.equal(await node('performance-title-earned').textContent(), '');
   assert.equal(await node('practice-start').isHidden(), true);
   assert.equal(await node('practice-reveal').isHidden(), true);
   assert.equal(await node('companion-name').inputValue(), 'そのままの下書き');
@@ -692,10 +722,14 @@ test('P9k Chromium starts and reveals a private practice round without losing dr
   assert.deepEqual(errors, []);
 });
 
-test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clears account details', {timeout:35_000}, async t => {
+test('P9l/P9n/P9o Chromium completes three rounds, keeps reaction memories and isolates dashboard readings', {timeout:35_000}, async t => {
   const browser = await openChromium(t);
   if (!browser) return;
-  const {server, ids} = await setup(t, undefined, ([id]) => {
+  const {server, ids} = await setup(t, async accounts => {
+    const [id, walletFile] = accounts.entries().next().value;
+    const round = await provisionFriendMockRound(walletFile, {companion, predictedChangePct:-4});
+    return new Map([[id, round.config]]);
+  }, ([id]) => {
     const campaign = friendPracticeCampaign(id, [129, 112, 120]);
     const tie = campaign.rounds[2];
     tie.history = tie.history.map((point, index) => ({...point, price:index === 11 ? 64.1 : 100}));
@@ -712,7 +746,7 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
     const source = message.location().url;
     const expectedFailures = new Map([
       [at('/favicon.ico'), [404]], [at(character), [503]],
-      [at('/friend/practice/start'), [409]], [at('/friend/practice'), [401,503]],
+      [at('/friend/practice/start'), [409]], [at('/friend/practice'), [401,503]], [at(records), [503]],
     ]);
     const response = /^Failed to load resource: the server responded with a status of (\d+) /.exec(message.text());
     if (!response || !expectedFailures.get(source)?.includes(Number(response[1]))) errors.push(message.text());
@@ -753,11 +787,12 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
     assert.equal(await node('practice-journey-meter').evaluate(meter => meter.value), index - 1);
   }
   async function revealRound(index, price) {
-    await submit('practice-reveal', '/friend/practice/reveal');
+    const response = await submit('practice-reveal', '/friend/practice/reveal');
     await text('practice-target-price', String(price));
     await text('practice-stats', '採点済み ' + index + '/3');
     assert.equal(await node('practice-history').locator('li').count(), index);
     assert.equal(await node('practice-reveal').isHidden(), true);
+    return response.json();
   }
   async function cleared() {
     for (const id of ['practice-round-number', 'practice-stats', 'practice-model', 'practice-target-price',
@@ -775,6 +810,8 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   async function achievement(completed, title, nextTitle) {
     await text('practice-journey-count', '完了 ' + completed + ' / 全 3');
     assert.equal(await node('practice-journey-badge').textContent(), title);
+    assert.equal(await node('performance-participation').textContent(), '完了 ' + completed + ' / 全 3 ラウンド');
+    assert.equal(await node('performance-title-earned').textContent(), '称号 ' + title);
     assert.deepEqual(await node('practice-journey-meter').evaluate(meter => [meter.value, meter.max]), [completed,3]);
     assert.equal(await node('practice-journey-meter').getAttribute('aria-valuetext'), '完了 ' + completed + ' / 全 3 ラウンド');
     assert.equal(await page.getByRole('progressbar', {name:'架空練習の参加進捗'}).isVisible(), true);
@@ -788,6 +825,15 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
 
   await page.goto(at('/friend/'));
   const bearer = await openAccount(ids[0]);
+  const dashboard = page.getByRole('region', {name:'成績の見方'});
+  const dashboardValues = page.locator('.performance [data-performance-value]');
+  const averageBrier = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6});
+  async function dashboardCleared() {
+    assert.deepEqual(await dashboardValues.allTextContents(), ['', '', '', '', '', '']);
+  }
+  await text('performance-pnl', '元の仮想損益 -8 枚');
+  await text('performance-accuracy', '採点済み 0 件、方向判定対象 0 件、方向判定なし · まだ採点なし');
+  assert.equal(await node('performance-brier').textContent(), '');
   await text('practice-round-number', '第1/3ラウンド');
   await text('practice-stats', '平均 Brier —');
   await text('practice-stats', '判定なし');
@@ -797,8 +843,11 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   await node('approach').selectOption('momentum');
   await submit('save-companion', character + '/companion');
   await freezeRound(1);
+  await text('performance-accuracy', '採点待ち');
   await text('practice-model', 'companion-v1_0_100_0_0_35');
-  await revealRound(1, 129);
+  const first = await revealRound(1, 129);
+  await text('performance-accuracy', '採点済み 1 件、方向判定対象 1 件、的中 1/1');
+  assert.equal(await node('performance-brier').textContent(), '平均Brier ' + averageBrier.format(first.result.brier));
   await achievement(1, 'はじめの一歩', '練習を続ける');
   await text('practice-start', '次の練習へ');
   assert.equal(await node('practice-start').evaluate(button => document.activeElement === button), true);
@@ -848,7 +897,10 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   await node('approach').selectOption('volatility');
   await submit('save-companion', character + '/companion');
   await freezeRound(3);
-  await revealRound(3, 120);
+  const final = await revealRound(3, 120);
+  await text('performance-accuracy', '採点済み 3 件、方向判定対象 2 件、的中 1/2');
+  const brierText = '平均Brier ' + averageBrier.format(final.progress.average_brier);
+  assert.equal(await node('performance-brier').textContent(), brierText);
   await text('practice-status', '完走しました');
   await achievement(3, '全3回完走（架空練習の参加賞）');
   assert.equal(await node('practice-milestones').getAttribute('data-complete'), '');
@@ -872,6 +924,30 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   await node('practice-refresh').click();
   await text('message', '練習状態を再取得しました。');
   assert.equal(await highlightCount(), 1);
+
+  assert.deepEqual(await dashboard.getByRole('heading', {level:3}).allTextContents(), [
+    '予測精度（架空練習）', '仮想損益（P4保存済み模擬記録）', '参加・達成（架空練習）',
+  ]);
+  assert.equal(await dashboard.getByRole('article').count(), 3);
+  assert.equal(await dashboard.getByText(/^出所/).count(), 3);
+  assert.equal(await dashboard.locator('[aria-live], [role="status"], output, progress, button, a').count(), 0);
+  assert.equal(await dashboard.getByText(/FX調整後/).count(), 0);
+  assert.equal(await dashboard.evaluate(section => {
+    function luminance(color) {
+      const channels = color.match(/\d+/g).slice(0, 3).map(channel => {
+        const srgb = Number(channel) / 255;
+        return srgb <= .04045 ? srgb / 12.92 : ((srgb + .055) / 1.055) ** 2.4;
+      });
+      return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+    }
+    return [...section.querySelectorAll('h2, h3, p')].filter(node => node.textContent).every(node => {
+      const background = luminance(getComputedStyle(node.closest('article') ?? section).backgroundColor);
+      const foreground = luminance(getComputedStyle(node).color);
+      return (Math.max(background, foreground) + .05) / (Math.min(background, foreground) + .05) >= 4.5;
+    });
+  }), true);
+  const screenshotDir = process.env.FRIEND_UI_P9O_SCREENSHOTS === '1' ?
+    await mkdtemp(join(tmpdir(), 'p9o-dashboard-')) : undefined;
   for (const width of [375,380,390,1280]) {
     await page.setViewportSize({width,height:900});
     assert.equal(await page.evaluate(() => {
@@ -879,23 +955,52 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
       const milestones = document.getElementById('practice-milestones');
       const meter = document.getElementById('practice-journey-meter');
       return document.documentElement.scrollWidth <= innerWidth && history.scrollWidth <= history.clientWidth &&
-        milestones.scrollWidth <= milestones.clientWidth && meter.offsetWidth <= milestones.clientWidth;
+        milestones.scrollWidth <= milestones.clientWidth && meter.offsetWidth <= milestones.clientWidth &&
+        [...document.querySelectorAll('.performance, .performance article')].every(el => el.scrollWidth <= el.clientWidth);
     }), true, String(width));
+    if (screenshotDir && [375,1280].includes(width)) {
+      const path = join(screenshotDir, 'dashboard-' + width + '.png');
+      await dashboard.screenshot({path});
+      t.diagnostic(path);
+    }
   }
 
+  await node('companion-name').fill('保持する下書き');
+  const savedAccessory = await node('accessory').inputValue();
+  const draftAccessory = savedAccessory === 'glasses' ? 'star' : 'glasses';
+  await node('accessory').selectOption(draftAccessory);
+  await text('look-dirty', '未保存の変更あり');
   await page.route(at('/friend/practice'), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
   await node('practice-refresh').click();
   await text('practice-status', '練習状態を取得できませんでした。');
   await cleared();
+  assert.deepEqual(await dashboardValues.allTextContents(), ['取得失敗', '', '元の仮想損益 -8 枚', '', '取得失敗', '']);
   await node('retry-reads').click();
   await text('practice-status', '完走しました');
   await achievement(3, '全3回完走（架空練習の参加賞）');
   assert.equal(await highlightCount(), 1);
+  await page.route(at(records), route => route.fulfill({status:503, json:{error:'unavailable'}}), {times:1});
+  await node('refresh-mock').click();
+  await text('performance-pnl', '取得失敗');
+  await text('performance-accuracy', '採点済み 3 件、方向判定対象 2 件、的中 1/2');
+  assert.equal(await node('performance-brier').textContent(), brierText);
+  await achievement(3, '全3回完走（架空練習の参加賞）');
+  await node('retry-reads').click();
+  await text('performance-pnl', '元の仮想損益 -8 枚');
+  assert.equal(await node('companion-name').inputValue(), '保持する下書き');
+  assert.equal(await node('accessory').inputValue(), draftAccessory);
+  await text('look-dirty', '未保存の変更あり');
+  await node('restore-companion').click();
+  await node('restore-look').click();
+  assert.equal(await node('accessory').inputValue(), savedAccessory);
+  assert.equal(await node('look-dirty').textContent(), '');
   await submit('logout', logout);
   await cleared();
+  await dashboardCleared();
   await openAccount(ids[1]);
   await text('practice-status', '架空練習は未接続');
   await cleared();
+  assert.deepEqual(await dashboardValues.allTextContents(), ['練習未接続', '', 'P4未接続', '', '練習未接続', '']);
   await submit('logout', logout);
   await openAccount(ids[0]);
   await text('practice-status', '完走しました');
@@ -906,8 +1011,77 @@ test('P9l/P9n Chromium completes three rounds, keeps reaction memories and clear
   await node('practice-refresh').click();
   await text('message', 'セッションが終了しました');
   await cleared();
+  await dashboardCleared();
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.deepEqual(errors, []);
+});
+
+test('P9o Chromium reports judged-zero Brier for a 12-round journey and a single P9k round', {timeout:35_000}, async t => {
+  const browser = await openChromium(t);
+  if (!browser) return;
+  const {server, ids} = await setup(t, undefined, ([campaignId, singleId]) => {
+    function tied(round) {
+      return {...round, history:round.history.map((point, index) => ({...point, price:index === 11 ? 64.1 : 100}))};
+    }
+    const campaign = friendPracticeCampaign(campaignId, Array(12).fill(129));
+    return [{...campaign, rounds:campaign.rounds.map(tied)}, tied(friendPracticeScenario(singleId))];
+  });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(5000);
+  const node = id => page.locator('#' + id);
+  const readPath = '/friend/practice';
+  const mockBrier = new Intl.NumberFormat('ja-JP', {maximumFractionDigits:6});
+  async function finish(id, count) {
+    const auth = await login(server, id);
+    async function post(path, body) {
+      const response = await call(server, path, {method:'POST', headers:auth.write, body});
+      assert.equal(response.status, 200, response.text);
+      return response.json();
+    }
+    await post(character + '/companion', {expected_revision:0, companion:{...companion, approach:'volatility'}});
+    let result;
+    for (let round = 0; round < count; round++) {
+      const frozen = await post(readPath + '/start', {expected_companion_revision:1});
+      result = await post(readPath + '/reveal', {round_id:frozen.round_id});
+      assert.equal(result.result.directionCorrect, null);
+    }
+    assert.equal(result.status, 'exhausted');
+    return result;
+  }
+  async function openAccount(id) {
+    await node('invite').fill(server.issueInvite(id).token);
+    await node('login-button').click();
+    await page.waitForFunction(id => document.getElementById('account-id').textContent === id, id);
+  }
+
+  const campaign = await finish(ids[0], 12);
+  const single = await finish(ids[1], 1);
+  await page.goto(server.origin + '/friend/');
+  await openAccount(ids[0]);
+  assert.equal(await node('performance-accuracy').textContent(), '採点済み 12 件、方向判定対象 0 件、方向判定なし');
+  assert.equal(await node('performance-brier').textContent(), '平均Brier ' + mockBrier.format(campaign.progress.average_brier));
+  assert.equal(await node('performance-participation').textContent(), '完了 12 / 全 12 ラウンド');
+  const title = '12ラウンド完走（架空練習の参加賞）';
+  assert.equal(await node('practice-journey-badge').textContent(), title);
+  assert.equal(await node('performance-title-earned').textContent(), '称号 ' + title);
+  assert.equal(await node('performance-pnl').textContent(), 'P4未接続');
+
+  await node('logout').click();
+  await openAccount(ids[1]);
+  assert.equal(await node('performance-accuracy').textContent(), '単発1件 · 方向判定なし');
+  assert.equal(await node('performance-brier').textContent(), 'Brier ' + mockBrier.format(single.result.brier));
+  assert.equal(await node('performance-participation').textContent(), '単発練習（連続ラウンドの記録なし）');
+  assert.equal(await node('performance-title-earned').textContent(), '');
+  assert.equal(await node('practice-milestones').isHidden(), true);
+
+  // A single-round response cannot claim more rounds are available.
+  await page.route(server.origin + readPath, route => route.fulfill({
+    contentType:'application/json; charset=utf-8', json:{...single, status:'scored'},
+  }), {times:1});
+  await node('practice-refresh').click();
+  await page.waitForFunction(() => document.getElementById('performance-accuracy').textContent === '取得失敗');
+  assert.equal(await node('performance-brier').textContent(), '');
+  assert.equal(await node('performance-participation').textContent(), '取得失敗');
 });
 
 test('P9m Chromium reacts to live practice transitions without changing looks or replaying motion', {timeout:35_000}, async t => {

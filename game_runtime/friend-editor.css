@@ -32,7 +32,7 @@ h2 { font-size: 1.15rem; }
 .workspace { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(0, 2.4fr); align-items: start; gap: 1rem; }
 .forms, .mock dl, .record-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .forms { align-items: start; }
-.journey, .mock, .record-pnl { grid-column: 1 / -1; }
+.journey, .mock, .record-pnl, .performance { grid-column: 1 / -1; }
 .journey { container-type: inline-size; }
 .journey-steps {
   display: grid;
@@ -53,6 +53,15 @@ h2 { font-size: 1.15rem; }
 .record-panel { min-width: 0; border: 1px solid var(--border); border-radius: .85rem; padding: .85rem 1rem; }
 .record-panel h3 { margin: 0 0 .7rem; font-size: 1rem; }
 .record-panel dl { gap: .65rem 1rem; }
+.performance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: .75rem;
+  margin-top: .75rem;
+}
+.performance-grid .record-panel { background: #faf6fc; overflow-wrap: anywhere; }
+.performance-value { font-weight: 700; }
+.performance-value:not(:empty) { margin-top: .5rem; }
 .record-pnl { background: #faf6fc; }
 .practice-status { margin: .8rem 0; font-weight: 700; }
 .practice .actions:has(> :not([hidden])) { margin-top: .85rem; }

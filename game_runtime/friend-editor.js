@@ -236,6 +236,7 @@ function clearAccount() {
     predictionStep, resultStep, profileError, groups.companion.revision, groups.look.revision]) element.textContent = '';
   clearRecord();
   renderPractice(null);
+  clearDashboard();
   for (const group of Object.values(groups)) {
     group.saved = group.pendingDraft = undefined;
     group.form.reset();
@@ -425,7 +426,26 @@ function fillRecord(values) {
   for (const [id, value] of Object.entries(values)) byId(id).textContent = value;
 }
 
+const dashboardValues = document.querySelectorAll('[data-performance-value]');
+
+function clearDashboard() {
+  for (const value of dashboardValues) value.textContent = '';
+}
+
+function renderPnlSummary(record, failed) {
+  let pnl = 'P4未接続';
+  if (failed) pnl = '取得失敗';
+  else if (record) pnl = record.realizedPnl === null ? '仮想損益は未確定' :
+    '元の仮想損益 ' + signedNumber.format(record.realizedPnl) + ' 枚';
+  fillRecord({
+    'performance-pnl':pnl,
+    'performance-fx':record?.fx ? 'FX調整後（参照専用・支出不可） ' +
+      signedNumber.format(record.fx.gamePnl) + ' 枚' : '',
+  });
+}
+
 function renderForecast(record, failed = false) {
+  renderPnlSummary(record, failed);
   clearRecord();
   if (!record) {
     forecast.textContent = failed ? '予測記録を読み込めませんでした。' : '予測記録は未接続です。';
@@ -563,6 +583,46 @@ const journeyBadge = byId('practice-journey-badge');
 const journeyNext = byId('practice-journey-next');
 const participationTitles = [[1, 'はじめの一歩'], [2, '練習を続ける'], [3, 'コツコツ継続'], [6, '練習を重ねる']];
 
+function participationAward({completed, total}) {
+  const finish = (total === 12 ? '12ラウンド完走' : '全' + total + '回完走') + '（架空練習の参加賞）';
+  const title = completed === total ? finish :
+    participationTitles.findLast(([at]) => at <= completed)?.[1] ?? '準備中';
+  return {title, finish};
+}
+
+function renderPracticeDashboard(state, failed) {
+  let accuracy = '';
+  let brier = '';
+  let participation = '';
+  let title = '';
+  if (failed) accuracy = participation = '取得失敗';
+  else if (state?.status === 'unconfigured') accuracy = participation = '練習未接続';
+  else if (state?.progress) {
+    const {completed, total, judged, correct, average_brier} = state.progress;
+    const hits = judged ? '的中 ' + correct + '/' + judged : '方向判定なし';
+    const waiting = state.status === 'ready' ? ' · まだ採点なし' :
+      practiceRevealed(state) ? '' : ' · 採点待ち';
+    accuracy = '採点済み ' + completed + ' 件、方向判定対象 ' + judged + ' 件、' + hits + waiting;
+    if (average_brier !== null) brier = '平均Brier ' + number.format(average_brier);
+    participation = '完了 ' + completed + ' / 全 ' + total + ' ラウンド';
+    title = '称号 ' + participationAward(state.progress).title;
+  } else if (state) {
+    participation = '単発練習（連続ラウンドの記録なし）';
+    accuracy = '採点待ち';
+    if (practiceRevealed(state)) {
+      const {directionCorrect, brier:singleBrier} = state.result;
+      accuracy = '単発1件 · ' + (directionCorrect === null ? '方向判定なし' : directionResult(directionCorrect));
+      brier = 'Brier ' + number.format(singleBrier);
+    }
+  }
+  fillRecord({
+    'performance-accuracy':accuracy,
+    'performance-brier':brier,
+    'performance-participation':participation,
+    'performance-title-earned':title,
+  });
+}
+
 function clearJourneyHighlight() {
   practiceMilestones.classList.remove('journey-highlight');
 }
@@ -588,9 +648,8 @@ function renderPracticeMilestones(progress) {
     return;
   }
   journeyMeter.setAttribute('aria-valuetext', journeyCount.textContent + ' ラウンド');
-  const finish = (total === 12 ? '12ラウンド完走' : '全' + total + '回完走') + '（架空練習の参加賞）';
-  const earned = participationTitles.findLast(([at]) => at <= completed)?.[1] ?? '準備中';
-  journeyBadge.textContent = complete ? finish : earned;
+  const {title, finish} = participationAward(progress);
+  journeyBadge.textContent = title;
   const [nextAt, nextTitle] = participationTitles.find(([at]) => at > completed && at < total) ?? [total, finish];
   journeyNext.textContent = complete ? '' : 'あと' + (nextAt - completed) + '回の完了で「' + nextTitle + '」。';
 }
@@ -628,6 +687,7 @@ function renderPracticeProgress(state) {
 }
 
 function renderPractice(state, failed = false) {
+  if (state || failed) renderPracticeDashboard(state, failed);
   practiceState = state;
   clearReactionMotion();
   previewExpression();
