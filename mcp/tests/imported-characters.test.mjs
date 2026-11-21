@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile,writeFile,stat} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,writeFile,stat,readdir,symlink} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createImportedCharacterStore} from '../../game_runtime/imported-characters.mjs';
+import {createImportedCharacterStore,MAX_IMPORTED_PORTRAIT_REQUEST}
+  from '../../game_runtime/imported-characters.mjs';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
 
 const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
+const red={...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg=='};
+const green={...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGNkaGBgYGBgYmBgYGBgAAAGKgCE5tEtPAAAAABJRU5ErkJggg=='};
+const pngBytes=({base64})=>Buffer.from(base64,'base64');
+const checksum=image=>createHash('sha256').update(pngBytes(image)).digest('hex');
 const payload=(name,approach='trend',risk_percent=50)=>({
   name,approach,risk_percent,images:{body:png,ready:png,happy:png,portrait:png},
 });
@@ -270,5 +276,116 @@ test('local APIs create, list and serve character art linked to the model',async
       assert.equal((await (await fetch(base+'/api/imported-characters')).json()).characters.length,1);
       assert.equal((await fetch(base+'/api/imported-characters/image/zip_../../etc/passwd')).status,404);
     } finally {await new Promise(resolve=>server.close(resolve));}
+  });
+});
+
+test('visual edit updates the same saved ID and preserves every other field in both schemas',async()=>{
+  await tempStore(async(store,root)=>{
+    const legacy={...equipmentPayload([])};
+    delete legacy.accessories;
+    legacy.look.accessory='star';
+    for(const input of [
+      legacy,
+      equipmentPayload(['glasses',{name:'月のブローチ',method:'moving_average_trend'}]),
+      {...legacy,look:{...legacy.look,accessory:'none'}},
+      payload('旧モデル','reversion',75),
+    ]) {
+      const images={...input.images,happy:green,cautious:red};
+      const character=await store.register({...input,images});
+      const {id}=character;
+      const file=join(root,id+'.json');
+      const before=await readFile(file,'utf8');
+      const model=await store.model(id);
+      const expected_image_sha256=checksum(png);
+      const edit=await store.visualEdit(id);
+      assert.deepEqual(edit.character,character);
+      assert.deepEqual(edit.portrait,{width:2,height:2,image_sha256:expected_image_sha256});
+      const {portrait:oldImage,...oldSources}=JSON.parse(before).images;
+      assert.deepEqual(edit.sources,oldSources);
+      const {image_sha256}=await store.updatePortrait(id,{expected_image_sha256,portrait:red});
+      assert.equal(image_sha256,checksum(red));
+      const oldPortrait=JSON.stringify(oldImage);
+      const newPortrait=JSON.stringify({...red,size:pngBytes(red).length});
+      const committed=await readFile(file,'utf8');
+      assert.equal(committed,before.replace('"portrait":'+oldPortrait,'"portrait":'+newPortrait));
+      assert.equal((await stat(file)).mode & 0o777,0o600);
+      const reopened=createImportedCharacterStore({root});
+      assert.deepEqual(await reopened.model(id),model);
+      assert.deepEqual((await reopened.image(id)).bytes,pngBytes(red));
+      assert.deepEqual((await reopened.visualEdit(id)).character,
+        {...character,image_url:character.image_url.replace(expected_image_sha256,image_sha256)});
+      await assert.rejects(reopened.updatePortrait(id,{expected_image_sha256,portrait:green}),{status:409});
+      assert.equal(await readFile(file,'utf8'),committed);
+    }
+    assert.equal((await store.list()).characters.length,4);
+  });
+});
+
+test('only one competing portrait replacement commits across store instances',async()=>{
+  await tempStore(async(store,root)=>{
+    const {id}=await store.register(payload('競合'));
+    const expected_image_sha256=checksum(png);
+    const results=await Promise.allSettled([
+      store.updatePortrait(id,{expected_image_sha256,portrait:red}),
+      createImportedCharacterStore({root}).updatePortrait(id,{expected_image_sha256,portrait:green}),
+    ]);
+    const winner=results.filter(result=>result.status==='fulfilled');
+    const loser=results.filter(result=>result.status==='rejected');
+    assert.equal(winner.length,1);
+    assert.equal(loser.length,1);
+    assert.equal(loser[0].reason.status,409);
+    assert.equal((await store.visualEdit(id)).portrait.image_sha256,winner[0].value.image_sha256);
+    assert.deepEqual(await readdir(root),[id+'.json']);
+  });
+});
+
+test('visual edit API rejects invalid requests and symlinks without modifying the saved record',async()=>{
+  await tempStore(async(store,root)=>{
+    const {id}=await store.register(equipmentPayload(['star','glasses']));
+    const file=join(root,id+'.json');
+    const before=await readFile(file);
+    const server=createGameServer({importedCharacterStore:store});
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const port=server.address().port;
+    const origin='http://127.0.0.1:'+port;
+    const path=origin+'/api/imported-characters/visual-edit/';
+    const post=(target,body,headers={})=>fetch(path+target,{
+      method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),
+    });
+    const good={expected_image_sha256:checksum(png),portrait:red};
+    try {
+      const current=await fetch(path+id);
+      assert.equal(current.status,200);
+      assert.equal(current.headers.get('cache-control'),'no-store');
+      assert.deepEqual(await current.json(),await store.visualEdit(id));
+      for(const [body,status] of [
+        [{...good,appearance:{look:'changed'}},400],
+        [{...good,expected_image_sha256:'broken'},400],
+        [{...good,expected_image_sha256:'0'.repeat(64)},409],
+        [{...good,portrait:{...png,path:file}},400],
+        [{...good,portrait:{mime:'image/svg+xml',base64:png.base64}},400],
+        [{...good,portrait:{...png,base64:'AAAA'}},415],
+        [{...good,portrait:{...png,base64:'A'.repeat(4*Math.ceil((1024*1024+2)/3))}},413],
+        [{...good,portrait:{...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP8zwAFTDAGAwATKQED8NgHhAAAAABJRU5ErkJggg=='}},400],
+        [{...good,extra:'x'.repeat(MAX_IMPORTED_PORTRAIT_REQUEST)},413],
+      ]) assert.equal((await post(id,body)).status,status);
+      assert.equal((await post(id,good,{'Content-Type':'text/plain'})).status,415);
+      for(const headers of [{Origin:'http://localhost:'+port},{'Sec-Fetch-Site':'cross-site'}]) {
+        assert.equal((await fetch(path+id,{headers})).status,403);
+        assert.equal((await post(id,good,headers)).status,403);
+      }
+      const missing='zip_'+'f'.repeat(32);
+      for(const target of [missing,'','%2e%2e%2fother',id+'/extra']) {
+        assert.equal((await fetch(path+target)).status,404);
+        assert.equal((await post(target,good)).status,404);
+      }
+      await symlink(file,join(root,missing+'.json'));
+      assert.equal((await fetch(path+missing)).status,503);
+      assert.equal((await post(missing,good)).status,503);
+      assert.deepEqual(await readFile(file),before);
+      const saved=await post(id,good,{Origin:origin});
+      assert.equal(saved.status,200,await saved.clone().text());
+      assert.deepEqual(await saved.json(),{id,image_sha256:checksum(red)});
+    }finally{await new Promise(resolve=>server.close(resolve));}
   });
 });

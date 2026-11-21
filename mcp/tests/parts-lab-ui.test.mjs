@@ -26,8 +26,8 @@ test('drag geometry projects a letterboxed frame and preserves fixed axes',()=>{
   assert.equal(overlayPosition(400,320,160,0),100);
 });
 
-test('Chrome drags ZIP accessories and bakes them into the 12-day character portrait',
-  {timeout:45_000},async t=>{
+test('Chrome registers and re-edits ZIP portraits used in the 12-day game and replay',
+  {timeout:60_000},async t=>{
     let playwright;
     try {
       playwright=await import(process.env.FRIEND_UI_PLAYWRIGHT ?? 'playwright');
@@ -39,11 +39,12 @@ test('Chrome drags ZIP accessories and bakes them into the 12-day character port
     const root=await mkdtemp(join(tmpdir(),'parts-lab-chrome-'));
     const file=name=>join(root,name+'.json');
     const importedRoot=join(root,'imported');
+    const importedCharacterStore=createImportedCharacterStore({root:importedRoot});
     const model={fast_window:3,slow_window:9,risk_fraction:.35,
       plugin_weights:{trend:100,momentum:0,volatility:0,reversion:0},
       plugin_strengths:{trend:100,momentum:100,volatility:100,reversion:100}};
     const server=createGameServer({
-      importedCharacterStore:createImportedCharacterStore({root:importedRoot}),
+      importedCharacterStore,
       store:createGrowthStore({file:file('growth'),legacyFile:file('legacy')}),
       modelShopStore:createModelShopStore({file:file('shop')}),
       companionStore:createCompanionStore({file:file('companion')}),
@@ -383,11 +384,125 @@ test('Chrome drags ZIP accessories and bakes them into the 12-day character port
         Buffer.from(stored.images.portrait.base64,'base64'));
       assert.deepEqual(await (await page.request.get(origin+legacy.image_url)).body(),legacyBytes);
 
-      await page.locator('#zipGameLink a').click();
+      const chooser=page.locator('#editCharacter');
+      const openEdit=async id=>{
+        await chooser.locator('option[value="'+id+'"]').waitFor({state:'attached'});
+        await chooser.selectOption(id);
+        await page.locator('#openVisualEdit').click();
+        await page.locator('#visualEdit').waitFor();
+        await page.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      };
+      const saveEdit=()=>page.locator('#saveVisualEdit').click();
+      const closeEdit=()=>page.locator('#cancelVisualEdit').click();
+      const waitEditReady=()=>page.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      await openEdit(legacy.id);
+      assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 1.*400 × 400/);
+      assert.equal(await page.locator('#zipEquipped li').count(),1);
+      await upload(0,'overlay-legacy-edit.png','largeRed');
+      await waitEditReady();
+      assert.deepEqual(await pixel(200,200),red);
+      await saveEdit();
+      await page.locator('#confirmVisualEdit').waitFor();
+      await page.keyboard.press('Escape');
+      await page.locator('#confirmVisualEdit').waitFor({state:'hidden'});
+      await closeEdit();
+      assert.deepEqual((await importedCharacterStore.image(legacy.id)).bytes,legacyBytes);
+      assert.equal(writes.length,2);
+
+      const getModel=()=>importedCharacterStore.model(created.id);
+      const originalModel=await getModel();
+      const predictSameScenario=async()=>{
+        const response=await page.request.post(origin+'/api/quick-practice',{
+          data:{model_id:created.id,amount:1000,scenario_token:'v1_0123456789abcdef'},
+        });
+        assert.equal(response.status(),200,await response.text());
+        return response.json();
+      };
+      const baseline=await predictSameScenario();
+      const editPath='/api/imported-characters/visual-edit/'+created.id;
+      const portraitResponse=()=>page.waitForResponse(response=>
+        response.url()===origin+editPath && response.request().method()==='POST');
+      const replacePortrait=()=>page.locator('#confirmPortraitSave').click();
+      await openEdit(created.id);
+      assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 6.*64 × 64/);
+      assert.match(await page.locator('#editModel').textContent(),new RegExp(created.model_version));
+      assert.match(await page.locator('#editTraits').textContent(),/慎重/);
+      assert.match(await page.locator('#visualEdit .caution').textContent(),/再アップロード/);
+      assert.equal(await page.locator('#zipAccessory').isVisible(),false);
+      assert.equal(await row(0).locator('[data-action=unequip]').isVisible(),false);
+      assert.equal(await page.locator('#registerZip').isVisible(),false);
+      for (const selector of ['#frames','#mood','#faceX','#faceY','#zipHairColor','#zipExpression'])
+        assert.equal(await page.locator(selector).isDisabled(),true,selector);
+      assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),expectedPortrait);
+      assert.deepEqual(await pixel(32,32),bg);
+      await saveEdit();
+      assert.match(await page.locator('#confirmOverlayCount').textContent(),/0 \/ 3/);
+      await page.locator('#abortPortraitSave').click();
+      assert.equal(writes.length,2);
+      await upload(2,'overlay-custom-edit.png','red');
+      await waitEditReady();
+      await preview.scrollIntoViewIfNeeded();
+      await down(32,32);
+      await page.mouse.move(...await point(50,22),{steps:4});
+      await page.mouse.up();
+      assert.notDeepEqual(await position(2),[0,0]);
+      await adjustment(2,'scale').fill('150');
+      const editedPortrait=await pixels('#previewCanvas',0,0,64,64);
+      assert.deepEqual(await pixel(50,22),red);
+      assert.deepEqual(await pixel(32,32),bg);
+      const portraitFile=join(importedRoot,created.id+'.json');
+      assert.deepEqual(JSON.parse(await readFile(portraitFile,'utf8')),stored);
+      const updatedResponse=portraitResponse();
+      await saveEdit();
+      await replacePortrait();
+      const updated=await updatedResponse;
+      assert.equal(updated.status(),200,await updated.text());
+      const savedVersion=await updated.json();
+      assert.equal(savedVersion.id,created.id);
+      await page.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('更新しました'));
+      assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),editedPortrait);
+      const editedRecord=JSON.parse(await readFile(portraitFile,'utf8'));
+      assert.deepEqual({...editedRecord,images:{...editedRecord.images,portrait:stored.images.portrait}},stored);
+      assert.deepEqual(await getModel(),originalModel);
+      const after=await predictSameScenario();
+      assert.deepEqual(after.daily_ai_signals,baseline.daily_ai_signals);
+      assert.deepEqual(after.daily_synthetic_prices,baseline.daily_synthetic_prices);
+
+      // Open another editor before the next write, so it holds the older SHA.
+      const stale=await browser.newPage({reducedMotion:'reduce'});
+      stale.setDefaultTimeout(5000);
+      await stale.goto(origin+'/parts-lab/preview.html');
+      await stale.locator('#editCharacter').selectOption(created.id);
+      await stale.locator('#openVisualEdit').click();
+      await stale.locator('#visualEdit').waitFor();
+      await adjustment(2,'x').fill('75');
+      const secondPortrait=await pixels('#previewCanvas',0,0,64,64);
+      const secondResponse=portraitResponse();
+      await saveEdit();
+      await replacePortrait();
+      assert.equal((await secondResponse).status(),200);
+      await waitEditReady();
+      const committed=await readFile(portraitFile);
+      await stale.locator('#zipEquipped li').nth(0).locator('input[type=file]').setInputFiles({
+        name:'overlay-stale.png',mimeType:'image/png',buffer:bytes('red'),
+      });
+      await stale.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      const conflictResponse=stale.waitForResponse(res=>res.url()===origin+editPath && res.request().method()==='POST');
+      await stale.locator('#saveVisualEdit').click();
+      await stale.locator('#confirmPortraitSave').click();
+      assert.equal((await conflictResponse).status(),409);
+      await stale.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('未保存の編集'));
+      assert.equal(await stale.locator('#previewCanvas').evaluate(node=>
+        node.getContext('2d').getImageData(32,32,1,1).data[0]),255);
+      await stale.locator('#cancelVisualEdit').click();
+      assert.deepEqual(await readFile(portraitFile),committed);
+      await stale.close();
+
+      await page.goto(origin+'/game');
       await page.locator('#quickModel').selectOption(created.id);
       const gamePortrait='#quickZipPortrait';
       await page.locator(gamePortrait).waitFor();
-      assert.deepEqual(await pixels(gamePortrait,0,0,64,64),expectedPortrait);
+      assert.deepEqual(await pixels(gamePortrait,0,0,64,64),secondPortrait);
 
       await page.locator('#quickConfirm').click();
       const practiced=page.waitForResponse(res=>res.url()===origin+'/api/quick-practice');
@@ -396,9 +511,10 @@ test('Chrome drags ZIP accessories and bakes them into the 12-day character port
       assert.equal(practice.status(),200,await practice.text());
       assert.equal((await practice.json()).daily_ai_signals.length,12);
       await page.locator('#quickMiniPortrait').waitFor();
-      assert.deepEqual(await pixels('#quickMiniPortrait',0,0,64,64),expectedPortrait);
+      assert.deepEqual(await pixels('#quickMiniPortrait',0,0,64,64),secondPortrait);
       assert.deepEqual(writes,[
-        '/api/imported-characters/register','/api/imported-characters/register','/api/quick-practice',
+        '/api/imported-characters/register','/api/imported-characters/register',
+        editPath,editPath,'/api/quick-practice',
       ]);
       assert.deepEqual(external,[]);
       assert.deepEqual(pageErrors,[]);

@@ -46,6 +46,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .zip-import strong{color:#c8ffe3}
 .zip-import label{margin-bottom:8px}
 .zip-import fieldset{min-width:0;margin:12px 0;padding:12px;border:1px solid #7ab89f;border-radius:8px}
+#editSavedPortrait{display:block;max-width:100%;width:auto;height:auto;max-height:160px;margin-block:8px}
+dialog{max-width:min(90vw,34rem);border:1px solid #7295ad;border-radius:12px;padding:20px;background:#1a2b43;color:inherit}
+dialog:modal{overscroll-behavior:contain}
+dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contain}
 #zipEquipped{padding-inline-start:22px;overflow-wrap:anywhere}
 #zipEquipped li{margin-block:6px}
 #zipEquipped .controls{grid-template-columns:repeat(auto-fit,minmax(min(100%,8rem),1fr))}
@@ -64,10 +68,34 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <main>
 <p><a href="/game">Creature Labの外見づくりに戻る</a></p>
 <h1>PNGパーツ実験室</h1>
-<p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて、待機中の動きと表情の切替を試せます。画像はプレビューだけなら保存しません。ZIPからキャラを登録した場合のみ、このPCのゲーム用保存先に画像と予測設定を保存します。</p>
+<p>自分で描いたキャラの<strong>体・表情・髪・服</strong>を透明PNG/WebPで重ねて試せます。ZIPからキャラを登録したり、登録済みキャラのアクセサリーの見た目を編集したりできます。</p>
 <div class="layout">
 <section class="panel" aria-labelledby="fileTitle">
 <h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
+<section class="zip-import" aria-labelledby="editTitle">
+<h2 id="editTitle">登録済みZIPキャラの見た目を編集</h2>
+<div id="editChooser">
+<label for="editCharacter">登録済みキャラ
+<select id="editCharacter" disabled></select></label>
+<button id="openVisualEdit" type="button" disabled>見た目を編集</button>
+</div>
+<div id="visualEdit" hidden>
+<p><strong id="editName"></strong></p>
+<p class="metadata" id="editModel"></p>
+<p class="hint" id="editTraits"></p>
+<p class="caution">保存済みの画像にはアクセサリーが焼き込まれているため、元の重ね絵や位置は復元できません。残したい重ね絵は装備ごとに再アップロードしてください。保存すると、再添付していない重ね絵は新しい画像から消えます。</p>
+<p class="hint">予測用の装備を変えるには、キャラを新規登録してください。以前の合成に使った表示表情と顔位置は記録されていないため、通常の顔を元の位置で合成します。</p>
+<p>保存済みの画像</p>
+<img id="editSavedPortrait" alt="現在保存されているキャラの画像">
+<div id="editEquipmentMount"></div>
+<div class="actions">
+<button id="saveVisualEdit" class="primary" type="button" disabled>見た目の変更を保存</button>
+<button id="cancelVisualEdit" type="button">編集を終了</button>
+</div>
+</div>
+<p id="editStatus" role="status"></p>
+</section>
+<div id="registerParts">
 <div class="zip-import" aria-label="ZIP一括読み込み">
 <p><strong>おすすめ：ZIPを1回選ぶだけ</strong></p>
 <p class="hint">前に渡した「ラベンダーキャラ」のZIPを選ぶと、中の <code>body / ready / happy / cautious</code> を自動判別して再生します。展開や4枚の選択は不要です。</p>
@@ -79,12 +107,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <label for="zipName">登録するキャラの名前
 <input id="zipName" type="text" maxlength="16" value="新しい相棒" autocomplete="off"></label>
 <p class="hint"><strong>外見の特徴からAIを作成</strong>：ZIPのmanifest.jsonに登録されたアクセサリー・髪色・服色を自動取得します。記録のない特徴は下の項目で指定してください。画像そのものをAI認識した結果ではありません。</p>
-<fieldset id="zipEquipment">
+<div id="zipEquipmentMount"><fieldset id="zipEquipment">
 <legend>予測用アクセサリー（最大3個）</legend>
+<div id="zipEquipmentPicker">
 <p id="zipEquipmentHelp" class="hint">装備した分析方法を同じ比率で組み合わせます。同じ方法は1個まで。装備がなければ移動平均で分析します。見た目にも付ける場合は、装備ごとに重ね絵を選んでください。</p>
 <label for="zipAccessory">装備するアクセサリー
 <select id="zipAccessory" aria-describedby="zipEquipmentHelp"></select></label>
 <button id="zipEquip" type="button">装備する</button>
+</div>
 <ul id="zipEquipped" aria-label="装備中のアクセサリー"></ul>
 <template id="zipOverlayRow">
   <li>
@@ -106,8 +136,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
     </fieldset>
   </li>
 </template>
-<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。プレビューで重ね絵の見える部分をドラッグして移動できます。横・縦位置は数値欄でも調整でき、中央が0%、端が±100%です。重ね絵は各コマの同じ位置に表示され、登録時に選択中の表情の最初のコマへ合成します。元のアニメーション素材はそのまま保存します。重ね絵なしでも分析装備は登録できます。</p>
-<details>
+<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。プレビューで重ね絵の見える部分をドラッグして移動できます。横・縦位置は数値欄でも調整でき、中央が0%、端が±100%です。保存画像には最初のコマを使います。</p>
+<details id="zipAccessoryCreator">
 <summary>新しいアクセサリーを作る</summary>
 <div class="controls">
 <label for="zipAccessoryName">アクセサリー名（1〜24文字）
@@ -125,7 +155,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <small>作成したアクセサリーはこのPCの一覧に32件まで保存できます。</small>
 </details>
 <p id="zipEquipmentStatus" role="status" aria-live="polite"></p>
-</fieldset>
+</fieldset></div>
 <div class="controls">
 <label for="zipHairStyle">髪型（分析の比率が変わります）
 <select id="zipHairStyle"><option value="">選択してください</option><option value="bob">ボブ：流れ</option><option value="long">ロング：反転</option><option value="twintails">ツインテール：勢い</option></select></label>
@@ -181,6 +211,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p class="hint">4枚とも同じ画像サイズが必要です。体には顔を描かず、顔画像の背景は透明にしてください。アップロード・保存は行いません。</p>
 <div class="actions"><button id="loadGenerated" type="button" class="primary">生成シートを6コマに変換して試す</button></div>
 </details>
+</div>
 <p id="status" role="status" aria-live="polite">まだ画像は読み込まれていません。</p>
 <p class="caution">自作または使用・改変の許可がある絵だけを読み込んでください。VRChatアバターや他人のイラストを少し改変しただけでは、利用許可の代わりになりません。</p>
 </section>
@@ -205,6 +236,15 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p class="hint">動きを減らす設定では最初の1コマだけを表示します。プレビューは予測AI・XP・コインに影響しません。ZIPの登録ボタンを押した場合のみ、専用の予測AI設定を作成します。実際の予測精度は未検証です。</p>
 </section>
 </div>
+<dialog id="confirmVisualEdit" aria-labelledby="confirmVisualTitle" aria-describedby="confirmVisualWarning">
+<h2 id="confirmVisualTitle">保存済みの画像を差し替えますか？</h2>
+<p id="confirmVisualWarning">プレビューの最初のコマで上書きします。再添付していない重ね絵は消えます。</p>
+<p id="confirmOverlayCount"></p>
+<div class="actions">
+<button id="abortPortraitSave" type="button" autofocus>編集に戻る</button>
+<button id="confirmPortraitSave" type="button" class="primary">画像を差し替える</button>
+</div>
+</dialog>
 </main>
 </body>
 </html>

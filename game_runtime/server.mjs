@@ -28,7 +28,8 @@ import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket} from './historical-market.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
-import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST} from './imported-characters.mjs';
+import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST,
+  MAX_IMPORTED_PORTRAIT_REQUEST} from './imported-characters.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
@@ -428,6 +429,24 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         if (!IMPORTED_CHARACTER_ID.test(id))return json(res,404,{error:'画像が見つかりません'});
         try{return artworkImage(res,await importedCharacterStore.image(id));}
         catch(error){return json(res,error?.status===404?404:503,{error:'画像が見つかりません'});}
+      }
+      const editPrefix='/api/imported-characters/visual-edit/';
+      if(rawPath.startsWith(editPrefix)) {
+        const id=rawPath.slice(editPrefix.length);
+        if(!IMPORTED_CHARACTER_ID.test(id)||!['GET','POST'].includes(req.method))
+          return json(res,404,{error:'キャラが見つかりません'});
+        if(req.headers.origin && req.headers.origin!==`http://${req.headers.host}`)
+          return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+        if(inFlight>=2)return json(res,429,{error:'処理が混雑しています'});
+        inFlight++;
+        try {
+          const result=req.method==='GET'?await importedCharacterStore.visualEdit(id):
+            await importedCharacterStore.updatePortrait(id,await getBody(req,MAX_IMPORTED_PORTRAIT_REQUEST));
+          return json(res,200,result);
+        }catch(error){
+          const status=error?.status??503;
+          return json(res,status,{error:status>=500?'保存済みのキャラ画像を処理できません':error.message});
+        }finally{inFlight--;}
       }
       if(!['/api/imported-characters/register',accessoriesPath].includes(rawPath) || req.method!=='POST')
         return json(res,404,{error:'見つかりません'});

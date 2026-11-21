@@ -1,6 +1,6 @@
 /** Local ZIP character registry. Each registration owns an independent model snapshot.
  * Never touches live forecasts, existing companion, XP, wallets or V9 data. */
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,open,readdir,lstat,rename,rmdir,unlink} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join,resolve} from 'node:path';
@@ -9,7 +9,7 @@ import {deriveForwardCompanionModel,identifyForwardModel} from './forward-model.
 import {APPROACHES,normalizeCompanionColor} from './companion.mjs';
 import {validateLook} from './looks.mjs';
 import {deriveForwardAppearanceModel,identifyForwardAppearanceModel} from './appearance-model.mjs';
-import {validateImageStructure} from './image-validation.mjs';
+import {validatedImageDimensions} from './image-validation.mjs';
 import {ACCESSORY_COMBINATION_VERSION,CUSTOM_ACCESSORY_ID,equipmentHash,validateAccessoryDefinition,
   validateEquippedAccessories} from './accessory-catalog.mjs';
 import {ACCESSORY_METHODS,BUILTIN_ACCESSORIES,normalizeEquipment} from './parts-lab/accessory-options.mjs';
@@ -18,25 +18,39 @@ export const IMPORTED_CHARACTER_ROOT=fileURLToPath(new URL('../local_state/node_
 export const IMPORTED_CHARACTER_ID=/^zip_[a-f0-9]{32}$/;
 export const MAX_IMPORTED_REQUEST=30*1024*1024;
 const MAX_IMAGE=5*1024*1024,MAX_PORTRAIT=1024*1024,MAX_TOTAL=21*1024*1024;
+export const MAX_IMPORTED_PORTRAIT_REQUEST=4*Math.ceil(MAX_PORTRAIT/3)+512;
 const MAX_CUSTOM_ACCESSORIES=32;
-const IMAGE_KEYS=['body','ready','happy','cautious','portrait'];
+const SOURCE_KEYS=['body','ready','happy','cautious'];
+const IMAGE_KEYS=[...SOURCE_KEYS,'portrait'];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,keys)=>object(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
-function decodeImage(value,part) {
+function decodeImage(value,part,details) {
   if(!exact(value,['mime','base64'])||!['image/png','image/webp'].includes(value.mime))
     throw fail('キャラ画像はPNGまたはWebPにしてください');
   const encoded=value.base64;
   const limit=part==='portrait'?MAX_PORTRAIT:MAX_IMAGE;
-  if(typeof encoded!=='string'||encoded.length<4||encoded.length>4*Math.ceil(limit/3)||
+  if(typeof encoded==='string'&&encoded.length>4*Math.ceil(limit/3))
+    throw fail('画像が大きすぎます',413);
+  if(typeof encoded!=='string'||encoded.length<4||
      encoded.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))throw fail('画像のbase64が不正です');
   const bytes=Buffer.from(encoded,'base64');
   if(!bytes.length||bytes.length>limit||bytes.toString('base64')!==encoded)
     throw fail('画像サイズまたはbase64が不正です',413);
-  if(!validateImageStructure(bytes,value.mime))
+  const size=validatedImageDimensions(bytes,value.mime);
+  if(!size)
     throw fail('画像が破損しているか未対応の形式です',415);
+  if(details)Object.assign(details,size,{bytes});
   return {mime:value.mime,base64:encoded,size:bytes.length};
 }
+function storedImage(item,part,details) {
+  try {
+    const image=decodeImage({mime:item.mime,base64:item.base64},part,details);
+    if(image.size!==item.size)throw Error('invalid saved image size');
+    return image;
+  }catch{throw fail('画像の保存内容が不正です',503);}
+}
+const imageHash=bytes=>createHash('sha256').update(bytes).digest('hex');
 function validateRegistration(payload) {
   const usingEquipment=exact(payload,['name','look','colors','images','accessories']);
   const usingAppearance=usingEquipment||exact(payload,['name','look','colors','images']);
@@ -78,11 +92,11 @@ function validateRegistration(payload) {
   }
   return {name:payload.name.trim(),images,generation,appearance,equipped};
 }
-function summary(record) {
+function summary(record,portraitHash=imageHash(Buffer.from(record.images.portrait.base64,'base64'))) {
   return {id:record.id,name:record.name,ai_id:record.ai_id,
     model_version:record.generation.model_version,
     model:record.generation.model,model_revision:record.model_revision,
-    image_url:'/api/imported-characters/image/'+record.id,
+    image_url:'/api/imported-characters/image/'+record.id+'?v='+portraitHash,
     appearance:record.appearance??null,
     model_origin:record.appearance?'appearance_features':'legacy_manual',
     accessory_analysis:record.schema===2?{
@@ -152,6 +166,7 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
     try {item=await readRecord(join(root,id+'.json'),MAX_IMPORTED_REQUEST);}
     catch(error){
       if(error.code==='ENOENT')throw fail('キャラが見つかりません',404);
+      if(error.code==='ELOOP')throw fail('キャラ保存先が不正です',503);
       throw error;
     }
     if(![1,2].includes(item?.schema)||item.id!==id||item.ai_id!==id||
@@ -176,8 +191,8 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
           'equipped','equipment_hash','images']) || !exact(item.appearance,['look','colors']))
           throw Error('invalid equipment record');
         if(item.appearance?.look.accessory!=='none')throw Error('equipment requires appearance');
-        item.equipped=validateEquippedAccessories(item.equipped);
-        if(equipmentHash(id,validated.modelHash,item.equipped)!==item.equipment_hash)
+        const equipped=validateEquippedAccessories(item.equipped);
+        if(equipmentHash(id,validated.modelHash,equipped)!==item.equipment_hash)
           throw Error('equipment hash mismatch');
       }
     }catch{throw fail('保存済みモデル設定を検証できません',503);}
@@ -235,10 +250,55 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
         equipment_hash:record.equipment_hash,
       }:{accessory_strategy:record.appearance?.look.accessory??null})};},
     async image(id) {
-      const item=(await load(id)).images.portrait;
-      const validated=decodeImage({mime:item.mime,base64:item.base64},'portrait');
-      if(validated.size!==item.size)throw fail('画像の保存内容が不正です',503);
-      return {mime:validated.mime,bytes:Buffer.from(validated.base64,'base64')};
+      const details={};
+      const {mime}=storedImage((await load(id)).images.portrait,'portrait',details);
+      return {mime,bytes:details.bytes};
+    },
+    async visualEdit(id) {
+      const record=await load(id);
+      const portrait={};
+      storedImage(record.images.portrait,'portrait',portrait);
+      const sources={};
+      for(const part of SOURCE_KEYS) {
+        if(Object.hasOwn(record.images,part))sources[part]=storedImage(record.images[part],part);
+      }
+      const image_sha256=imageHash(portrait.bytes);
+      return {
+        character:summary(record,image_sha256),sources,
+        portrait:{width:portrait.width,height:portrait.height,image_sha256},
+      };
+    },
+    async updatePortrait(id,payload) {
+      if(typeof id!=='string'||!IMPORTED_CHARACTER_ID.test(id))throw fail('キャラIDが不正です',404);
+      if(!exact(payload,['expected_image_sha256','portrait'])||
+         typeof payload.expected_image_sha256!=='string'||!/^[a-f0-9]{64}$/.test(payload.expected_image_sha256))
+        throw fail('保存済み画像の確認情報が不正です');
+      const next={};
+      const portrait=decodeImage(payload.portrait,'portrait',next);
+      if(next.width>1024||next.height>1024)throw fail('合成画像の縦横は1024px以下にしてください');
+      await ensureRoot();
+      const lock=join(root,'.portrait-'+id+'.lock');
+      try {await mkdir(lock,{mode:0o700});}
+      catch(error){
+        if(error.code!=='EEXIST')throw error;
+        throw fail('このキャラの画像は保存処理中です',409);
+      }
+      try {
+        // Verify the current portrait under the same lock held through replacement.
+        const record=await load(id);
+        const previous={};
+        storedImage(record.images.portrait,'portrait',previous);
+        if(imageHash(previous.bytes)!==payload.expected_image_sha256)
+          throw fail('保存済みの画像が別の画面で更新されました',409);
+        if(previous.width!==next.width||previous.height!==next.height)
+          throw fail('合成画像は保存済み画像と同じ寸法にしてください');
+        const image_sha256=imageHash(next.bytes);
+        if(image_sha256!==payload.expected_image_sha256) {
+          record.images.portrait=portrait;
+          await writeRecord(join(root,id+'.json'),record);
+        }
+        return {id,image_sha256};
+      }finally{await rmdir(lock);}
     },
   };
 }

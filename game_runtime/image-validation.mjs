@@ -59,6 +59,7 @@ function png(b) {
   check(out.buffer.length===size && out.engine.bytesWritten===compressed.length);
   let offset=0;
   for(const [stride,count] of rows) for(let y=0;y<count;y++,offset+=stride) check(out.buffer[offset]<=4);
+  return {width:w,height:h};
 }
 function jpeg(b) {
   check(b.length>=4 && b[0]===255 && b[1]===216);
@@ -118,7 +119,7 @@ function jpeg(b) {
 }
 function webp(b) {
   check(b.length>=20 && b.toString('ascii',0,4)==='RIFF' && b.toString('ascii',8,12)==='WEBP' && b.readUInt32LE(4)===b.length-8);
-  let p=12,images=0,canvas=null;
+  let p=12,images=0,canvas=null,size;
   while(p<b.length) {
     check(p+8<=b.length);
     const type=b.toString('ascii',p,p+4),n=b.readUInt32LE(p+4),end=p+8+n;
@@ -140,12 +141,19 @@ function webp(b) {
         const bits=d.readUInt32LE(1);w=1+(bits&0x3fff);h=1+((bits>>>14)&0x3fff);
       }
       dimensions(w,h);if(canvas) check(w===canvas[0] && h===canvas[1]);
+      size={width:w,height:h};
     } else check(canvas && ['ALPH','ICCP','EXIF','XMP '].includes(type) && n>0);
     p=end+(n&1);
   }
   check(images===1);
+  return size;
+}
+export function validatedImageDimensions(bytes,mime) {
+  try {return ({'image/png':png,'image/webp':webp}[mime])(bytes);}
+  catch {return null;}
 }
 export function validateImageStructure(bytes,mime) {
-  try {({ 'image/png':png,'image/jpeg':jpeg,'image/webp':webp }[mime])(bytes);return true;}
+  if(mime!=='image/jpeg')return Boolean(validatedImageDimensions(bytes,mime));
+  try {jpeg(bytes);return true;}
   catch {return false;}
 }
