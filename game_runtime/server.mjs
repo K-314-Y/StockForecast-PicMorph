@@ -30,7 +30,12 @@ import {compareHistoricalMarket} from './historical-market.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST,
   MAX_IMPORTED_PORTRAIT_REQUEST} from './imported-characters.mjs';
+import {createPracticeEngineSourceGuard} from './practice-engine-fingerprint.mjs';
 
+// Static imports are already evaluated. A server created later in this process
+// cannot pair a new disk baseline with the same cached Node modules.
+const loadedPracticeEngine = createPracticeEngineSourceGuard();
+const ENGINE_SOURCE_UNVERIFIED = 'PRACTICE_ENGINE_SOURCE_UNVERIFIED';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
@@ -315,7 +320,26 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   appearanceImage = readAppearanceImage,
                                   trainedVersions = readTrainingVersions,
                                   trainedVersion = resolveTrainedVersion,
-                                  chatgptDialogue = null, chatgptClient = null} = {}) {
+                                  chatgptDialogue = null, chatgptClient = null,
+                                  practiceEngineSourceGuard = loadedPracticeEngine} = {}) {
+  const serverEngineBaseline = practiceEngineSourceGuard.captureBaseline();
+  async function verifyPracticeEngineSource() {
+    let current;
+    try {
+      if (!serverEngineBaseline || !practiceEngineSourceGuard.baseline) throw Error('Missing practice source baseline');
+      current = await practiceEngineSourceGuard.read();
+      if (typeof current !== 'string' || current.length !== 64 || !/^[a-f0-9]{64}$/.test(current)) {
+        throw Error('Invalid practice source fingerprint');
+      }
+    } catch {
+      throw Object.assign(failure('予測エンジンの計算コードを確認できません'), {code:ENGINE_SOURCE_UNVERIFIED});
+    }
+    if (current !== serverEngineBaseline || current !== practiceEngineSourceGuard.baseline) {
+      throw Object.assign(failure('予測エンジンの計算コードが変更されました。サーバーを再起動してください',409),
+        {code:ENGINE_SOURCE_UNVERIFIED});
+    }
+    return current;
+  }
   const readForwardRecords = createForwardRecordReader(forwardRecords);
   if (forwardRecords?.fxSource !== undefined) {
     const context = getForwardMockRecordContext(forwardRecords.source);
@@ -768,12 +792,19 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           await modelShopStore.licensedModel(payload.model_id);
         const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
         const scenarioToken = payload.scenario_token ?? 'v1_'+randomBytes(8).toString('hex');
-        const plan = await predict({...originals,models:{...originals.models,mine},
+        const predictionInput = {...originals,models:{...originals.models,mine},
           scenario_token:scenarioToken,
           ...(imported?.accessory_methods ? {accessory_methods:imported.accessory_methods} :
             imported?.accessory_strategy ?
             {accessory_strategy:imported.accessory_strategy}:{}),
-        });
+        };
+        const engineSourceHash = await verifyPracticeEngineSource();
+        let plan;
+        try {
+          plan = await predict(predictionInput);
+        } finally {
+          await verifyPracticeEngineSource();
+        }
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
         const importedAfter = imported ? await importedCharacterStore.model(payload.model_id) : null;
@@ -800,6 +831,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const normal = settleLeveragedPractice({
           equityPath:result.raw_equity_path,amount:payload.amount,leverage:1,
         });
+        await verifyPracticeEngineSource();
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
           scenario_token:scenarioToken, scenario_kind:scenarioKind,
@@ -811,7 +843,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             source:'saved_companion',approach:companion.companion.approach,
             risk_percent:companion.companion.risk_percent,
           } : null,
-          model_id:payload.model_id, model_effective_sha256:effectiveHash, initial_balance:10000,
+          model_id:payload.model_id, model_effective_sha256:effectiveHash,
+          engine_source_sha256:engineSourceHash, initial_balance:10000,
           invested_coins:settled.invested_coins, cash_held:settled.cash_held,
           leverage:settled.leverage,
           profit_coins:settled.profit_coins,
@@ -1069,6 +1102,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       });
     } catch (error) {
       const status = error?.status || (/不正|配分|100%|整数/.test(error?.message) ? 400 : 503);
+      if (path === '/api/quick-practice' && error?.code === ENGINE_SOURCE_UNVERIFIED) {
+        return json(res,status,{error:error.message, code:ENGINE_SOURCE_UNVERIFIED});
+      }
       return json(res, status, {error: status >= 500 ? 'ゲームサーバーの準備ができていません' : error.message});
     } finally {
       inFlight--;

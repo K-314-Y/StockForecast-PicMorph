@@ -8,6 +8,7 @@ const html=await readFile(new URL('../../game_runtime/demo.html',import.meta.url
 
 const selfFingerprint='a'.repeat(64);
 const otherFingerprint='b'.repeat(64);
+const engineFingerprint='c'.repeat(64);
 
 async function mount(models=[],chatgpt=false,imported=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
@@ -66,6 +67,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     scenario_kind:body.scenario_token?'replay':'new',
     model_id:body.model_id,initial_balance:10000,cash_held:10000-body.amount,companion_strategy:null,
     model_effective_sha256:body.model_id==='self'?selfFingerprint:otherFingerprint,
+    engine_source_sha256:engineFingerprint,
     invested_coins:body.amount,leverage:body.leverage,liquidated_at_step:null,
     final_balance:10025,profit_coins:25,max_drawdown_pct:1,
     daily_balances:[10000,10010,9995,10000,10005,10010,10015,10020,10010,10015,10020,10030,10025],
@@ -3269,8 +3271,8 @@ test('P9r uses a native button and an existing live region, and explains the sam
   assert.match(html,/追加の3例（結果を見た後に選んだAIでの練習）/);
   assert.match(html,/3個の独立した試算の算術平均/);
   assert.match(html,/累計利益や現実の最大下落率/);
-  assert.match(html,/予測設定と装備分析の識別値が最初の比較時と一致した場合にのみ3例を表示/);
-  assert.match(html,/AIのコード変更や画面外の変更すべてを監視するものではありません/);
+  assert.match(html,/予測設定・装備分析の識別値、および指定の計算コードの識別値が最初の比較時と一致した場合にのみ3例を表示/);
+  assert.match(html,/プログラムの全依存関係や実行環境、外部からの変更までは保証しません/);
   assert.match(html,/実際の投資成績やAIの性能ランキングには使えません/);
   assert.match(html,/@media\(max-width:550px\)\{[^}]*#quickCompareMultiCards\{grid-template-columns:1fr/);
 });
@@ -3332,6 +3334,7 @@ test('P9r sends six sequential requests with four distinct tokens and displays t
   assert.deepEqual(responses.map(({scenario_kind})=>scenario_kind),['new','replay','new','replay','new','replay']);
   assert.deepEqual(responses.map(({model_effective_sha256})=>model_effective_sha256),
     [selfFingerprint,otherFingerprint,selfFingerprint,otherFingerprint,selfFingerprint,otherFingerprint]);
+  assert.deepEqual(responses.map(({engine_source_sha256})=>engine_source_sha256),Array(6).fill(engineFingerprint));
   assert.equal(new Set([practiceCalls(ui)[1].scenario_token,...responses.filter((_,i)=>i%2===0)
     .map(value=>value.scenario_token)]).size,4);
   assert.equal(get('quickCompareMultiResults').hidden,false);
@@ -3365,6 +3368,71 @@ test('P9s completes all three scenarios when different model IDs share a fingerp
   assert.equal(get('quickCompareMultiResults').hidden,false);
   assert.deepEqual(get('quickCompareMultiCards').children.map(card=>card.children[0].textContent),
     ['シナリオ1','シナリオ2','シナリオ3','モデル別の参考平均']);
+});
+
+const engineChanged=/予測エンジンが変化した可能性があるため、追加比較を中断/;
+
+test('P9t keeps both initial cards when the shared engine fingerprint cannot be confirmed',async()=>{
+  for(const [target,fingerprint] of [
+    ['both',undefined],['self',undefined],[compareDemo.id,undefined],
+    ['self','C'.repeat(64)],[compareDemo.id,'C'.repeat(64)],
+    ['self','c'.repeat(63)],[compareDemo.id,engineFingerprint+'\n'],
+    [compareDemo.id,'f'.repeat(64)],['both',[engineFingerprint]],
+  ]) {
+    const ui=await mount([compareDemo]);
+    const {get,fire,state}=ui;
+    const practice=state.practice;
+    state.practice=async body=>{
+      const value=await practice(body);
+      if(target==='both' || body.model_id===target)value.engine_source_sha256=fingerprint;
+      return value;
+    };
+    await completeSingleCompare(ui);
+    assert.equal(get('quickResult').hidden,false);
+    assert.equal(get('quickReplay').hidden,false);
+    assert.equal(get('quickCompareResults').hidden,false);
+    assert.equal(get('quickCompareResults').children.length,2);
+    assert.equal(get('quickCompareMulti').hidden,true);
+    assert.equal(get('quickCompareMultiRun').disabled,true);
+    assert.match(get('quickCompareStatus').textContent,engineChanged);
+    await fire('quickCompareMultiRun');
+    assert.equal(practiceCalls(ui).length,2);
+    assertMultiEmpty(get);
+  }
+});
+
+test('P9t discards all three pairs on any unverified engine reply and preserves practice and replay',async()=>{
+  for(const changedIndex of [0,1,2,3,4,5]) {
+    for(const issue of ['different','missing','invalid','409','503']) {
+      const ui=await mount([compareDemo]);
+      const {get,fire,state}=ui;
+      await completeSingleCompare(ui);
+      const single=get('quickCompareResults').children,original=get('quickResult').children;
+      const replay=get('quickReplayDay').textContent;
+      const fixture=multiPracticeFixture(state.practice);
+      let index=0;
+      state.practice=async(body,options)=>{
+        const value=await fixture(body,options);
+        if(index++!==changedIndex)return value;
+        if(issue==='409' || issue==='503') {
+          state.practiceHttpError=Number(issue);
+          return {error:'計算コードの確認に失敗',code:'PRACTICE_ENGINE_SOURCE_UNVERIFIED'};
+        }
+        if(issue==='missing')delete value.engine_source_sha256;
+        else value.engine_source_sha256=issue==='invalid'?'C'.repeat(64):'d'.repeat(64);
+        return value;
+      };
+      await fire('quickCompareMultiRun');
+      assert.equal(practiceCalls(ui).length,3+changedIndex,issue);
+      assertMultiEmpty(get);
+      assert.match(get('quickCompareMultiStatus').textContent,engineChanged);
+      assert.equal(get('quickCompareResults').hidden,false);
+      assert.equal(get('quickCompareResults').children,single);
+      assert.equal(get('quickResult').children,original);
+      assert.equal(get('quickReplay').hidden,false);
+      assert.equal(get('quickReplayDay').textContent,replay);
+    }
+  }
 });
 
 test('P9s keeps normal practice and P9q available when either initial fingerprint is unusable',async()=>{
@@ -3442,11 +3510,12 @@ test('P9s aborts on fingerprint drift, missing or malformed fingerprints, and HT
 test('P9r discards the entire batch on malformed replies, HTTP errors, price drift and duplicate tokens',async()=>{
   const cases=[
     ['malformed A',2,()=>null],
-    ['malformed JSON',5,()=>({})],
+    ['malformed JSON',5,()=>({code:'PRACTICE_ENGINE_SOURCE_UNVERIFIED'})],
     ['403',3,()=>({error:'モデルが利用できません'})],
     ['503',4,()=>({error:'メンテナンス中'})],
     ['429',2,()=>({error:'混雑中'})],
-    ['one different price',5,v=>({...v,daily_synthetic_prices:v.daily_synthetic_prices.map((p,i)=>i===12?p+1e-12:p)})],
+    ['one different price',5,v=>({...v,engine_source_sha256:undefined,
+      daily_synthetic_prices:v.daily_synthetic_prices.map((p,i)=>i===12?p+1e-12:p)})],
     ['sparse prices',3,v=>{delete v.daily_synthetic_prices[2];return v;}],
     ['original token',2,v=>({...v,scenario_token:'v1_0123456789abcdef'})],
     ['duplicate new token',4,v=>({...v,scenario_token:multiTokens[0]})],
@@ -3454,7 +3523,7 @@ test('P9r discards the entire batch on malformed replies, HTTP errors, price dri
     ['invalid token',2,v=>({...v,scenario_token:'invalid'})],
     ['wrong A kind',2,v=>({...v,scenario_kind:'replay'})],
     ['wrong B kind',3,v=>({...v,scenario_kind:'new'})],
-    ['wrong model',5,v=>({...v,model_id:'demo_reversion'})],
+    ['wrong model',5,v=>({...v,model_id:'demo_reversion',engine_source_sha256:undefined})],
     ['wrong amount',2,v=>({...v,invested_coins:'1000'})],
     ['wrong leverage',3,v=>({...v,leverage:2})],
     ['wrong initial balance',2,v=>({...v,initial_balance:9999})],

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {copyFile,mkdtemp,rm,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
@@ -9,6 +9,7 @@ import {createLookStore} from '../../game_runtime/looks.mjs';
 import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 import {runSyntheticGame} from '../../game_runtime/practice.mjs';
 import {settleLeveragedPractice} from '../../game_runtime/leverage-practice.mjs';
+import {createPracticeEngineSourceGuard} from '../../game_runtime/practice-engine-fingerprint.mjs';
 const MODEL={fast_window:3,slow_window:9,risk_fraction:.35,
   plugin_weights:{trend:100,momentum:0,volatility:0,reversion:0},
   plugin_strengths:{trend:100,momentum:100,volatility:100,reversion:100}};
@@ -28,11 +29,12 @@ async function withServer(fn,options={}){
       equip:()=>{writes++;throw Error('gear write')}},
     companionStore:{read:async()=>options.companion??companion,save:()=>{writes++;throw Error('companion write')}},
     modelShopStore:options.modelShopStore??shop,
+    practiceEngineSourceGuard:options.practiceEngineSourceGuard,
     loadSnapshot:options.loadSnapshot|| (async()=>snapshot()),
     predict:async plan=>{
       predictions++;
       const predicted=await pythonPredict(plan);
-      options.inspectPlan?.(plan,predicted);
+      await options.inspectPlan?.(plan,predicted);
       return predicted;
     },
   });
@@ -340,6 +342,7 @@ test('sprint75: token validation precedes prediction; new and replay are read-on
     assert.equal((await run({...body,scenario_token:token})).status,400);
   }
   assert.equal((await run({...body,scenario_token:'v1_0123456789abcdef',seed:1})).status,400);
+  assert.equal((await run({...body,engine_source_sha256:'a'.repeat(64)})).status,400);
   assert.equal(calls,0);
   const fresh=await run(body);
   assert.equal(fresh.status,200,JSON.stringify(fresh.data));
@@ -361,6 +364,8 @@ test('sprint75: token validation precedes prediction; new and replay are read-on
   for(const {data} of [fresh,replay,second]) {
     assert.match(data.model_effective_sha256,/^[a-f0-9]{64}$/);
     assert.equal(data.model_effective_sha256,fresh.data.model_effective_sha256);
+    assert.match(data.engine_source_sha256,/^[a-f0-9]{64}$/);
+    assert.equal(data.engine_source_sha256,fresh.data.engine_source_sha256);
     for(const flag of ['persisted','xp_awarded','order_placed','real_market'])assert.equal(data[flag],false);
   }
   assert.equal(calls,3);
@@ -379,7 +384,7 @@ test('P9s reports the effective fingerprint after each saved companion settings 
   const demoId=modelShop.models[0].id;
   await shop.purchase({id:demoId,expected_revision:modelShop.revision});
   const profile={name:'相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35};
-  const hashes=[];
+  const hashes=[],engineHashes=[];
   for(const [revision,settings] of [
     [0,profile],[1,{...profile,approach:'reversion'}],[2,{...profile,approach:'reversion',risk_percent:80}],
   ]) {
@@ -388,12 +393,81 @@ test('P9s reports the effective fingerprint after each saved companion settings 
     assert.equal(result.status,200,JSON.stringify(result.data));
     assert.match(result.data.model_effective_sha256,/^[a-f0-9]{64}$/);
     hashes.push(result.data.model_effective_sha256);
+    engineHashes.push(result.data.engine_source_sha256);
   }
   assert.equal(new Set(hashes).size,3);
   const demo=await run(demoId);
   assert.equal(demo.status,200,JSON.stringify(demo.data));
   assert.match(demo.data.model_effective_sha256,/^[a-f0-9]{64}$/);
   assert.notEqual(demo.data.model_effective_sha256,hashes.at(-1));
+  assert.match(demo.data.engine_source_sha256,/^[a-f0-9]{64}$/);
+  assert.deepEqual(engineHashes,Array(3).fill(demo.data.engine_source_sha256));
+});
+
+test('P9t rejects file drift before and during prediction, and requires matching startup baselines',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'quick-engine-source-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const source=join(dir,'engine.py');
+  const original=new URL('../../engine.py',import.meta.url);
+  const restore=()=>copyFile(original,source);
+  const change=()=>writeFile(source,'# changed source\n');
+  const body={amount:1000,model_id:'self'};
+  await restore();
+  const createGuard=()=>createPracticeEngineSourceGuard({sources:[['engine.py',source]]});
+  const guard=createGuard();
+  const failClosed=({status,data},expected)=>{
+    assert.equal(status,expected,JSON.stringify(data));
+    assert.deepEqual(Object.keys(data).sort(),['code','error']);
+    assert.equal(data.code,'PRACTICE_ENGINE_SOURCE_UNVERIFIED');
+  };
+  let editDuringPrediction=false;
+  let originalHash;
+  await withServer(async({base,shop,read})=>{
+    const shopBefore=await shop.public();
+    const healthy=await post(base,body);
+    assert.equal(healthy.status,200);
+    originalHash=healthy.data.engine_source_sha256;
+    assert.equal(originalHash,guard.baseline);
+    await change();
+    failClosed(await post(base,body),409);
+    await unlink(source);
+    failClosed(await post(base,body),503);
+    const health=await fetch(base+'/health');
+    assert.equal(health.status,200);
+    assert.equal(Object.hasOwn(await health.json(),'engine_source_sha256'),false);
+    assert.deepEqual(read(),{writes:0,predictions:1});
+    await restore();
+    editDuringPrediction=true;
+    failClosed(await post(base,body),409);
+    assert.deepEqual(read(),{writes:0,predictions:2});
+    await restore();
+    const recovered=await post(base,body);
+    assert.equal(recovered.status,200);
+    assert.equal(recovered.data.engine_source_sha256,originalHash);
+    assert.deepEqual(await shop.public(),shopBefore);
+    assert.deepEqual(read(),{writes:0,predictions:3});
+  },{practiceEngineSourceGuard:guard,inspectPlan:async()=>{
+    if(editDuringPrediction){editDuringPrediction=false;await change();}
+  }});
+
+  await change();
+  await withServer(async({base,read})=>{
+    failClosed(await post(base,body),409);
+    assert.deepEqual(read(),{writes:0,predictions:0});
+  },{practiceEngineSourceGuard:guard});
+  // Capture both baselines again, as a new process would after loading new code.
+  await withServer(async({base,read})=>{
+    const restarted=await post(base,body);
+    assert.equal(restarted.status,200);
+    assert.notEqual(restarted.data.engine_source_sha256,originalHash);
+    assert.deepEqual(read(),{writes:0,predictions:1});
+  },{practiceEngineSourceGuard:createGuard()});
+  await unlink(source);
+  await withServer(async({base,read})=>{
+    await restore();
+    failClosed(await post(base,body),503);
+    assert.deepEqual(read(),{writes:0,predictions:0});
+  },{practiceEngineSourceGuard:createGuard()});
 });
 
 test('P9s changes the self fingerprint when source model parameters change under the same companion strategy',async()=>{

@@ -6,7 +6,7 @@ let practiceEpoch = 0;
 let preReveal = null;
 let lastScenarioToken = null;
 const validScenarioToken = token => typeof token==='string' && token.length===19 && /^v1_[0-9a-f]{16}$/.test(token);
-const validModelFingerprint = value => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+const validFingerprint = value => typeof value==='string' && value.length===64 && /^[a-f0-9]{64}$/.test(value);
 const scenarioNote = kind => kind==='replay' ?
   '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
   '今回は新しい架空相場です。';
@@ -746,7 +746,7 @@ async function request(url,body,signal) {
     throw Object.assign(error,{status:response.status});
   });
   if(!response.ok)throw Object.assign(Error(value?.error||'サーバーの処理に失敗しました'),
-    {status:response.status});
+    {status:response.status,code:value?.code});
   return value;
 }
 let modelListEpoch=0;
@@ -897,6 +897,7 @@ const multiStatus = element('quickCompareMultiStatus');
 const multiResults = element('quickCompareMultiResults');
 const multiCards = element('quickCompareMultiCards');
 const modelChangedMessage = 'モデル設定が変化した可能性があるため、追加の比較を中断しました。';
+const engineChangedMessage = '予測エンジンが変化した可能性があるため、追加比較を中断しました。';
 const compareAnnouncement = document.createElement('span');
 compareAnnouncement.className='quick-status-announcement';
 let compareBase = null;
@@ -996,6 +997,7 @@ function showCompare(value,ordered,modelName) {
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
     max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
     model_effective_sha256:value.model_effective_sha256,
+    engine_source_sha256:value.engine_source_sha256,
     strategy:compareStrategy(value)};
   refreshCompareModels();
   element('quickCompare').hidden=false;
@@ -1065,12 +1067,14 @@ compareRun.addEventListener('click',async()=>{
       compareCard('B',practiceModelName(value,{...ordered,model_name:modelName}),value));
     compareResults.hidden=false;
     const fingerprint=value.model_effective_sha256;
-    const fingerprintsAvailable=validModelFingerprint(base.model_effective_sha256) &&
-      validModelFingerprint(fingerprint);
-    if(fingerprintsAvailable && base.strategy!==undefined && strategy!==undefined)
-      comparePair={a:base,b:{model_id:modelId,strategy,model_effective_sha256:fingerprint}};
+    const fingerprintsAvailable=validFingerprint(base.model_effective_sha256) && validFingerprint(fingerprint);
+    const engineHash=base.engine_source_sha256;
+    const engineMatches=validFingerprint(engineHash) && value.engine_source_sha256===engineHash;
+    if(fingerprintsAvailable && engineMatches && base.strategy!==undefined && strategy!==undefined)
+      comparePair={a:base,b:{model_id:modelId,strategy,model_effective_sha256:fingerprint},engineHash};
     setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）'+
-      (fingerprintsAvailable ? '' : '。現在のAPIではモデル同一性を確認できないため追加比較はできません。'));
+      (fingerprintsAvailable ? '' : '。現在のAPIではモデル同一性を確認できないため追加比較はできません。')+
+      (engineMatches ? '' : ' '+engineChangedMessage));
   } catch {
     if(current())setCompareMessage(compareStatus,'比較できませんでした。もう一度お試しください。');
   } finally {
@@ -1104,7 +1108,7 @@ function multiCard(title,outcomes,average=false) {
 multiRun.addEventListener('click',async()=>{
   if(busy || multiRun.disabled || compareBusy || !comparePair ||
      dialogueController || sessionController)return;
-  const {a,b}=comparePair;
+  const {a,b,engineHash}=comparePair;
   if(selectedCompareModel()!==b.model_id || !compareChoices.has(a.model_id))return;
   clearMultiResults();
   compareAnnouncement.textContent='';
@@ -1117,19 +1121,24 @@ multiRun.addEventListener('click',async()=>{
     for(let trial=0;trial<3;trial++) {
       const valueA=await request('/api/quick-practice',orderedA,signal);
       if(!current())return;
-      if(valueA?.model_id===a.model_id && valueA.model_effective_sha256!==a.model_effective_sha256)
+      if(!validCompareReply(valueA,orderedA,null) || tokens.has(valueA.scenario_token))
+        throw Error('追加の比較条件を確認できませんでした');
+      if(valueA.engine_source_sha256!==engineHash)
+        return setCompareMessage(multiStatus,engineChangedMessage);
+      if(valueA.model_effective_sha256!==a.model_effective_sha256)
         return setCompareMessage(multiStatus,modelChangedMessage);
-      if(!validCompareReply(valueA,orderedA,null) || !validMultiOutcome(valueA,a) ||
-         tokens.has(valueA.scenario_token))throw Error('追加の比較条件を確認できませんでした');
+      if(!validMultiOutcome(valueA,a))throw Error('追加の比較条件を確認できませんでした');
       tokens.add(valueA.scenario_token);
       const orderedB={model_id:b.model_id,amount:a.amount,leverage:a.leverage,
         scenario_token:valueA.scenario_token};
       const valueB=await request('/api/quick-practice',orderedB,signal);
       if(!current())return;
-      if(valueB?.model_id===b.model_id && valueB.model_effective_sha256!==b.model_effective_sha256)
+      if(!validCompareReply(valueB,orderedB,valueA))throw Error('追加の比較条件を確認できませんでした');
+      if(valueB.engine_source_sha256!==engineHash)
+        return setCompareMessage(multiStatus,engineChangedMessage);
+      if(valueB.model_effective_sha256!==b.model_effective_sha256)
         return setCompareMessage(multiStatus,modelChangedMessage);
-      if(!validCompareReply(valueB,orderedB,valueA) || !validMultiOutcome(valueB,b))
-        throw Error('追加の比較条件を確認できませんでした');
+      if(!validMultiOutcome(valueB,b))throw Error('追加の比較条件を確認できませんでした');
       pairs.push([valueA,valueB]);
     }
     const averages=pairs[0].map((_,index)=>({
@@ -1141,8 +1150,11 @@ multiRun.addEventListener('click',async()=>{
     multiResults.hidden=false;
     setCompareMessage(multiStatus,'追加の3例の比較が完了しました。');
   } catch (error) {
-    if(current())setCompareMessage(multiStatus,error?.status===409 ? modelChangedMessage :
-      '追加の比較ができませんでした。もう一度お試しください。');
+    if(current()) {
+      const message=error?.code==='PRACTICE_ENGINE_SOURCE_UNVERIFIED' ? engineChangedMessage :
+        error?.status===409 ? modelChangedMessage : '追加の比較ができませんでした。もう一度お試しください。';
+      setCompareMessage(multiStatus,message);
+    }
   } finally {
     finish();
   }
