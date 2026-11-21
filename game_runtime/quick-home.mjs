@@ -353,6 +353,11 @@ window.addEventListener('pagehide',()=>{
   modelListEpoch++;
   lastScenarioToken=null;
   clearPracticeView();
+  for(const [url,timer] of comparisonDownloadUrls) {
+    clearTimeout(timer);
+    URL.revokeObjectURL(url);
+  }
+  comparisonDownloadUrls.clear();
   element('quickResult').replaceChildren();
   sessionEpoch++;
   sessionController?.abort();
@@ -896,17 +901,24 @@ const multiRun = element('quickCompareMultiRun');
 const multiStatus = element('quickCompareMultiStatus');
 const multiResults = element('quickCompareMultiResults');
 const multiCards = element('quickCompareMultiCards');
+const compareExport = element('quickCompareExport');
+const MAX_COMPARISON_EXPORT_BYTES = 64 * 1024;
+const comparisonDownloadUrls = new Map();
 const modelChangedMessage = 'モデル設定が変化した可能性があるため、追加の比較を中断しました。';
 const engineChangedMessage = '予測エンジンが変化した可能性があるため、追加比較を中断しました。';
 const compareAnnouncement = document.createElement('span');
 compareAnnouncement.className='quick-status-announcement';
 let compareBase = null;
 let comparePair = null;
+let comparisonRecord = null;
 let compareEpoch = 0;
 let compareController = null;
 let compareBusy = false;
 
 function clearMultiResults() {
+  comparisonRecord=null;
+  compareExport.hidden=true;
+  compareExport.disabled=true;
   multiResults.hidden=true;
   multiCards.replaceChildren();
   multiStatus.textContent='';
@@ -943,6 +955,8 @@ function updateCompareControls() {
   compareRun.disabled=compareModel.disabled || !selectedCompareModel();
   multiPanel.hidden=!comparePair || comparePair.b.model_id!==selectedCompareModel();
   multiRun.disabled=multiPanel.hidden || compareBusy || !!dialogueController || !!sessionController;
+  compareExport.disabled=compareExport.hidden=
+    !comparisonRecord || multiPanel.hidden || multiResults.hidden || compareBusy;
   element('quickChatGPTAsk').disabled=multiComparisonRunning() || !!dialogueController;
   element('quickChatGPTStatusCheck').disabled=multiComparisonRunning() || !!sessionController;
 }
@@ -993,7 +1007,7 @@ function showCompare(value,ordered,modelName) {
   if(!validCompareOutcome(value,ordered.model_id) || !compareChoices.has(ordered.model_id))return;
   compareBase={model_id:ordered.model_id,model_name:modelName,
     choice_label:compareChoices.get(ordered.model_id),
-    amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,
+    amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,scenario_kind:value.scenario_kind,
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
     max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
     model_effective_sha256:value.model_effective_sha256,
@@ -1017,6 +1031,19 @@ function compareCard(label,name,value) {
     card.append(line);
   }
   return card;
+}
+function comparisonOutcome(value) {
+  return {profit_coins:value.profit_coins,max_drawdown_pct:value.max_drawdown_pct,
+    liquidated_at_step:value.liquidated_at_step};
+}
+function comparisonTrial(caseNumber,kind,a,b) {
+  return {case_number:caseNumber,kind,scenario_kind:a.scenario_kind,scenario_token:a.scenario_token,
+    daily_synthetic_prices:[...a.daily_synthetic_prices],
+    a:comparisonOutcome(a),b:comparisonOutcome(b)};
+}
+function comparisonModel(model) {
+  return {model_id:model.model_id,display_name:model.model_name,
+    model_effective_sha256:model.model_effective_sha256};
 }
 function validCompareReply(value,ordered,scenario) {
   return !!value && typeof value==='object' && Object.getPrototypeOf(value)===Object.prototype &&
@@ -1062,16 +1089,17 @@ compareRun.addEventListener('click',async()=>{
     const value=await request('/api/quick-practice',ordered,signal);
     if(!current())return;
     if(!validCompareReply(value,ordered,base))throw Error('比較条件を確認できませんでした');
-    const strategy=compareStrategy(value);
+    const strategy=compareStrategy(value),displayName=practiceModelName(value,{...ordered,model_name:modelName});
     compareResults.replaceChildren(compareCard('A',base.model_name,base),
-      compareCard('B',practiceModelName(value,{...ordered,model_name:modelName}),value));
+      compareCard('B',displayName,value));
     compareResults.hidden=false;
     const fingerprint=value.model_effective_sha256;
     const fingerprintsAvailable=validFingerprint(base.model_effective_sha256) && validFingerprint(fingerprint);
     const engineHash=base.engine_source_sha256;
     const engineMatches=validFingerprint(engineHash) && value.engine_source_sha256===engineHash;
     if(fingerprintsAvailable && engineMatches && base.strategy!==undefined && strategy!==undefined)
-      comparePair={a:base,b:{model_id:modelId,strategy,model_effective_sha256:fingerprint},engineHash};
+      comparePair={a:base,b:{model_id:modelId,model_name:displayName,strategy,
+        scenario_token:value.scenario_token,model_effective_sha256:fingerprint,...comparisonOutcome(value)},engineHash};
     setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）'+
       (fingerprintsAvailable ? '' : '。現在のAPIではモデル同一性を確認できないため追加比較はできません。')+
       (engineMatches ? '' : ' '+engineChangedMessage));
@@ -1139,16 +1167,27 @@ multiRun.addEventListener('click',async()=>{
       if(valueB.model_effective_sha256!==b.model_effective_sha256)
         return setCompareMessage(multiStatus,modelChangedMessage);
       if(!validMultiOutcome(valueB,b))throw Error('追加の比較条件を確認できませんでした');
-      pairs.push([valueA,valueB]);
+      pairs.push(comparisonTrial(trial+2,'new',valueA,valueB));
     }
-    const averages=pairs[0].map((_,index)=>({
-      profit_coins:pairs.reduce((sum,pair)=>sum+pair[index].profit_coins,0)/pairs.length,
-      max_drawdown_pct:pairs.reduce((sum,pair)=>sum+pair[index].max_drawdown_pct,0)/pairs.length,
+    const averages=['a','b'].map(key=>({
+      profit_coins:pairs.reduce((sum,pair)=>sum+pair[key].profit_coins,0)/pairs.length,
+      max_drawdown_pct:pairs.reduce((sum,pair)=>sum+pair[key].max_drawdown_pct,0)/pairs.length,
     }));
-    multiCards.replaceChildren(...pairs.map((pair,index)=>multiCard('シナリオ'+(index+1),pair)),
+    multiCards.replaceChildren(...pairs.map((pair,index)=>multiCard('シナリオ'+(index+1),[pair.a,pair.b])),
       multiCard('モデル別の参考平均',averages,true));
     multiResults.hidden=false;
     setCompareMessage(multiStatus,'追加の3例の比較が完了しました。');
+    comparisonRecord={
+      schema:'synthetic-practice-comparison-v1',
+      mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
+      real_market:false,order_placed:false,persisted:false,xp_awarded:false,
+      disclaimer:'ユーザー操作で出力された編集可能なローカル記録です。実市場の検証、公式監査証明、将来の同一モデル実行を保証するものではありません。',
+      settings:{amount_coins:a.amount,leverage:a.leverage,days:12},
+      models:{a:comparisonModel(a),b:comparisonModel(b)},
+      engine_source_sha256:engineHash,
+      trials:[comparisonTrial(1,'published_initial',a,b),...pairs],
+      reference_averages:{a:averages[0],b:averages[1]},
+    };
   } catch (error) {
     if(current()) {
       const message=error?.code==='PRACTICE_ENGINE_SOURCE_UNVERIFIED' ? engineChangedMessage :
@@ -1157,6 +1196,36 @@ multiRun.addEventListener('click',async()=>{
     }
   } finally {
     finish();
+  }
+});
+compareExport.addEventListener('click',event=>{
+  if(!event.isTrusted || compareExport.disabled || compareExport.hidden || !comparisonRecord)return;
+  let url;
+  try {
+    const exportedAt=new Date().toISOString();
+    const {a,b}=comparisonRecord.models;
+    const namesFit=a.display_name.length+b.display_name.length<=MAX_COMPARISON_EXPORT_BYTES;
+    const blob=namesFit ? new Blob([JSON.stringify({...comparisonRecord,exported_at:exportedAt},null,2)+'\n'],
+      {type:'application/json'}) : null;
+    if(!blob || blob.size>MAX_COMPARISON_EXPORT_BYTES) {
+      setCompareMessage(multiStatus,'記録が64 KiBを超えたため、ダウンロードできませんでした。');
+      return;
+    }
+    const link=document.createElement('a');
+    url=URL.createObjectURL(blob);
+    link.href=url;
+    const utcStamp=exportedAt.slice(0,19).replace(/[-:]/g,'').replace('T','-');
+    link.download='synthetic-ai-comparison-'+utcStamp+'.json';
+    link.click();
+    setCompareMessage(multiStatus,'JSONのダウンロードをリクエストしました。保存先やブロックの有無はブラウザで確認してください。');
+  } catch {
+    setCompareMessage(multiStatus,'JSONのダウンロードを開始できませんでした。もう一度お試しください。');
+  } finally {
+    // Leave the URL available for the browser to start reading the download.
+    if(url) comparisonDownloadUrls.set(url,setTimeout(()=>{
+      comparisonDownloadUrls.delete(url);
+      URL.revokeObjectURL(url);
+    },1000));
   }
 });
 function revealResult(value,ordered) {

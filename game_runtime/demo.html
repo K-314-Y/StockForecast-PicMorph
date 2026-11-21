@@ -263,7 +263,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickCompare article{min-width:0;padding:8px;border:1px solid var(--line);border-radius:10px;background:#101d31}
 #quickCompare article p{margin:4px 0}
 #quickCompareMulti{margin-block-start:12px}
-#quickCompareMultiRun{max-width:100%;white-space:normal}
+#quickCompareMultiRun,#quickCompareExport{max-width:100%;white-space:normal}
 #quickCompareMultiCards{margin-block-start:8px}
 @media(max-width:550px){#quickCompareResults,#quickCompareMultiCards{grid-template-columns:1fr}}
 .quick-status-announcement{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -432,12 +432,14 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <div id="quickCompareMulti" hidden>
    <button id="quickCompareMultiRun" type="button" aria-controls="quickCompareMultiResults" aria-describedby="quickCompareMultiNote" disabled>別の3つの架空相場でも比較</button>
    <p id="quickCompareMultiNote" class="simple-hint">各AIの予測設定・装備分析の識別値、および指定の計算コードの識別値が最初の比較時と一致した場合にのみ3例を表示します。プログラムの全依存関係や実行環境、外部からの変更までは保証しません。架空相場での練習結果であり、実際の投資成績やAIの性能ランキングには使えません。</p>
-   <p id="quickCompareMultiStatus" class="simple-hint"></p>
    <div id="quickCompareMultiResults" hidden>
     <h4>追加の3例（結果を見た後に選んだAIでの練習）</h4>
     <p class="simple-hint">参考平均は3個の独立した試算の算術平均です。累計利益や現実の最大下落率、連続保有した場合の最大下落率ではありません。</p>
     <div id="quickCompareMultiCards"></div>
+    <p id="quickCompareExportNote" class="simple-hint">後から検証するときのメモ（JSON・日時はUTC）です。キャラ名・モデルID・架空相場トークンが含まれます。記録は送信されず、端末にダウンロードしたファイルにだけ残ります。モデルIDを他の利用者と共有しないでください。利用者が編集できるファイルで、公式の監査証明や暗号学的な証明には使えません。将来も同じモデルで実行できる保証はありません。</p>
+    <button id="quickCompareExport" type="button" aria-controls="quickCompareMultiStatus" aria-describedby="quickCompareExportNote" hidden disabled>比較の記録をJSONでダウンロード</button>
    </div>
+   <p id="quickCompareMultiStatus" class="simple-hint"></p>
   </div>
  </section>
  <section id="quickReplay" class="quick-replay" aria-labelledby="quickReplayTitle" hidden>

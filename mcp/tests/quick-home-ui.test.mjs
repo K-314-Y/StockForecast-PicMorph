@@ -12,6 +12,8 @@ const engineFingerprint='c'.repeat(64);
 
 async function mount(models=[],chatgpt=false,imported=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
+  const downloads=[],objectUrls=new Map(),revokedUrls=[];
+  let nextObjectUrl=0;
   let observeSource=()=>{};
   let document;
   class Element {
@@ -44,16 +46,24 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     focus(options){document.activeElement=this;this.focusOptions=options;}
     blur(){if(document.activeElement===this)document.activeElement=null;}
     scrollIntoView(){scrolls.push(this);}
-    async fire(name='click'){
+    click(){
+      assert.equal(this.tagName,'A');
+      const blob=objectUrls.get(this.href);
+      assert.ok(blob);
+      if(state.downloadError)throw state.downloadError;
+      downloads.push({filename:this.download,blob,url:this.href});
+    }
+    async fire(name='click',isTrusted=true){
       if(this.tagName==='IMG' && (name==='load'||name==='error')){
         this.complete=true;this.naturalWidth=name==='load'?150:0;
       }
-      await this.handlers[name]?.({preventDefault(){}});
+      await this.handlers[name]?.({isTrusted,preventDefault(){}});
     }
   }
   for(const [,tag,attributes,id] of html.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) {
     const node=new Element(tag);
     node.hidden=/\bhidden(?:\s|$)/.test(attributes);
+    node.disabled=/\bdisabled(?:\s|$)/.test(attributes);
     node.open=/\bopen(?:\s|$)/.test(attributes);
     node.value=attributes.match(/\bvalue="([^"]*)"/)?.[1]||'';
     if(id==='quickChatGPTConnection')node.dataset.chatgptSession=chatgpt==='session'?'enabled':'disabled';
@@ -105,6 +115,15 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   state.copy=async text=>{copies.push(text);};
   state.navigator={clipboard:{writeText:text=>state.copy(text)}};
   const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
+    Blob,URL:{
+      createObjectURL(blob){
+        assert.ok(blob instanceof Blob);
+        const url='blob:comparison-'+ ++nextObjectUrl;
+        objectUrls.set(url,blob);
+        return url;
+      },
+      revokeObjectURL(url){assert.ok(objectUrls.delete(url));revokedUrls.push(url);},
+    },
     navigator:state.navigator,
     getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
     MutationObserver:class {
@@ -119,9 +138,9 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   runInContext(script,context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
-  return {get,calls,scrolls,storageWrites,copies,document,state,sourceChanged:()=>observeSource(),
+  return {get,calls,scrolls,storageWrites,copies,downloads,revokedUrls,document,state,sourceChanged:()=>observeSource(),
     pagehide:()=>windowHandlers.pagehide?.(),focus:()=>windowHandlers.focus?.(),
-    fire:(id,event)=>get(id).fire(event)};
+    fire:(id,event,isTrusted)=>get(id).fire(event,isTrusted)};
 }
 
 // Track actual HTML ancestry so a closed advanced panel cannot hide the scene.
@@ -3255,6 +3274,8 @@ function multiPracticeFixture(practice) {
 function assertMultiEmpty(get) {
   assert.equal(get('quickCompareMultiResults').hidden,true);
   assert.equal(get('quickCompareMultiCards').children.length,0);
+  assert.equal(get('quickCompareExport').hidden,true);
+  assert.equal(get('quickCompareExport').disabled,true);
 }
 
 test('P9r uses a native button and an existing live region, and explains the sample and mean',()=>{
@@ -3275,6 +3296,169 @@ test('P9r uses a native button and an existing live region, and explains the sam
   assert.match(html,/プログラムの全依存関係や実行環境、外部からの変更までは保証しません/);
   assert.match(html,/実際の投資成績やAIの性能ランキングには使えません/);
   assert.match(html,/@media\(max-width:550px\)\{[^}]*#quickCompareMultiCards\{grid-template-columns:1fr/);
+});
+
+async function assertNoComparisonDownload(ui) {
+  const {get,fire,downloads,calls}=ui;
+  const downloadCount=downloads.length,requestCount=calls.length;
+  assert.equal(get('quickCompareExport').hidden,true);
+  assert.equal(get('quickCompareExport').disabled,true);
+  await fire('quickCompareExport');
+  assert.equal(downloads.length,downloadCount);
+  assert.equal(calls.length,requestCount);
+}
+
+test('P9u downloads only the four validated trials and their metadata after a trusted click',async()=>{
+  const zipId='zip_'+'a'.repeat(32);
+  const markup='<img src=x onerror=alert(1)>'+'長'.repeat(900);
+  const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:markup,model_version:'v1'}]);
+  const {get,fire,state,downloads,revokedUrls,calls,storageWrites,focus}=ui;
+  const button=htmlNodes().find(node=>node.id==='quickCompareExport');
+  assert.ok(button.parents.includes('quickCompareMultiResults'));
+  assert.equal(button.tag,'button');
+  assert.match(button.attributes,/type="button".*aria-controls="quickCompareMultiStatus".*aria-describedby="quickCompareExportNote".*hidden disabled/);
+  assert.doesNotMatch(button.attributes,/aria-live=|role=/);
+  assert.match(html,/キャラ名・モデルID・架空相場トークンが含まれます/);
+  await assertNoComparisonDownload(ui);
+  get('quickAmount').value='1500';
+  get('quickLeverage').value='7';
+  const practice=state.practice;
+  state.practice=async body=>{
+    const value=await practice(body);
+    const profit=body.model_id==='self'?25:-1500;
+    return {...value,profit_coins:profit,max_drawdown_pct:body.model_id==='self'?1:100,
+      liquidated_at_step:body.model_id==='self'?null:12,
+      final_balance:10000+profit,daily_balances:[...value.daily_balances.slice(0,12),10000+profit],
+      companion_name:body.model_id==='self'?'相棒':'OTHER-ACCOUNT-NAME',
+      profile:{email:'PRIVATE-EMAIL'},wallet:'PRIVATE-WALLET',cookie:'PRIVATE-COOKIE',
+      url:'https://user:secret@example.test/',storage:'PRIVATE-STORAGE'};
+  };
+  await runQuickPractice(ui);
+  // The first displayed comparison may itself reuse a previously published scenario.
+  await fire('quickForm','submit');
+  get('quickSameScenario').checked=true;
+  await fire('quickRun');
+  await chooseCompareModel(ui,zipId);
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareResults').children[1].children[0].textContent,'B：'+markup+'（ZIP専用AI・未学習）');
+  await assertNoComparisonDownload(ui);
+  state.practice=multiPracticeFixture(state.practice);
+  await fire('quickCompareMultiRun');
+  assert.equal(get('quickCompareMultiCards').children.length,4);
+  assert.equal(get('quickCompareExport').hidden,false);
+  assert.equal(get('quickCompareExport').disabled,false);
+  const cards=get('quickCompareMultiCards').children,single=get('quickCompareResults').children;
+  focus();
+  await tick();
+  assert.equal(get('quickCompareExport').disabled,false);
+  assert.equal(get('quickCompareMultiCards').children,cards);
+  assert.equal(get('quickCompareResults').children,single);
+  const count=calls.length;
+  await fire('quickCompareExport','click',false);
+  assert.equal(downloads.length,0);
+  await fire('quickCompareExport');
+  assert.equal(downloads.length,1);
+  const {filename,blob,url}=downloads[0];
+  assert.equal(blob.type,'application/json');
+  assert.ok(blob.size<64*1024);
+  const source=await blob.text(),record=JSON.parse(source);
+  const {exported_at,disclaimer,...data}=record;
+  assert.equal(new Date(exported_at).toISOString(),exported_at);
+  assert.equal(filename,'synthetic-ai-comparison-'+exported_at.slice(0,19).replace(/[-:]/g,'').replace('T','-')+'.json');
+  assert.match(disclaimer,/編集可能.*実市場の検証、公式監査証明、将来の同一モデル実行/);
+  const outcome=(profit_coins,max_drawdown_pct,liquidated_at_step)=>({profit_coins,max_drawdown_pct,liquidated_at_step});
+  const prices=[100,110,99,105,100,110,99,105,100,110,99,105,100];
+  const firstToken='v1_0123456789abcdef';
+  assert.deepEqual(data,{
+    schema:'synthetic-practice-comparison-v1',mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
+    real_market:false,order_placed:false,persisted:false,xp_awarded:false,
+    settings:{amount_coins:1500,leverage:7,days:12},
+    models:{
+      a:{model_id:'self',display_name:'自分のAI（相棒：相棒）',model_effective_sha256:selfFingerprint},
+      b:{model_id:zipId,display_name:markup+'（ZIP専用AI・未学習）',model_effective_sha256:otherFingerprint},
+    },
+    engine_source_sha256:engineFingerprint,
+    trials:[
+      {case_number:1,kind:'published_initial',scenario_kind:'replay',scenario_token:firstToken,daily_synthetic_prices:prices,
+        a:outcome(25,1,null),b:outcome(-1500,100,12)},
+      ...multiTokens.map((scenario_token,index)=>({
+        case_number:index+2,kind:'new',scenario_kind:'new',scenario_token,daily_synthetic_prices:prices.map(p=>p+index),
+        a:outcome([15,-6,30][index],index+1,null),b:outcome([0,12,-3][index],2*(index+1),12),
+      })),
+    ],
+    reference_averages:{a:{profit_coins:13,max_drawdown_pct:2},b:{profit_coins:3,max_drawdown_pct:4}},
+  });
+  assert.doesNotMatch(source,/PRIVATE-|OTHER-ACCOUNT|user:secret/);
+  assert.deepEqual(practiceCalls(ui).map(body=>body.scenario_token),[
+    undefined,firstToken,firstToken,undefined,multiTokens[0],undefined,multiTokens[1],undefined,multiTokens[2],
+  ]);
+  assert.match(get('quickCompareMultiStatus').textContent,/リクエストしました.*ブラウザで確認/);
+  state.downloadError=Error('blocked');
+  await fire('quickCompareExport');
+  assert.equal(downloads.length,1);
+  assert.match(get('quickCompareMultiStatus').textContent,/開始できませんでした/);
+  assert.equal(get('quickCompareResults').children,single);
+  assert.equal(get('quickCompareMultiCards').children,cards);
+  assert.equal(get('quickCompareExport').disabled,false);
+  assert.equal(calls.length,count);
+  assert.deepEqual(storageWrites,[]);
+  await new Promise(resolve=>setTimeout(resolve,1000));
+  assert.equal(revokedUrls[0],url);
+  assert.equal(revokedUrls.length,2);
+});
+
+test('P9u rejects oversized JSON without affecting the displayed comparison',async()=>{
+  const ui=await mount([{...compareDemo,name:'長'.repeat(24000)}]);
+  const {get,state,fire,downloads,revokedUrls}=ui;
+  await completeSingleCompare(ui);
+  state.practice=multiPracticeFixture(state.practice);
+  await fire('quickCompareMultiRun');
+  await fire('quickCompareExport');
+  assert.equal(downloads.length,0);
+  assert.equal(revokedUrls.length,0);
+  assert.equal(get('quickCompareMultiResults').hidden,false);
+  assert.match(get('quickCompareMultiStatus').textContent,/64 KiBを超えた/);
+});
+
+test('P9u invalidates a completed record immediately on retries, edits, model changes and departure',async()=>{
+  for(const change of ['retry','single retry','amount','leverage','submit','model A','model B','ZIP removed','focus renamed','quickAgain','pagehide']) {
+    const zipId='zip_'+'a'.repeat(32);
+    const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:'実験用AI',model_version:'v1'}]);
+    const {get,fire,state,focus,pagehide}=ui,practice=state.practice;
+    await completeSingleCompare(ui,zipId);
+    state.practice=multiPracticeFixture(practice);
+    await fire('quickCompareMultiRun');
+    assert.equal(get('quickCompareExport').disabled,false,change);
+    if(change.endsWith('retry')) {
+      const gate=Promise.withResolvers();
+      state.practice=async()=>{await gate.promise;return null;};
+      const running=fire(change==='retry'?'quickCompareMultiRun':'quickCompareRun');
+      await assertNoComparisonDownload(ui);
+      gate.resolve();
+      await running;
+    } else if(change==='amount') await fire('quickAmount','input');
+    else if(change==='leverage') await fire('quickLeverage','change');
+    else if(change==='submit') await fire('quickForm','submit');
+    else if(change==='model A') await fire('quickModel','change');
+    else if(change==='model B') await chooseCompareModel(ui);
+    else if(change==='quickAgain') await fire('quickAgain');
+    else if(change==='pagehide') {
+      await fire('quickCompareExport');
+      const [{blob,url}]=ui.downloads;
+      const {trials}=JSON.parse(await blob.text());
+      assert.deepEqual(trials.map(trial=>trial.scenario_kind),['new','new','new','new']);
+      pagehide();
+      assert.deepEqual(ui.revokedUrls,[url]);
+    }
+    else {
+      if(change==='ZIP removed')state.imported=[];
+      else state.models=[{...compareDemo,name:'更新されたAI'}];
+      focus();
+      await tick();
+    }
+    await assertNoComparisonDownload(ui);
+    assert.equal(get('quickCompareMultiResults').hidden,true,change);
+  }
 });
 
 test('P9r sends six sequential requests with four distinct tokens and displays three pairs and means together',async()=>{
@@ -3398,6 +3582,7 @@ test('P9t keeps both initial cards when the shared engine fingerprint cannot be 
     await fire('quickCompareMultiRun');
     assert.equal(practiceCalls(ui).length,2);
     assertMultiEmpty(get);
+    await assertNoComparisonDownload(ui);
   }
 });
 
