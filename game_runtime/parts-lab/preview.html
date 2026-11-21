@@ -84,8 +84,8 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <p><strong id="editName"></strong></p>
 <p class="metadata" id="editModel"></p>
 <p class="hint" id="editTraits"></p>
-<p class="caution">保存済みの画像にはアクセサリーが焼き込まれているため、元の重ね絵や位置は復元できません。残したい重ね絵は装備ごとに再アップロードしてください。保存すると、再添付していない重ね絵は新しい画像から消えます。</p>
-<p class="hint">予測用の装備を変えるには、キャラを新規登録してください。パーツの移動は完成画像に焼き込まれ、個別の位置は復元できません。編集を開き直すと、保存されている体と通常の顔を元の位置から合成します。</p>
+<p id="legacyVisualWarning" class="caution" hidden>このキャラは以前の形式で登録されています。保存済みの画像から以前の表情やパーツ位置、重ね絵の元ファイルは復元できません。残したい重ね絵は再アップロードしてください。</p>
+<p class="hint">ZIPから読み込める素材は体と表情です。予測用の装備を変えるには、キャラを新規登録してください。</p>
 <p>保存済みの画像</p>
 <img id="editSavedPortrait" alt="現在保存されているキャラの画像">
 <div id="editEquipmentMount"></div>
@@ -257,12 +257,12 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <p id="frameInfo" class="metadata">未読込</p>
 <p class="hint">髪・服は体の上に重なります。「うれしい」「しんぱい」が未指定なら通常の顔を表示。体はそのままで表情だけ変わります。</p>
 <p class="hint">動きを減らす設定では最初の1コマだけを表示します。プレビューは予測AI・XP・コインに影響しません。ZIPの登録ボタンを押した場合のみ、専用の予測AI設定を作成します。実際の予測精度は未検証です。</p>
-<p class="hint">ZIPキャラを保存すると、調整した位置は完成画像に焼き込まれます。再編集では元の素材が必要で、以前の位置は自動で復元されません。</p>
+<p class="hint">ZIPキャラを保存すると、選んだ表情・パーツ位置・添付した重ね絵が再編集用に保存されます。</p>
 </section>
 </div>
 <dialog id="confirmVisualEdit" aria-labelledby="confirmVisualTitle" aria-describedby="confirmVisualWarning">
 <h2 id="confirmVisualTitle">保存済みの画像を差し替えますか？</h2>
-<p id="confirmVisualWarning">プレビューの最初のコマで上書きします。再添付していない重ね絵は消えます。</p>
+<p id="confirmVisualWarning">プレビューの最初のコマで保存画像を更新します。現在の表情・位置・重ね絵も再編集用に保存します。</p>
 <p id="confirmOverlayCount"></p>
 <div class="actions">
 <button id="abortPortraitSave" type="button" autofocus>編集に戻る</button>

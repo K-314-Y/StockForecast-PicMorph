@@ -1,6 +1,6 @@
 /** Local ZIP-game accessory definitions and their saved equipment snapshots. */
 import {createHash} from 'node:crypto';
-import {BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition,
+import {accessoryIdentityInput,BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition,
   requireDistinctMethods} from './parts-lab/accessory-options.mjs';
 
 export const ACCESSORY_COMBINATION_VERSION = 'accessory-analysis-v2';
@@ -9,7 +9,8 @@ const digest = data => createHash('sha256').update(JSON.stringify(data)).digest(
 
 export function validateAccessoryDefinition(value) {
   const {name,method}=normalizeAccessoryDefinition(value);
-  return {id:'accessory_'+digest([name,method]),name,method};
+  return {id:'accessory_'+createHash('sha256').update(accessoryIdentityInput({name,method})).digest('hex'),
+    name,method};
 }
 
 export function validateEquippedAccessories(items) {

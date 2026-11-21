@@ -1,6 +1,8 @@
 export const OVERLAY_MAX_SIDE=1024;
 export const OVERLAY_POSITION={min:-100,max:100,initial:0};
 export const OVERLAY_SCALE={min:25,max:200,initial:100};
+export const layerOffsetLimit=(layer,width,height)=>
+  layer==='face'?24:Math.min(128,Math.floor(Math.min(width,height)/2));
 
 const INVALID_IMAGE='静止PNGまたは静止WebPの画像を選んでください。';
 const INVALID_SIZE='重ね絵の縦横は1〜1024pxにしてください。';

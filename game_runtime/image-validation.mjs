@@ -6,7 +6,9 @@
 import {inflateSync} from 'node:zlib';
 const MAX_PIXELS=16*1024*1024, MAX_INFLATED=64*1024*1024;
 function check(ok) {if(!ok) throw new Error('Invalid image structure');}
-function dimensions(w,h) {check(w>0 && h>0 && w<=16384 && h<=16384 && w*h<=MAX_PIXELS);}
+function dimensions(w,h,{maxWidth=16384,maxHeight=16384}={}) {
+  check(w>0 && h>0 && w<=maxWidth && h<=maxHeight && w*h<=MAX_PIXELS);
+}
 const crcTable=Array.from({length:256},(_,n)=>{
   for(let i=0;i<8;i++) n=(n>>>1)^((n&1)?0xedb88320:0);
   return n>>>0;
@@ -16,7 +18,7 @@ function crc(bytes) {
   for(const b of bytes) n=(n>>>8)^crcTable[(n^b)&255];
   return (n^0xffffffff)>>>0;
 }
-function png(b) {
+function png(b,options) {
   check(b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])));
   let p=8,header, palette=false,ended=false,idatEnded=false;
   const parts=[];
@@ -24,6 +26,7 @@ function png(b) {
     check(p+12<=b.length && !ended);
     const n=b.readUInt32BE(p),type=b.toString('ascii',p+4,p+8),end=p+12+n;
     check(end<=b.length && /^[A-Za-z]{4}$/.test(type) && (b[p+6]&32)===0);
+    if(options?.staticOnly)check(!['acTL','fcTL','fdAT'].includes(type));
     check(crc(b.subarray(p+4,p+8+n))===b.readUInt32BE(p+8+n));
     const data=b.subarray(p+8,p+8+n);
     if(!header) {check(type==='IHDR' && n===13);header=data;}
@@ -43,7 +46,7 @@ function png(b) {
   }
   check(header && ended);
   const w=header.readUInt32BE(0),h=header.readUInt32BE(4),depth=header[8],color=header[9];
-  dimensions(w,h);
+  dimensions(w,h,options);
   const depths={0:[1,2,4,8,16],2:[8,16],3:[1,2,4,8],4:[8,16],6:[8,16]};
   check(depths[color]?.includes(depth) && header[10]===0 && header[11]===0 && header[12]<=1);
   const channels={0:1,2:3,3:1,4:2,6:4}[color];
@@ -117,7 +120,7 @@ function jpeg(b) {
   }
   check(false);
 }
-function webp(b) {
+function webp(b,options) {
   check(b.length>=20 && b.toString('ascii',0,4)==='RIFF' && b.toString('ascii',8,12)==='WEBP' && b.readUInt32LE(4)===b.length-8);
   let p=12,images=0,canvas=null,size;
   while(p<b.length) {
@@ -128,7 +131,7 @@ function webp(b) {
     if(type==='VP8X') {
       check(p===12 && n===10 && (d[0]&0xc1)===0 && d[1]===0 && d[2]===0 && d[3]===0);
       // Animation requires frame validation; reject rather than accept opaque frames.
-      check(!(d[0]&2));canvas=[1+d.readUIntLE(4,3),1+d.readUIntLE(7,3)];dimensions(...canvas);
+      check(!(d[0]&2));canvas=[1+d.readUIntLE(4,3),1+d.readUIntLE(7,3)];dimensions(...canvas,options);
     } else if(type==='VP8 ' || type==='VP8L') {
       check(images++===0);
       let w,h;
@@ -140,7 +143,7 @@ function webp(b) {
         check(n>5 && d[0]===0x2f && (d[4]>>5)===0);
         const bits=d.readUInt32LE(1);w=1+(bits&0x3fff);h=1+((bits>>>14)&0x3fff);
       }
-      dimensions(w,h);if(canvas) check(w===canvas[0] && h===canvas[1]);
+      dimensions(w,h,options);if(canvas) check(w===canvas[0] && h===canvas[1]);
       size={width:w,height:h};
     } else check(canvas && ['ALPH','ICCP','EXIF','XMP '].includes(type) && n>0);
     p=end+(n&1);
@@ -148,8 +151,8 @@ function webp(b) {
   check(images===1);
   return size;
 }
-export function validatedImageDimensions(bytes,mime) {
-  try {return ({'image/png':png,'image/webp':webp}[mime])(bytes);}
+export function validatedImageDimensions(bytes,mime,options) {
+  try {return ({'image/png':png,'image/webp':webp}[mime])(bytes,options);}
   catch {return null;}
 }
 export function validateImageStructure(bytes,mime) {

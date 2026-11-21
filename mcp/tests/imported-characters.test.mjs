@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile,writeFile,stat,readdir,symlink} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {request} from 'node:http';
+import {crc32,deflateSync} from 'node:zlib';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createImportedCharacterStore,MAX_IMPORTED_PORTRAIT_REQUEST}
+import {createImportedCharacterStore,MAX_IMPORTED_REQUEST,MAX_IMPORTED_VISUAL_EDIT_REQUEST}
   from '../../game_runtime/imported-characters.mjs';
+import {validateAccessoryDefinition} from '../../game_runtime/accessory-catalog.mjs';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
 
 const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
@@ -21,6 +24,41 @@ const equipmentPayload=accessories=>({
   colors:{hair_color:'#a58bd9',clothing_color:'#78c2c5'},
   images:{body:png,ready:png,portrait:png},accessories,
 });
+const visualDraft=(mood='ready',overlays=[])=>({
+  schema:1,mood,offsets:{body:{x:1,y:-1},face:{x:24,y:-24},outfit:{x:0,y:1},hair:{x:0,y:0}},
+  overlays,
+});
+const overlay=(id,image=png)=>({id,image,x:100,y:-100,scale:25});
+function pngChunk(type,data) {
+  const chunk=Buffer.alloc(data.length+12);
+  chunk.writeUInt32BE(data.length);
+  chunk.write(type,4,'ascii');
+  data.copy(chunk,8);
+  chunk.writeUInt32BE(crc32(chunk.subarray(4,-4)),chunk.length-4);
+  return chunk;
+}
+function fixturePng(width,height,{size,animated=false}={}) {
+  const header=Buffer.alloc(13);
+  header.writeUInt32BE(width);
+  header.writeUInt32BE(height,4);
+  header[8]=8;
+  header[9]=2;
+  const chunks=[pngBytes(png).subarray(0,8),pngChunk('IHDR',header),
+    pngChunk('IDAT',deflateSync(Buffer.alloc((3*width+1)*height)))];
+  if(animated)chunks.splice(2,0,pngChunk('acTL',Buffer.from([0,0,0,1,0,0,0,0])));
+  if(size)chunks.push(pngChunk('tEXt',Buffer.alloc(size-24-chunks.reduce((n,b)=>n+b.length,0))));
+  chunks.push(pngChunk('IEND',Buffer.alloc(0)));
+  return {mime:'image/png',base64:Buffer.concat(chunks).toString('base64')};
+}
+async function statusWithContentLength(url,length) {
+  return new Promise((resolve,reject)=>{
+    const req=request(url,{method:'POST',headers:{
+      'Content-Type':'application/json','Content-Length':length,Connection:'close',
+    }},res=>{res.resume();resolve(res.statusCode);});
+    req.on('error',reject);
+    req.end();
+  });
+}
 async function tempStore(fn) {
   const root=await mkdtemp(join(tmpdir(),'zip-character-test-'));
   try {return await fn(createImportedCharacterStore({root}),root);}
@@ -299,6 +337,7 @@ test('visual edit updates the same saved ID and preserves every other field in b
       const expected_image_sha256=checksum(png);
       const edit=await store.visualEdit(id);
       assert.deepEqual(edit.character,character);
+      assert.equal(Object.hasOwn(edit,'visual'),false);
       assert.deepEqual(edit.portrait,{width:2,height:2,image_sha256:expected_image_sha256});
       const {portrait:oldImage,...oldSources}=JSON.parse(before).images;
       assert.deepEqual(edit.sources,oldSources);
@@ -316,6 +355,17 @@ test('visual edit updates the same saved ID and preserves every other field in b
         {...character,image_url:character.image_url.replace(expected_image_sha256,image_sha256)});
       await assert.rejects(reopened.updatePortrait(id,{expected_image_sha256,portrait:green}),{status:409});
       assert.equal(await readFile(file,'utf8'),committed);
+      const equippedId=character.accessory_analysis?.equipped?.[0].id ??
+        (character.accessory_analysis?.accessory==='star'?'star':null);
+      const visual=visualDraft('happy',equippedId?[overlay(equippedId)]:[]);
+      await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:red,visual});
+      assert.deepEqual((await store.visualEdit(id)).visual,visual);
+      const withVisual=await readFile(file,'utf8');
+      await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:red,visual});
+      assert.equal(await readFile(file,'utf8'),withVisual);
+      await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:green});
+      assert.deepEqual((await store.visualEdit(id)).visual,visual);
+      assert.deepEqual(await reopened.model(id),model);
     }
     assert.equal((await store.list()).characters.length,4);
   });
@@ -326,16 +376,105 @@ test('only one competing portrait replacement commits across store instances',as
     const {id}=await store.register(payload('競合'));
     const expected_image_sha256=checksum(png);
     const results=await Promise.allSettled([
-      store.updatePortrait(id,{expected_image_sha256,portrait:red}),
-      createImportedCharacterStore({root}).updatePortrait(id,{expected_image_sha256,portrait:green}),
+      store.updatePortrait(id,{expected_image_sha256,portrait:red,visual:visualDraft('ready')}),
+      createImportedCharacterStore({root}).updatePortrait(id,
+        {expected_image_sha256,portrait:green,visual:visualDraft('happy')}),
     ]);
     const winner=results.filter(result=>result.status==='fulfilled');
     const loser=results.filter(result=>result.status==='rejected');
     assert.equal(winner.length,1);
     assert.equal(loser.length,1);
     assert.equal(loser[0].reason.status,409);
-    assert.equal((await store.visualEdit(id)).portrait.image_sha256,winner[0].value.image_sha256);
+    const edit=await store.visualEdit(id);
+    assert.equal(edit.portrait.image_sha256,winner[0].value.image_sha256);
+    assert.deepEqual(edit.visual,visualDraft(edit.portrait.image_sha256===checksum(red)?'ready':'happy'));
     assert.deepEqual(await readdir(root),[id+'.json']);
+  });
+});
+
+test('registered visuals require exact fields, matching strip geometry and canonical equipped IDs',async()=>{
+  await tempStore(async(store,root)=>{
+    const custom={name:'月',method:'moving_average_trend'};
+    const customId=validateAccessoryDefinition(custom).id;
+    const input=equipmentPayload(['star',custom]);
+    input.images={...input.images,body:fixturePng(12,2),ready:fixturePng(12,2),happy:fixturePng(12,2)};
+    const visual=visualDraft('happy',[overlay('star'),overlay(customId,red)]);
+    const registered=await store.register({...input,visual});
+    const reopened=createImportedCharacterStore({root});
+    assert.deepEqual((await reopened.visualEdit(registered.id)).visual,visual);
+    assert.equal(Object.hasOwn(registered,'visual'),false);
+    const changed={...visual,overlays:[{...visual.overlays[0],x:50}]};
+    await reopened.updatePortrait(registered.id,
+      {expected_image_sha256:checksum(png),portrait:png,visual:changed});
+    assert.deepEqual((await store.visualEdit(registered.id)).visual,changed);
+    const malformed=[
+      [{...visual,schema:2},400],
+      [{...visual,mood:'cautious'},400],
+      [{...visual,offsets:{...visual.offsets,body:{x:2,y:0}}},400],
+      [{...visual,offsets:{...visual.offsets,face:{x:25,y:0}}},400],
+      [{...visual,offsets:{...visual.offsets,face:{x:0.5,y:0}}},400],
+      [{...visual,offsets:{...visual.offsets,['__proto__']:{x:0,y:0}}},400],
+      [{...visual,overlays:[overlay('manifest-1')]},400],
+      [{...visual,overlays:[overlay('star'),overlay('star')]},400],
+      [{...visual,overlays:Array(4).fill(overlay('star'))},400],
+      [{...visual,overlays:[{...overlay('star'),scale:201}]},400],
+      [{...visual,overlays:[{...overlay('star'),y:-101}]},400],
+      [{...visual,overlays:[overlay('star',{...png,path:'../overlay.png'})]},400],
+      [{...visual,overlays:[overlay('star',{...png,mime:'image/svg+xml'})]},400],
+      [{...visual,overlays:[overlay('star',fixturePng(1025,1))]},415],
+      [{...visual,overlays:[overlay('star',fixturePng(2,2,{animated:true}))]},415],
+      [{...visual,overlays:[overlay('star',fixturePng(2,2,{size:5*1024*1024+1}))]},413],
+    ];
+    const file=join(root,registered.id+'.json');
+    const original=await readFile(file,'utf8');
+    for(const [bad,status] of malformed) {
+      await assert.rejects(store.register({...input,visual:bad}),{status});
+      await assert.rejects(reopened.updatePortrait(registered.id,
+        {expected_image_sha256:checksum(png),portrait:red,visual:bad}),{status});
+      assert.equal(await readFile(file,'utf8'),original);
+    }
+    for(const images of [
+      {...input.images,ready:png}, {...input.images,portrait:fixturePng(4,2)},
+      {body:fixturePng(1025,1),ready:fixturePng(1025,1),portrait:fixturePng(1025,1)},
+    ])await assert.rejects(store.register({...input,images,visual}),
+      error=>error.status===400||error.status===415);
+    const record=JSON.parse(original);
+    for(const corrupted of [
+      {...record,visual:{...changed,extra:true}},
+      {...record,visual:{...changed,overlays:[overlay('glasses')]}},
+      {...record,visual:{...changed,overlays:[overlay('star',{...png,base64:'AAAA'})]}},
+      {...record,images:{...record.images,happy:record.images.portrait}},
+      {...record,extra:true},
+    ]) {
+      const disk=JSON.stringify(corrupted);
+      await writeFile(file,disk);
+      await assert.rejects(reopened.visualEdit(registered.id),{status:503});
+      await assert.rejects(reopened.model(registered.id),{status:503});
+      await assert.rejects(reopened.updatePortrait(registered.id,
+        {expected_image_sha256:checksum(png),portrait:red}),{status:503});
+      assert.equal(await readFile(file,'utf8'),disk);
+    }
+  });
+});
+
+test('maximum-sized ZIP images and overlays fit the saved-record limit and reload',async()=>{
+  await tempStore(async(store,root)=>{
+    const maxImage=fixturePng(2,2,{size:5*1024*1024});
+    const portrait=fixturePng(2,2,{size:1024*1024});
+    const input=equipmentPayload(['star','glasses','ribbon']);
+    input.images={body:maxImage,ready:maxImage,happy:maxImage,cautious:maxImage,portrait};
+    input.visual=visualDraft('cautious',input.accessories.map(id=>overlay(id,maxImage)));
+    const {id}=await store.register(input);
+    const size=(await stat(join(root,id+'.json'))).size;
+    assert.ok(size>48*1024*1024 && size<MAX_IMPORTED_REQUEST);
+    const reopened=createImportedCharacterStore({root});
+    const edit=await reopened.visualEdit(id);
+    assert.deepEqual(edit.visual,input.visual);
+    assert.equal(edit.sources.cautious.base64,maxImage.base64);
+    const update={expected_image_sha256:edit.portrait.image_sha256,portrait,visual:input.visual};
+    assert.ok(Buffer.byteLength(JSON.stringify(update))<MAX_IMPORTED_VISUAL_EDIT_REQUEST);
+    assert.deepEqual(await reopened.updatePortrait(id,update),
+      {id,image_sha256:edit.portrait.image_sha256});
   });
 });
 
@@ -367,8 +506,12 @@ test('visual edit API rejects invalid requests and symlinks without modifying th
         [{...good,portrait:{...png,base64:'AAAA'}},415],
         [{...good,portrait:{...png,base64:'A'.repeat(4*Math.ceil((1024*1024+2)/3))}},413],
         [{...good,portrait:{...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP8zwAFTDAGAwATKQED8NgHhAAAAABJRU5ErkJggg=='}},400],
-        [{...good,extra:'x'.repeat(MAX_IMPORTED_PORTRAIT_REQUEST)},413],
+        [{...good,visual:null},400],
+        [{...good,visual:visualDraft('ready',[overlay('../star')])},400],
       ]) assert.equal((await post(id,body)).status,status);
+      assert.equal(await statusWithContentLength(path+id,MAX_IMPORTED_VISUAL_EDIT_REQUEST+1),413);
+      assert.equal(await statusWithContentLength(origin+'/api/imported-characters/register',
+        MAX_IMPORTED_REQUEST+1),413);
       assert.equal((await post(id,good,{'Content-Type':'text/plain'})).status,415);
       for(const headers of [{Origin:'http://localhost:'+port},{'Sec-Fetch-Site':'cross-site'}]) {
         assert.equal((await fetch(path+id,{headers})).status,403);

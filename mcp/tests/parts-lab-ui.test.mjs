@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer} from '../../game_runtime/server.mjs';
@@ -93,6 +93,10 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
           if (window.holdOverlay && source.name===window.holdOverlay) {
             await new Promise(resolve=>{window.finishOverlay=resolve;});
           }
+          if (window.holdRestoredOverlay && source.type==='image/webp' && !source.name) {
+            names.set(bitmap,'restored-webp');
+            await new Promise(resolve=>{window.finishRestoredOverlay=resolve;});
+          }
           return bitmap;
         };
         ImageBitmap.prototype.close=function(){
@@ -149,7 +153,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const traits={hair_style:'bob',expression:'calm'};
       const legacyZip=await zip(1,fixture.one,{...traits,name:'従来キャラ',accessory:'star'});
       const multiZip=await zip(6,fixture.six,{...traits,name:'重ね絵テスト',
-        accessories:['star','glasses',{name:'<b>手作り</b>',method:'macd_momentum'}]});
+        accessories:['star',{name:'手作り眼鏡',method:'rsi_oversold'},
+          {name:'<b>手作り</b>',method:'macd_momentum'}]});
       const row=index=>page.locator('#zipEquipped li').nth(index);
       const adjustment=(index,key)=>row(index).locator('[data-overlay='+key+']');
       const position=async index=>Promise.all(['x','y'].map(async key=>
@@ -370,6 +375,11 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.deepEqual(writes,[]);
       const legacy=await registerNow();
       assert.equal(legacy.accessory_analysis.accessory,'star');
+      const legacyFile=join(importedRoot,legacy.id+'.json');
+      const legacyRecord=JSON.parse(await readFile(legacyFile,'utf8'));
+      assert.equal(legacyRecord.visual.schema,1);
+      delete legacyRecord.visual; // Simulate a character registered before drafts were saved.
+      await writeFile(legacyFile,JSON.stringify(legacyRecord));
       const legacyPortrait=await page.request.get(origin+legacy.image_url);
       const legacyBytes=await legacyPortrait.body();
 
@@ -462,6 +472,10 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.equal(await dragging(),null);
       await upload(1,'overlay-final.webp','green','image/webp');
       await waitEnabled();
+      await upload(2,'overlay-final-custom.png','red');
+      await waitEnabled();
+      await adjustment(2,'x').fill('-100');
+      await adjustment(2,'y').fill('100');
       await partPicker.selectOption('face');
       await page.emulateMedia({reducedMotion:'no-preference'});
       await page.waitForFunction(()=>{
@@ -482,11 +496,15 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.waitForFunction(()=>document.getElementById('frameInfo').textContent.startsWith('1 / 6'));
       await page.locator('#mood').selectOption('happy');
       await partPicker.selectOption('base');
+      await movePart([39,38],[42,41]);
+      assert.deepEqual(await partPosition(),[3,3]);
       const expectedPortrait=await pixels('#previewCanvas',0,0,64,64);
       assert.deepEqual(await pixel(52,12),red);
       assert.deepEqual(await pixel(32,32),green);
       assert.deepEqual(await pixel(15,4),bg);
       assert.deepEqual(await pixel(23,8),[255,255,0,255]);
+      assert.deepEqual(await pixel(0,20),[0,0,0,0]);
+      assert.deepEqual(await pixel(6,58),red);
       let releaseRegistration;
       let notifyRegistration;
       const registrationStarted=new Promise(resolve=>{notifyRegistration=resolve;});
@@ -516,6 +534,12 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.locator('#zipGameLink').waitFor();
       assert.equal(created.accessory_analysis.equipped.length,3);
       const stored=JSON.parse(await readFile(join(importedRoot,created.id+'.json'),'utf8'));
+      assert.equal(stored.visual.mood,'happy');
+      assert.deepEqual(stored.visual.offsets.body,{x:3,y:3});
+      assert.deepEqual(stored.visual.offsets.face,{x:8,y:4});
+      assert.deepEqual(stored.visual.overlays.map(item=>item.id),stored.equipped.map(item=>item.id));
+      assert.deepEqual(stored.visual.overlays.map(item=>item.image.base64),
+        [fixture.red,fixture.green,fixture.red]);
       assert.deepEqual(Object.keys(stored.images).sort(),['body','happy','portrait','ready']);
       for (const part of ['body','ready','happy'])
         assert.equal(stored.images[part].base64,fixture.six[part]);
@@ -534,7 +558,22 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const saveEdit=()=>page.locator('#saveVisualEdit').click();
       const closeEdit=()=>page.locator('#cancelVisualEdit').click();
       const waitEditReady=()=>page.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      await page.evaluate(()=>{window.holdRestoredOverlay=true;});
+      await chooser.selectOption(created.id);
+      await page.locator('#openVisualEdit').click();
+      await page.waitForFunction(()=>window.finishRestoredOverlay);
+      await page.locator('#clear').click();
+      assert.match(await page.locator('#editStatus').textContent(),/中止/);
+      await page.evaluate(()=>{
+        window.holdRestoredOverlay=false;
+        window.finishRestoredOverlay();
+      });
+      await page.waitForFunction(()=>window.closedOverlays.includes('restored-webp'));
+      assert.equal(await page.locator('#visualEdit').isVisible(),false);
+      assert.equal(await page.locator('#zipEquipped li').count(),0);
       await openEdit(legacy.id);
+      assert.match(await page.locator('#legacyVisualWarning').textContent(),/復元できません/);
+      assert.equal(await page.locator('#legacyVisualWarning').isVisible(),true);
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 1.*400 × 400/);
       assert.equal(await page.locator('#zipEquipped li').count(),1);
       assert.equal(await partPicker.inputValue(),'accessory');
@@ -576,40 +615,43 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 6.*64 × 64/);
       assert.match(await page.locator('#editModel').textContent(),new RegExp(created.model_version));
       assert.match(await page.locator('#editTraits').textContent(),/慎重/);
-      assert.match(await page.locator('#visualEdit .caution').textContent(),/再アップロード/);
+      assert.equal(await page.locator('#legacyVisualWarning').isVisible(),false);
       assert.equal(await page.locator('#zipAccessory').isVisible(),false);
       assert.equal(await row(0).locator('[data-action=unequip]').isVisible(),false);
       assert.equal(await page.locator('#registerZip').isVisible(),false);
-      for (const selector of ['#frames','#mood','#faceX','#faceY','#zipHairColor','#zipExpression'])
+      for (const selector of ['#frames','#faceX','#faceY','#zipHairColor','#zipExpression'])
         assert.equal(await page.locator(selector).isDisabled(),true,selector);
+      assert.equal(await page.locator('#mood').inputValue(),'happy');
+      assert.equal(await page.locator('#mood').isEnabled(),true);
+      assert.equal(await page.locator('#mood option[value=cautious]').evaluate(option=>option.disabled),true);
       assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),expectedPortrait);
-      assert.deepEqual(await pixel(32,32),bg);
-      assert.deepEqual(await pixel(15,4),gray);
-      assert.deepEqual(await pixel(23,8),bg);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),expectedPortrait);
+      assert.deepEqual(await position(0),[100,-100]);
+      assert.deepEqual(await position(1),[0,0]);
+      assert.deepEqual(await position(2),[-100,100]);
       await partPicker.selectOption('base');
-      assert.deepEqual(await partPosition(),[0,0]);
+      assert.deepEqual(await partPosition(),[3,3]);
       await partPicker.selectOption('face');
-      assert.deepEqual(await partPosition(),[0,0]);
+      assert.deepEqual(await partPosition(),[8,4]);
+      await page.locator('#mood').selectOption('ready');
       await page.locator('#layerX').fill('-6');
       await page.locator('#layerY').fill('6');
       assert.deepEqual(await partPosition('face'),[-6,6]);
       assert.deepEqual(await pixel(9,10),gray);
       await partPicker.selectOption('accessory');
       await saveEdit();
-      assert.match(await page.locator('#confirmOverlayCount').textContent(),/0 \/ 3/);
+      assert.match(await page.locator('#confirmOverlayCount').textContent(),/3 \/ 3/);
       await page.locator('#abortPortraitSave').click();
       assert.equal(writes.length,2);
-      await upload(2,'overlay-custom-edit.png','red');
-      await waitEditReady();
       await preview.scrollIntoViewIfNeeded();
-      await down(32,32);
+      await down(6,58);
       await page.mouse.move(...await point(50,22),{steps:4});
       await page.mouse.up();
       assert.notDeepEqual(await position(2),[0,0]);
       await adjustment(2,'scale').fill('150');
       const editedPortrait=await pixels('#previewCanvas',0,0,64,64);
       assert.deepEqual(await pixel(50,22),red);
-      assert.deepEqual(await pixel(32,32),bg);
+      assert.deepEqual(await pixel(32,32),green);
       assert.deepEqual(await pixel(15,4),bg);
       assert.deepEqual(await pixel(9,10),gray);
       const portraitFile=join(importedRoot,created.id+'.json');
@@ -624,7 +666,16 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('更新しました'));
       assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),editedPortrait);
       const editedRecord=JSON.parse(await readFile(portraitFile,'utf8'));
-      assert.deepEqual({...editedRecord,images:{...editedRecord.images,portrait:stored.images.portrait}},stored);
+      assert.deepEqual({...editedRecord,visual:stored.visual,
+        images:{...editedRecord.images,portrait:stored.images.portrait}},stored);
+      assert.equal(editedRecord.visual.mood,'ready');
+      assert.deepEqual(editedRecord.visual.offsets.face,{x:-6,y:6});
+      assert.equal(editedRecord.visual.overlays[2].scale,150);
+      assert.deepEqual(editedRecord.visual.overlays.map(item=>item.image),
+        stored.visual.overlays.map(item=>item.image));
+      await closeEdit();
+      await openEdit(created.id);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),editedPortrait);
       assert.deepEqual(await getModel(),originalModel);
       const after=await predictSameScenario();
       assert.deepEqual(after.daily_ai_signals,baseline.daily_ai_signals);
@@ -649,13 +700,18 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         name:'overlay-stale.png',mimeType:'image/png',buffer:bytes('red'),
       });
       await stale.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      await stale.locator('#zipEquipped li').nth(0).locator('[data-overlay=x]').fill('0');
+      await stale.locator('#zipEquipped li').nth(0).locator('[data-overlay=y]').fill('0');
+      const stalePixels=()=>stale.locator('#previewCanvas').evaluate(node=>
+        Array.from(node.getContext('2d').getImageData(0,0,64,64).data));
+      const staleDraft=await stalePixels();
+      assert.notDeepEqual(staleDraft,secondPortrait);
       const conflictResponse=stale.waitForResponse(res=>res.url()===origin+editPath && res.request().method()==='POST');
       await stale.locator('#saveVisualEdit').click();
       await stale.locator('#confirmPortraitSave').click();
       assert.equal((await conflictResponse).status(),409);
       await stale.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('未保存の編集'));
-      assert.equal(await stale.locator('#previewCanvas').evaluate(node=>
-        node.getContext('2d').getImageData(32,32,1,1).data[0]),255);
+      assert.deepEqual(await stalePixels(),staleDraft);
       await stale.locator('#cancelVisualEdit').click();
       assert.deepEqual(await readFile(portraitFile),committed);
       await stale.close();

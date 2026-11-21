@@ -29,7 +29,7 @@ import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, 
 import {compareHistoricalMarket} from './historical-market.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
 import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST,
-  MAX_IMPORTED_PORTRAIT_REQUEST} from './imported-characters.mjs';
+  MAX_IMPORTED_VISUAL_EDIT_REQUEST} from './imported-characters.mjs';
 import {createPracticeEngineSourceGuard} from './practice-engine-fingerprint.mjs';
 
 // Static imports are already evaluated. A server created later in this process
@@ -465,7 +465,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         inFlight++;
         try {
           const result=req.method==='GET'?await importedCharacterStore.visualEdit(id):
-            await importedCharacterStore.updatePortrait(id,await getBody(req,MAX_IMPORTED_PORTRAIT_REQUEST));
+            await importedCharacterStore.updatePortrait(id,await getBody(req,MAX_IMPORTED_VISUAL_EDIT_REQUEST));
           return json(res,200,result);
         }catch(error){
           const status=error?.status??503;

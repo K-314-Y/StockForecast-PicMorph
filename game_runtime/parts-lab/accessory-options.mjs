@@ -25,6 +25,9 @@ export function normalizeAccessoryDefinition(value) {
   return {name,method:value.method};
 }
 
+// Both the browser and registry hash this normalized definition to identify custom equipment.
+export const accessoryIdentityInput=({name,method})=>JSON.stringify([name,method]);
+
 // ZIP and registration share the same format: built-in IDs or named definitions.
 export function normalizeEquipment(items) {
   if (!Array.isArray(items) || items.length < 1 || items.length > MAX_EQUIPPED_ACCESSORIES)

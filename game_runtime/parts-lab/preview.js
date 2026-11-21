@@ -1,7 +1,8 @@
 /* User-supplied PNG composition. Preview is browser-only until an explicit save. */
-import {BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,normalizeAccessoryDefinition} from './accessory-options.mjs';
+import {accessoryIdentityInput,BUILTIN_ACCESSORIES,MAX_EQUIPPED_ACCESSORIES,
+  normalizeAccessoryDefinition} from './accessory-options.mjs';
 import {checkOverlayHeader,hasOverlayAlpha,OVERLAY_MAX_SIDE,OVERLAY_POSITION,
-  OVERLAY_SCALE,canvasPoint,overlayPosition,overlayRect,overlayValue} from './accessory-overlay.mjs';
+  OVERLAY_SCALE,canvasPoint,layerOffsetLimit,overlayPosition,overlayRect,overlayValue} from './accessory-overlay.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('previewCanvas');
@@ -22,6 +23,7 @@ const MAX_FRAME_SIDE = 1024;
 let pack = null;
 let currentZipFiles = null;
 let visualEdit = null;
+let editLoad = null;
 let loadingEditPicker = false;
 const zipLookFields=['zipHairStyle','zipExpression'];
 const characterEndpoint='/api/imported-characters';
@@ -66,10 +68,13 @@ function release(bundle) {
   for (const bitmap of new Set(Object.values(bundle.images))) bitmap.close();
 }
 function resetPack() {
+  editLoad?.abort();
+  editLoad=null;
   endDrag();
   stopClock();
   if (pack) release(pack);
   pack = null;
+  $('mood').value='ready';
   hitContext=undefined;
   resetLayerPositions();
   frame = 0;
@@ -93,8 +98,11 @@ function setBusy(value) {
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
   $('zipFrames').disabled = value;
-  for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood'])
+  for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor'])
     $(id).disabled=value || Boolean(visualEdit);
+  $('mood').disabled=value;
+  for(const option of $('mood').options)
+    option.disabled=Boolean(visualEdit && !pack?.images[option.value]);
   $('frames').disabled=registering || Boolean(visualEdit);
   $('zipEquipment').disabled=value;
   $('cancelVisualEdit').disabled=value;
@@ -115,7 +123,7 @@ function layerBitmap(layer) {
   return pack?.images[layer];
 }
 function offsetBounds(layer) {
-  const limit=layer==='face'?24:Math.min(128,Math.floor(Math.min(pack.width,pack.height)/2));
+  const limit=layerOffsetLimit(layer,pack.width,pack.height);
   return {min:-limit,max:limit,initial:0};
 }
 function syncOffsetInputs(except) {
@@ -149,8 +157,12 @@ function refreshPartControls() {
   syncOffsetInputs();
   updateDragAvailability();
 }
-function resetLayerPositions() {
-  for (const offset of Object.values(layerOffsets)) offset.x=offset.y=0;
+function resetLayerPositions(savedOffsets) {
+  for (const [layer,offset] of Object.entries(layerOffsets)) {
+    const saved=savedOffsets?.[layer==='base'?'body':layer];
+    offset.x=saved?.x??0;
+    offset.y=saved?.y??0;
+  }
   layerPicker.value='accessory';
   refreshPartControls();
 }
@@ -446,7 +458,7 @@ async function normalizeGenerated(bitmap, layer, side) {
   c.putImageData(pixels,0,0);
   return await createImageBitmap(strip);
 }
-function displayLoaded(next,frames){
+function displayLoaded(next,frames,offsets){
   if(pack)release(pack);
   pack=next;
   $('frames').value=String(frames);
@@ -460,7 +472,7 @@ function displayLoaded(next,frames){
   $('stage').dataset.hasPreview='true';
   $('stage').dataset.single=String(frames===1);
   $('stage').dataset.paused='false';
-  resetLayerPositions();
+  resetLayerPositions(offsets);
   startClock();
 }
 async function loadGeneratedSheets(){
@@ -523,6 +535,7 @@ function releaseOverlay(overlay) {
   overlay.pending=null;
   overlay.bitmap?.close();
   overlay.bitmap=null;
+  overlay.file=null;
   updateDragAvailability();
 }
 async function loadOverlay(id,overlay,file) {
@@ -553,6 +566,7 @@ async function loadOverlay(id,overlay,file) {
     if (drag?.overlay===overlay) endDrag();
     overlay.bitmap?.close();
     overlay.bitmap=bitmap;
+    overlay.file=file;
     bitmap=null;
     overlayStatus(overlay,'表示中：'+file.name);
     updateDragAvailability();
@@ -578,7 +592,7 @@ function createOverlayRow(id) {
   const unequip=row.querySelector('[data-action=unequip]');
   const adjustments=row.querySelectorAll('[data-overlay]');
   const overlay={row,feedback:row.querySelector('[role=status]'),remove,adjustments,
-    bitmap:null,pending:null};
+    bitmap:null,file:null,pending:null};
   for (const input of adjustments) {
     const key=input.dataset.overlay;
     const bounds=key==='scale'?OVERLAY_SCALE:OVERLAY_POSITION;
@@ -821,6 +835,35 @@ async function encodeImage(file) {
   }
   return {mime:file.type,base64:btoa(text)};
 }
+function savedImageBlob({mime,base64}) {
+  const binary=atob(base64);
+  const bytes=new Uint8Array(binary.length);
+  for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+  return new Blob([bytes],{type:mime});
+}
+async function registeredAccessoryId(definition) {
+  if(typeof definition==='string')return definition;
+  const normalized=normalizeAccessoryDefinition(definition);
+  const input=new TextEncoder().encode(accessoryIdentityInput(normalized));
+  const hash=await crypto.subtle.digest('SHA-256',input);
+  return 'accessory_'+Array.from(new Uint8Array(hash),byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+async function encodeVisual(registrationEquipment) {
+  const mood=Object.hasOwn(pack.images,$('mood').value)?$('mood').value:'ready';
+  const offsets=Object.fromEntries(Object.entries(layerOffsets).map(([layer,offset])=>
+    [layer==='base'?'body':layer,{...offset}]));
+  const overlays=[];
+  for(const [index,id] of equippedIds.entries()) {
+    const overlay=accessoryOverlays.get(id);
+    if(!overlay?.file)continue;
+    const {file,x,y,scale}=overlay;
+    // Equipment is submitted in equippedIds order. The corresponding validated
+    // definition yields the same final ID for manifest and catalog accessories.
+    const savedId=registrationEquipment?await registeredAccessoryId(registrationEquipment[index]):id;
+    overlays.push({id:savedId,image:await encodeImage(file),x,y,scale});
+  }
+  return {schema:1,mood,offsets,overlays};
+}
 async function composedPortrait() {
   if(!pack)throw Error('キャラ画像の読み込みが必要です。');
   const portrait=document.createElement('canvas');
@@ -905,17 +948,20 @@ $('openVisualEdit').addEventListener('click',async()=>{
   const id=$('editCharacter').value;
   const myEpoch=++epoch;
   const images={};
+  const overlays=new Map();
   resetPack();
   currentZipFiles=null;
   clearZipEquipment();
+  const controller=new AbortController();
+  editLoad=controller;
   setBusy(true);
   $('editStatus').textContent='保存済みの素材を読み込んでいます…';
   try {
-    const {character,sources,portrait}=await editRequest(characterEndpoint+'/visual-edit/'+id);
+    const {character,sources,portrait,visual}=await editRequest(characterEndpoint+'/visual-edit/'+id,
+      {signal:controller.signal});
     if(myEpoch!==epoch)return;
     for(const [part,source] of Object.entries(sources)) {
-      const bytes=Uint8Array.from(atob(source.base64),char=>char.charCodeAt(0));
-      images[part==='body'?'base':part]=await decodeFile(new Blob([bytes],{type:source.mime}),part);
+      images[part==='body'?'base':part]=await decodeFile(savedImageBlob(source),part);
       if(myEpoch!==epoch)return;
     }
     // Registration bakes exactly one frame at its source size. The portrait
@@ -923,19 +969,36 @@ $('openVisualEdit').addEventListener('click',async()=>{
     const frames=images.base.width/portrait.width;
     const next=inspect({...images},frames);
     if(next.height!==portrait.height)throw Error('元の画像と保存画像のコマ寸法が一致しません。');
+    for(const {id,image,x,y,scale} of visual?.overlays??[]) {
+      const file=savedImageBlob(image);
+      const bitmap=await decodeFile(file,'保存済みの重ね絵');
+      overlays.set(id,{file,bitmap,x,y,scale});
+      if(myEpoch!==epoch)return;
+    }
     visualEdit={character,portrait};
-    $('mood').value='ready';
+    $('mood').value=Object.hasOwn(next.images,visual?.mood)?visual.mood:'ready';
+    $('legacyVisualWarning').hidden=Boolean(visual);
     showVisualEdit(true);
     showSavedSettings(character);
+    for(const [id,saved] of overlays) {
+      const overlay=accessoryOverlays.get(id);
+      Object.assign(overlay,saved);
+      for(const input of overlay.adjustments)input.value=overlay[input.dataset.overlay];
+      overlayStatus(overlay,'保存済みの重ね絵を表示中です。');
+      overlays.delete(id);
+    }
     showSavedPortrait();
-    displayLoaded(next,frames);
+    displayLoaded(next,frames,visual?.offsets);
     for(const part of Object.keys(images))delete images[part];
-    $('editStatus').textContent='元の素材を読み込みました。確認して保存するまで、保存画像は保持されます。';
+    $('editStatus').textContent=visual?'保存済みの表情・位置・重ね絵を復元しました。':
+      '元の素材を初期位置で読み込みました。確認して保存するまで、保存画像は保持されます。';
     status('見た目編集のプレビューを表示しています。');
   }catch(error){
     if(myEpoch===epoch)$('editStatus').textContent=error.message;
   }finally{
     release({images});
+    for(const {bitmap} of overlays.values())bitmap.close();
+    if(editLoad===controller)editLoad=null;
     if(myEpoch===epoch)setBusy(false);
   }
 });
@@ -958,7 +1021,7 @@ $('saveVisualEdit').addEventListener('click',()=>{
   endDrag();
   const attached=[...accessoryOverlays.values()].filter(overlay=>overlay.bitmap).length;
   $('confirmOverlayCount').textContent=equippedIds.length?
-    '重ね絵を再添付した装備 '+attached+' / '+equippedIds.length+' 件':'予測用アクセサリーの装備はありません。';
+    '重ね絵を保存する装備 '+attached+' / '+equippedIds.length+' 件':'予測用アクセサリーの装備はありません。';
   confirmVisualEdit.showModal();
 });
 $('abortPortraitSave').addEventListener('click',()=>confirmVisualEdit.close());
@@ -971,14 +1034,17 @@ $('confirmPortraitSave').addEventListener('click',async()=>{
   try {
     const portrait=await encodeImage(await composedPortrait());
     if(myEpoch!==epoch)return;
+    const visual=await encodeVisual();
+    if(myEpoch!==epoch)return;
     const result=await editRequest(characterEndpoint+'/visual-edit/'+edit.character.id,{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({expected_image_sha256:edit.portrait.image_sha256,portrait}),
+      body:JSON.stringify({expected_image_sha256:edit.portrait.image_sha256,portrait,visual}),
     });
     if(myEpoch!==epoch)return;
     edit.portrait.image_sha256=result.image_sha256;
     showSavedPortrait();
-    $('editStatus').textContent='同じキャラIDで保存画像を更新しました。';
+    $('legacyVisualWarning').hidden=true;
+    $('editStatus').textContent='同じキャラIDで保存画像を更新しました。表情・位置・重ね絵も保存しました。';
   }catch(error){
     if(myEpoch===epoch)$('editStatus').textContent=error.message+(error.status===409?
       '。未保存の編集は表示中です。別の画面で更新された場合は、編集を開き直すと最新の画像を確認できます。':'');
@@ -1017,9 +1083,11 @@ $('registerZip').addEventListener('click',async()=>{
     if(chosenEpoch!==epoch)return;
     for(const [part,file] of Object.entries(files))images[part]=await encodeImage(file);
     if(chosenEpoch!==epoch)return;
+    const visual=await encodeVisual(equipment.accessories);
+    if(chosenEpoch!==epoch)return;
     const response=await fetch('/api/imported-characters/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name,look,colors,images,...equipment}),
+      body:JSON.stringify({name,look,colors,images,...equipment,visual}),
       cache:'no-store',credentials:'same-origin',
     });
     const record=await response.json();
@@ -1044,7 +1112,7 @@ $('registerZip').addEventListener('click',async()=>{
       '%・反転'+w.reversion+'%・変動'+w.volatility+
       '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+
       '%。外見の特徴で決まる新規モデルです（未学習・実株価未対応）。';
-    status('ZIPの外見と予測AI設定が同じIDで登録されました。');
+    status('ZIPの外見と予測AI設定が同じIDで登録されました。表情・位置・重ね絵も保存しました。');
     void loadEditPicker(record.id);
   }catch(error){
     if(chosenEpoch===epoch)$('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
@@ -1056,6 +1124,7 @@ $('loadOwn').addEventListener('click',()=>loadPack(false));
 $('loadSample').addEventListener('click',()=>loadPack(true));
 $('clear').addEventListener('click',()=>{
   if(registering||visualEdit)return;
+  if(editLoad)$('editStatus').textContent='読み込みを中止しました。';
   ++epoch;
   setBusy(false);
   resetPack();
