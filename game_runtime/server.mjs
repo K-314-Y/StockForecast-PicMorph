@@ -789,6 +789,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         // This practice does not mutate either shop currency or XP.
         const result = runSyntheticGame({...plan,initial_coins:payload.amount,
           allocations:{mine:100,owl:0,turtle:0}});
+        const effectiveHash = result.characters.mine.effective_sha256;
+        if (typeof effectiveHash !== 'string' || !/^[a-f0-9]{64}$/.test(effectiveHash)) {
+          throw failure('モデルの識別情報を確認できません');
+        }
         const settled = settleLeveragedPractice({
           equityPath:result.raw_equity_path,amount:payload.amount,leverage,
         });
@@ -807,7 +811,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             source:'saved_companion',approach:companion.companion.approach,
             risk_percent:companion.companion.risk_percent,
           } : null,
-          model_id:payload.model_id, initial_balance:10000,
+          model_id:payload.model_id, model_effective_sha256:effectiveHash, initial_balance:10000,
           invested_coins:settled.invested_coins, cash_held:settled.cash_held,
           leverage:settled.leverage,
           profit_coins:settled.profit_coins,

@@ -6,6 +6,7 @@ let practiceEpoch = 0;
 let preReveal = null;
 let lastScenarioToken = null;
 const validScenarioToken = token => typeof token==='string' && token.length===19 && /^v1_[0-9a-f]{16}$/.test(token);
+const validModelFingerprint = value => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
 const scenarioNote = kind => kind==='replay' ?
   '同じ架空相場での再挑戦です。既に値動きを知っている場合、初見の予想とは比較できません。' :
   '今回は新しい架空相場です。';
@@ -741,8 +742,11 @@ async function request(url,body,signal) {
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
     ...(signal ? {signal} : {}),
   }:undefined);
-  const value=await response.json();
-  if(!response.ok)throw Error(value?.error||'サーバーの処理に失敗しました');
+  const value=await response.json().catch(error=>{
+    throw Object.assign(error,{status:response.status});
+  });
+  if(!response.ok)throw Object.assign(Error(value?.error||'サーバーの処理に失敗しました'),
+    {status:response.status});
   return value;
 }
 let modelListEpoch=0;
@@ -892,6 +896,7 @@ const multiRun = element('quickCompareMultiRun');
 const multiStatus = element('quickCompareMultiStatus');
 const multiResults = element('quickCompareMultiResults');
 const multiCards = element('quickCompareMultiCards');
+const modelChangedMessage = 'モデル設定が変化した可能性があるため、追加の比較を中断しました。';
 const compareAnnouncement = document.createElement('span');
 compareAnnouncement.className='quick-status-announcement';
 let compareBase = null;
@@ -990,6 +995,7 @@ function showCompare(value,ordered,modelName) {
     amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
     max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
+    model_effective_sha256:value.model_effective_sha256,
     strategy:compareStrategy(value)};
   refreshCompareModels();
   element('quickCompare').hidden=false;
@@ -1058,9 +1064,13 @@ compareRun.addEventListener('click',async()=>{
     compareResults.replaceChildren(compareCard('A',base.model_name,base),
       compareCard('B',practiceModelName(value,{...ordered,model_name:modelName}),value));
     compareResults.hidden=false;
-    setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）');
-    if(base.strategy!==undefined && strategy!==undefined)
-      comparePair={a:base,b:{model_id:modelId,strategy}};
+    const fingerprint=value.model_effective_sha256;
+    const fingerprintsAvailable=validModelFingerprint(base.model_effective_sha256) &&
+      validModelFingerprint(fingerprint);
+    if(fingerprintsAvailable && base.strategy!==undefined && strategy!==undefined)
+      comparePair={a:base,b:{model_id:modelId,strategy,model_effective_sha256:fingerprint}};
+    setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）'+
+      (fingerprintsAvailable ? '' : '。現在のAPIではモデル同一性を確認できないため追加比較はできません。'));
   } catch {
     if(current())setCompareMessage(compareStatus,'比較できませんでした。もう一度お試しください。');
   } finally {
@@ -1107,6 +1117,8 @@ multiRun.addEventListener('click',async()=>{
     for(let trial=0;trial<3;trial++) {
       const valueA=await request('/api/quick-practice',orderedA,signal);
       if(!current())return;
+      if(valueA?.model_id===a.model_id && valueA.model_effective_sha256!==a.model_effective_sha256)
+        return setCompareMessage(multiStatus,modelChangedMessage);
       if(!validCompareReply(valueA,orderedA,null) || !validMultiOutcome(valueA,a) ||
          tokens.has(valueA.scenario_token))throw Error('追加の比較条件を確認できませんでした');
       tokens.add(valueA.scenario_token);
@@ -1114,6 +1126,8 @@ multiRun.addEventListener('click',async()=>{
         scenario_token:valueA.scenario_token};
       const valueB=await request('/api/quick-practice',orderedB,signal);
       if(!current())return;
+      if(valueB?.model_id===b.model_id && valueB.model_effective_sha256!==b.model_effective_sha256)
+        return setCompareMessage(multiStatus,modelChangedMessage);
       if(!validCompareReply(valueB,orderedB,valueA) || !validMultiOutcome(valueB,b))
         throw Error('追加の比較条件を確認できませんでした');
       pairs.push([valueA,valueB]);
@@ -1126,8 +1140,9 @@ multiRun.addEventListener('click',async()=>{
       multiCard('モデル別の参考平均',averages,true));
     multiResults.hidden=false;
     setCompareMessage(multiStatus,'追加の3例の比較が完了しました。');
-  } catch {
-    if(current())setCompareMessage(multiStatus,'追加の比較ができませんでした。もう一度お試しください。');
+  } catch (error) {
+    if(current())setCompareMessage(multiStatus,error?.status===409 ? modelChangedMessage :
+      '追加の比較ができませんでした。もう一度お試しください。');
   } finally {
     finish();
   }

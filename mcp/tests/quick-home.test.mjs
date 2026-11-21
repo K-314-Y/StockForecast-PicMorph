@@ -55,6 +55,7 @@ test('simple cash allocation 1 to 10000; no market, no persistence, no XP',async
       const {status,data}=await post(base,{amount,model_id:'self'});
       assert.equal(status,200,JSON.stringify(data));
       assert.equal(data.mode,'SIMPLE_SYNTHETIC_PRACTICE_ONLY');
+      assert.match(data.model_effective_sha256,/^[a-f0-9]{64}$/);
       assert.equal(data.companion_name,null);
       assert.equal(data.companion_strategy,null);
       assert.equal(data.invested_coins,amount);
@@ -353,12 +354,90 @@ test('sprint75: token validation precedes prediction; new and replay are read-on
   assert.deepEqual(replay.data.daily_synthetic_prices,fresh.data.daily_synthetic_prices);
   assert.deepEqual(replay.data.daily_ai_signals,fresh.data.daily_ai_signals);
   assert.equal(replay.data.profit_coins,fresh.data.profit_coins);
-  const second=await run(body);
+  const second=await run({...body,amount:2500,leverage:7});
   assert.equal(second.status,200);
   assert.notEqual(second.data.scenario_token,fresh.data.scenario_token);
   assert.notDeepEqual(second.data.daily_synthetic_prices,fresh.data.daily_synthetic_prices);
   for(const {data} of [fresh,replay,second]) {
+    assert.match(data.model_effective_sha256,/^[a-f0-9]{64}$/);
+    assert.equal(data.model_effective_sha256,fresh.data.model_effective_sha256);
     for(const flag of ['persisted','xp_awarded','order_placed','real_market'])assert.equal(data[flag],false);
   }
   assert.equal(calls,3);
+});
+
+test('P9s reports the effective fingerprint after each saved companion settings update',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'quick-fingerprint-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const companionStore=createCompanionStore({file:join(dir,'companion.json')});
+  const shop=createModelShopStore({file:join(dir,'shop.json')});
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),companionStore,modelShopStore:shop});
+  const run=model_id=>directRequest(server,'/api/quick-practice',{method:'POST',body:{
+    model_id,amount:1000,scenario_token:'v1_0123456789abcdef',
+  }});
+  const modelShop=await shop.public();
+  const demoId=modelShop.models[0].id;
+  await shop.purchase({id:demoId,expected_revision:modelShop.revision});
+  const profile={name:'相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35};
+  const hashes=[];
+  for(const [revision,settings] of [
+    [0,profile],[1,{...profile,approach:'reversion'}],[2,{...profile,approach:'reversion',risk_percent:80}],
+  ]) {
+    await companionStore.save({expected_revision:revision,companion:settings});
+    const result=await run('self');
+    assert.equal(result.status,200,JSON.stringify(result.data));
+    assert.match(result.data.model_effective_sha256,/^[a-f0-9]{64}$/);
+    hashes.push(result.data.model_effective_sha256);
+  }
+  assert.equal(new Set(hashes).size,3);
+  const demo=await run(demoId);
+  assert.equal(demo.status,200,JSON.stringify(demo.data));
+  assert.match(demo.data.model_effective_sha256,/^[a-f0-9]{64}$/);
+  assert.notEqual(demo.data.model_effective_sha256,hashes.at(-1));
+});
+
+test('P9s changes the self fingerprint when source model parameters change under the same companion strategy',async()=>{
+  const profile={name:'相棒',hair_color:'#8882db',clothing_color:'#92e1d4',approach:'trend',risk_percent:35};
+  const saved={revision:1,created:true,companion:validateCompanion(profile)};
+  let source=snapshot();
+  await withServer(async({base})=>{
+    const body={model_id:'self',amount:1000,leverage:1,scenario_token:'v1_0123456789abcdef'};
+    const before=await post(base,body);
+    const rev=source.source_revision+1;
+    source={...snapshot(rev),state:{revision:rev,model:{
+      ...MODEL,plugin_strengths:{...MODEL.plugin_strengths,trend:75},
+    }}};
+    const after=await post(base,body);
+    const strategy={source:'saved_companion',approach:'trend',risk_percent:35};
+    for(const result of [before,after]) {
+      assert.equal(result.status,200,JSON.stringify(result.data));
+      assert.deepEqual(result.data.companion_strategy,strategy);
+      assert.match(result.data.model_effective_sha256,/^[a-f0-9]{64}$/);
+    }
+    assert.notEqual(after.data.model_effective_sha256,before.data.model_effective_sha256);
+  },{companion:saved,loadSnapshot:async()=>source});
+});
+
+test('P9s ZIP fingerprints reflect the equipped analysis even with identical prediction parameters',async()=>{
+  const modelId='zip_'+'c'.repeat(32);
+  let methods=['bollinger_breakout','rsi_oversold'];
+  const server=createGameServer({loadSnapshot:async()=>snapshot(),
+    companionStore:{read:async()=>companion},
+    importedCharacterStore:{model:async id=>{
+      assert.equal(id,modelId);
+      return {name:'装備付き',model:MODEL,accessory_methods:methods};
+    }},
+  });
+  const run=async scenario_token=>{
+    const result=await directRequest(server,'/api/quick-practice',{method:'POST',body:{
+      model_id:modelId,amount:1000,scenario_token,
+    }});
+    assert.equal(result.status,200,JSON.stringify(result.data));
+    assert.match(result.data.model_effective_sha256,/^[a-f0-9]{64}$/);
+    return result.data.model_effective_sha256;
+  };
+  const original=await run('v1_0123456789abcdef');
+  assert.equal(await run('v1_ffffffffffffffff'),original);
+  methods=['bollinger_breakout','macd_momentum'];
+  assert.notEqual(await run('v1_0123456789abcdef'),original);
 });
