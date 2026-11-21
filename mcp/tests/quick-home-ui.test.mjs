@@ -22,10 +22,11 @@ async function mount(models=[],chatgpt=false,imported=[]) {
       this.children=[];this.handlers={};this.attributes={};this.dataset={};
       this.textContent='';this._value='';this.checked=false;this.hidden=false;this.open=false;this.disabled=false;
       this.complete=false;this.naturalWidth=0;this.style={};this.srcAssignments=0;
+      if(this.tagName==='INPUT')this.files=[];
     }
     set innerHTML(value){throw Error('HTML insertion forbidden');}
     get value(){return this._value;}
-    set value(value){this._value=String(value);}
+    set value(value){this._value=String(value);if(this.files && !this._value)this.files=[];}
     get selectedOptions(){return this.children.filter(option=>option.value===this.value);}
     get src(){return this.getAttribute('src')||'';}
     set src(value){this.setAttribute('src',value);}
@@ -130,8 +131,12 @@ async function mount(models=[],chatgpt=false,imported=[]) {
       constructor(callback){observeSource=callback;}
       observe(target,options){assert.equal(target,nodes.get('scene'));assert.equal(options.subtree,true);}
     }};
-  const windowHandlers={};
-  context.addEventListener=(event,handler)=>{windowHandlers[event]=handler;};
+  const windowHandlers=new Map();
+  context.addEventListener=(event,handler)=>{
+    if(!windowHandlers.has(event))windowHandlers.set(event,[]);
+    windowHandlers.get(event).push(handler);
+  };
+  const fireWindow=event=>windowHandlers.get(event)?.forEach(handler=>handler());
   context.window=context;
   createContext(context);
   const parseJson=runInContext('source=>JSON.parse(source)',context);
@@ -139,7 +144,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
   return {get,calls,scrolls,storageWrites,copies,downloads,revokedUrls,document,state,sourceChanged:()=>observeSource(),
-    pagehide:()=>windowHandlers.pagehide?.(),focus:()=>windowHandlers.focus?.(),
+    pagehide:()=>fireWindow('pagehide'),focus:()=>fireWindow('focus'),
     fire:(id,event,isTrusted)=>get(id).fire(event,isTrusted)};
 }
 
@@ -3389,6 +3394,13 @@ test('P9u downloads only the four validated trials and their metadata after a tr
     reference_averages:{a:{profit_coins:13,max_drawdown_pct:2},b:{profit_coins:3,max_drawdown_pct:4}},
   });
   assert.doesNotMatch(source,/PRIVATE-|OTHER-ACCOUNT|user:secret/);
+  await importComparison(ui,{size:blob.size,text:()=>blob.text()});
+  assert.equal(get('quickImportResults').hidden,false);
+  assert.equal(get('quickImportCards').children.length,5);
+  assert.equal(get('quickImportCards').children[0].children[0].textContent,'ケース1（再挑戦）');
+  const importedCards=get('quickImportCards').children;
+  assert.equal(get('quickCompareResults').children,single);
+  assert.equal(get('quickCompareMultiCards').children,cards);
   assert.deepEqual(practiceCalls(ui).map(body=>body.scenario_token),[
     undefined,firstToken,firstToken,undefined,multiTokens[0],undefined,multiTokens[1],undefined,multiTokens[2],
   ]);
@@ -3402,6 +3414,10 @@ test('P9u downloads only the four validated trials and their metadata after a tr
   assert.equal(get('quickCompareExport').disabled,false);
   assert.equal(calls.length,count);
   assert.deepEqual(storageWrites,[]);
+  await chooseCompareModel(ui,'');
+  assert.equal(get('quickCompareMultiResults').hidden,true);
+  assert.equal(get('quickImportCards').children,importedCards);
+  assert.equal(get('quickImportResults').hidden,false);
   await new Promise(resolve=>setTimeout(resolve,1000));
   assert.equal(revokedUrls[0],url);
   assert.equal(revokedUrls.length,2);
@@ -3418,6 +3434,199 @@ test('P9u rejects oversized JSON without affecting the displayed comparison',asy
   assert.equal(revokedUrls.length,0);
   assert.equal(get('quickCompareMultiResults').hidden,false);
   assert.match(get('quickCompareMultiStatus').textContent,/64 KiBを超えた/);
+});
+
+function importFixture(scenarioKind='new') {
+  const outcome=(profit_coins,max_drawdown_pct,liquidated_at_step=null)=>({
+    profit_coins,max_drawdown_pct,liquidated_at_step,
+  });
+  return {
+    schema:'synthetic-practice-comparison-v1',exported_at:'2024-02-29T12:00:00.123Z',
+    mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,order_placed:false,persisted:false,xp_awarded:false,
+    disclaimer:'<img src=x onerror=alert(1)> 未検証のファイル内の注意書き',
+    settings:{amount_coins:1000,leverage:25,days:12},
+    models:{
+      a:{model_id:'self',display_name:'<img src=x onerror=alert(1)>'+'長'.repeat(900),model_effective_sha256:selfFingerprint},
+      b:{model_id:'demo_other',display_name:'AI B',model_effective_sha256:selfFingerprint},
+    },
+    engine_source_sha256:engineFingerprint,
+    trials:['v1_0123456789abcdef',...multiTokens].map((scenario_token,index)=>({
+      case_number:index+1,kind:index===0?'published_initial':'new',scenario_kind:index===0?scenarioKind:'new',
+      scenario_token,daily_synthetic_prices:Array(13).fill(100+index),
+      a:outcome([80,1.123456789,2,3][index],index),b:outcome([-1000,-3,-6,-9][index],index*2,index===0?12:null),
+    })),
+    reference_averages:{a:{profit_coins:2.041152263,max_drawdown_pct:2},b:{profit_coins:-6,max_drawdown_pct:4}},
+  };
+}
+
+function mockJsonFile(source) {
+  return {size:Buffer.byteLength(source),text:async()=>source};
+}
+
+function importComparison(ui,...files) {
+  ui.get('quickImportFile').files=files;
+  return ui.fire('quickImportFile','change');
+}
+
+function assertImportCleared(ui) {
+  assert.equal(ui.get('quickImportResults').hidden,true);
+  assert.equal(ui.get('quickImportDetails').children.length,0);
+  assert.equal(ui.get('quickImportCards').children.length,0);
+}
+
+test('P9v reads new and replay exports without practice and displays their four cases and additional mean',async()=>{
+  const nodes=htmlNodes(),input=nodes.find(node=>node.id==='quickImportFile');
+  assert.ok(input.parents.includes('quickImport'));
+  assert.ok(input.ancestorAttributes.every(attributes=>!/\bhidden\b/.test(attributes)));
+  assert.ok(!input.parents.includes('quickCompare'));
+  assert.match(html,/<label for="quickImportFile">比較記録のJSONファイル<\/label>/);
+  assert.match(input.attributes,/type="file".*aria-describedby="quickImportHelp quickImportWarning quickImportStatus"/);
+  assert.doesNotMatch(input.attributes,/\b(multiple|disabled)\b/);
+  assert.match(html,/形式と参考平均の計算だけ.*作成者.*真正性や改変の有無.*予測の正確さ.*再現計算/);
+  const ui=await mount();
+  const {get,calls,storageWrites,downloads}=ui,count=calls.length;
+  for(const kind of ['new','replay']) {
+    const record=importFixture(kind);
+    const source=JSON.stringify(record);
+    const file=mockJsonFile(source.padEnd(source.length+65536-Buffer.byteLength(source)));
+    assert.equal(file.size,65536);
+    await importComparison(ui,file);
+    assert.equal(get('quickCompare').hidden,true);
+    assert.equal(get('quickImportResults').hidden,false);
+    assert.match(get('quickImportStatus').textContent,/形式と参考平均の計算を確認/);
+    const cards=get('quickImportCards').children.map(card=>card.children.map(line=>line.textContent));
+    assert.deepEqual(cards,[
+      ['ケース1（'+(kind==='new'?'新規':'再挑戦')+'）','A：架空の損益 +80 C ／ 最大下落率 0%','B：架空の損益 -1000 C ／ 最大下落率 0%'],
+      ['ケース2（新規）','A：架空の損益 +1.123456789 C ／ 最大下落率 1%','B：架空の損益 -3 C ／ 最大下落率 2%'],
+      ['ケース3（新規）','A：架空の損益 +2 C ／ 最大下落率 2%','B：架空の損益 -6 C ／ 最大下落率 4%'],
+      ['ケース4（新規）','A：架空の損益 +3 C ／ 最大下落率 3%','B：架空の損益 -9 C ／ 最大下落率 6%'],
+      ['参考平均（ケース2〜4）','A：参考平均損益 +2.041152263 C ／ 最大下落率の平均 2%',
+        'B：参考平均損益 -6 C ／ 最大下落率の平均 4%'],
+    ]);
+    const [a,b,engine]=get('quickImportDetails').children;
+    assert.match(a.textContent,/^A .*aaaaaaaaaaaa/);
+    assert.match(b.textContent,/^B .*aaaaaaaaaaaa/);
+    assert.match(engine.textContent,/^エンジン .*cccccccccccc$/);
+    assert.equal(a.children[0].tagName,'BDI');
+    assert.match(a.children[0].textContent,/^<img src=x onerror=alert\(1\)>長+…$/);
+    assert.doesNotMatch(JSON.stringify([a.textContent,b.textContent,engine.textContent]),/未検証のファイル内の注意書き/);
+  }
+  assert.equal(calls.length,count);
+  assert.deepEqual(storageWrites,[]);
+  assert.deepEqual(downloads,[]);
+});
+
+test('P9v rejects invalid schemas, values, averages and extra keys after clearing a valid view',async()=>{
+  const ui=await mount(),{get,calls,storageWrites}=ui,count=calls.length;
+  const valid=mockJsonFile(JSON.stringify(importFixture()));
+  const invalidRead={size:1,text:async()=>{throw Error('read failed');}};
+  for(const [label,mutate] of Object.entries({
+    schema:r=>r.schema='wrong',
+    mode:r=>r.mode='live',
+    date:r=>r.exported_at='2023-02-29T12:00:00.123Z',
+    midnight:r=>r.exported_at='2024-02-29T24:00:00Z',
+    timezone:r=>r.exported_at='2024-02-29T12:00:00+01:00',
+    market:r=>r.real_market=true,
+    orders:r=>r.order_placed=0,
+    persistence:r=>r.persisted='false',
+    xp:r=>delete r.xp_awarded,
+    disclaimer:r=>r.disclaimer={},
+    amount:r=>r.settings.amount_coins=10001,
+    leverage:r=>r.settings.leverage=1.5,
+    days:r=>r.settings.days=13,
+    modelId:r=>r.models.a.model_id='self\n',
+    modelCollision:r=>r.models.b.model_id='self',
+    name:r=>delete r.models.b.display_name,
+    modelSha:r=>r.models.a.model_effective_sha256='A'.repeat(64),
+    engineSha:r=>r.engine_source_sha256='a'.repeat(63)+'\n',
+    trialCount:r=>r.trials.pop(),
+    trialCase:r=>r.trials[2].case_number=2,
+    trialKind:r=>r.trials[0].kind='new',
+    initialScenarioKind:r=>r.trials[0].scenario_kind='unknown',
+    additionalScenarioKind:r=>r.trials[2].scenario_kind='replay',
+    tokenFormat:r=>r.trials[0].scenario_token='V1_0123456789abcdef',
+    tokenCollision:r=>r.trials[3].scenario_token=r.trials[0].scenario_token,
+    priceCount:r=>r.trials[0].daily_synthetic_prices.pop(),
+    priceZero:r=>r.trials[0].daily_synthetic_prices[1]=0,
+    priceHigh:r=>r.trials[0].daily_synthetic_prices[1]=1e12+1,
+    priceString:r=>r.trials[0].daily_synthetic_prices[1]='110',
+    profitLow:r=>r.trials[0].a.profit_coins=-1001,
+    profitHigh:r=>r.trials[0].b.profit_coins=Number.MAX_SAFE_INTEGER+1,
+    drawdown:r=>r.trials[2].b.max_drawdown_pct=101,
+    liquidation:r=>r.trials[0].b.liquidated_at_step=0,
+    wrongMean:r=>r.reference_averages.a.profit_coins+=1.1e-8,
+    meanAllTrials:r=>r.reference_averages.b.profit_coins=(-1000-3-6-9)/4,
+    meanDrawdown:r=>r.reference_averages.b.max_drawdown_pct=3,
+    rootExtra:r=>r.wallet='PRIVATE',
+    settingsExtra:r=>r.settings.email='PRIVATE',
+    modelPairExtra:r=>Object.defineProperty(r.models,'__proto__',{value:{},enumerable:true}),
+    modelExtra:r=>r.models.b.email='PRIVATE',
+    trialExtra:r=>r.trials[0].extra=true,
+    outcomeExtra:r=>r.trials[0].a.wallet={},
+    meanPairExtra:r=>r.reference_averages.c={},
+    meanExtra:r=>r.reference_averages.b.liquidated_at_step=null,
+  })) {
+    await importComparison(ui,valid);
+    assert.equal(get('quickImportResults').hidden,false,label);
+    const record=importFixture();
+    mutate(record);
+    await importComparison(ui,mockJsonFile(JSON.stringify(record)));
+    assertImportCleared(ui);
+    assert.match(get('quickImportStatus').textContent,/JSON形式または参考平均が正しくありません/,label);
+    assert.equal(get('quickImportFile').getAttribute('aria-invalid'),'true');
+  }
+  let rejectedReads=0;
+  const neverRead={size:65537,text:()=>{rejectedReads++;return valid.text();}};
+  const empty={...neverRead,size:0};
+  const overflow=JSON.stringify(importFixture()).replace('"profit_coins":80','"profit_coins":1e999');
+  for(const files of [[],[mockJsonFile('{')],[mockJsonFile('null')],[mockJsonFile(overflow)],
+    [empty],[neverRead],[neverRead,valid],[invalidRead]]) {
+    await importComparison(ui,valid);
+    await importComparison(ui,...files);
+    assertImportCleared(ui);
+    assert.equal(Boolean(get('quickImportStatus').textContent),files.length>0);
+  }
+  assert.equal(rejectedReads,0);
+  const near=importFixture();
+  near.reference_averages.a.profit_coins+=9e-9;
+  await importComparison(ui,mockJsonFile(JSON.stringify(near)));
+  assert.equal(get('quickImportResults').hidden,false);
+  assert.equal(get('quickImportFile').getAttribute('aria-invalid'),null);
+  assert.equal(calls.length,count);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('P9v only renders the latest read and discards pending and displayed imports on pagehide',async()=>{
+  const ui=await mount(),{get,pagehide}=ui;
+  const valid=mockJsonFile(JSON.stringify(importFixture('replay')));
+  await importComparison(ui,valid);
+  const old=Promise.withResolvers();
+  const stale=importComparison(ui,{size:valid.size,text:()=>old.promise});
+  assertImportCleared(ui);
+  await importComparison(ui,mockJsonFile(JSON.stringify(importFixture())));
+  old.resolve(await valid.text());
+  await stale;
+  assert.equal(get('quickImportCards').children[0].children[0].textContent,'ケース1（新規）');
+
+  const rejected=Promise.withResolvers();
+  const staleError=importComparison(ui,{size:valid.size,text:()=>rejected.promise});
+  await importComparison(ui,valid);
+  rejected.reject(Error('stale read failed'));
+  await staleError;
+  assert.match(get('quickImportStatus').textContent,/確認しました/);
+  assert.equal(get('quickImportResults').hidden,false);
+
+  const departing=Promise.withResolvers();
+  const pending=importComparison(ui,{size:valid.size,text:()=>departing.promise});
+  pagehide();
+  departing.resolve(await valid.text());
+  await pending;
+  assertImportCleared(ui);
+  assert.equal(get('quickImportStatus').textContent,'');
+  assert.deepEqual(get('quickImportFile').files,[]);
+  await importComparison(ui,valid);
+  pagehide();
+  assertImportCleared(ui);
 });
 
 test('P9u invalidates a completed record immediately on retries, edits, model changes and departure',async()=>{

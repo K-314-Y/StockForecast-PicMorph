@@ -902,7 +902,7 @@ const multiStatus = element('quickCompareMultiStatus');
 const multiResults = element('quickCompareMultiResults');
 const multiCards = element('quickCompareMultiCards');
 const compareExport = element('quickCompareExport');
-const MAX_COMPARISON_EXPORT_BYTES = 64 * 1024;
+const MAX_COMPARISON_JSON_BYTES = 64 * 1024;
 const comparisonDownloadUrls = new Map();
 const modelChangedMessage = 'モデル設定が変化した可能性があるため、追加の比較を中断しました。';
 const engineChangedMessage = '予測エンジンが変化した可能性があるため、追加比較を中断しました。';
@@ -1116,7 +1116,7 @@ function validMultiOutcome(value,model) {
     value.daily_balances.every(balance=>balance>=value.cash_held) &&
     Math.abs(value.final_balance-(BALANCE+value.profit_coins))<=0.02;
 }
-function multiCard(title,outcomes,average=false) {
+function multiCard(title,outcomes,average=false,format=money) {
   const card=document.createElement('article');
   const heading=document.createElement('h5');
   heading.textContent=title;
@@ -1125,13 +1125,19 @@ function multiCard(title,outcomes,average=false) {
   const drawdownLabel=average ? '最大下落率の平均' : '最大下落率';
   for(const [index,value] of outcomes.entries()) {
     const line=document.createElement('p');
-    const profit=money(value.profit_coins);
+    const profit=format(value.profit_coins);
     const signed=profit==='-0' || profit==='0' ? '0' : (value.profit_coins>0 ? '+' : '')+profit;
     line.textContent=(index===0 ? 'A' : 'B')+'：'+profitLabel+' '+signed+' C ／ '+drawdownLabel+' '+
-      money(value.max_drawdown_pct || 0)+'%';
+      format(value.max_drawdown_pct || 0)+'%';
     card.append(line);
   }
   return card;
+}
+function comparisonAverage(trials,key) {
+  return {
+    profit_coins:trials.reduce((sum,trial)=>sum+trial[key].profit_coins,0)/trials.length,
+    max_drawdown_pct:trials.reduce((sum,trial)=>sum+trial[key].max_drawdown_pct,0)/trials.length,
+  };
 }
 multiRun.addEventListener('click',async()=>{
   if(busy || multiRun.disabled || compareBusy || !comparePair ||
@@ -1169,10 +1175,7 @@ multiRun.addEventListener('click',async()=>{
       if(!validMultiOutcome(valueB,b))throw Error('追加の比較条件を確認できませんでした');
       pairs.push(comparisonTrial(trial+2,'new',valueA,valueB));
     }
-    const averages=['a','b'].map(key=>({
-      profit_coins:pairs.reduce((sum,pair)=>sum+pair[key].profit_coins,0)/pairs.length,
-      max_drawdown_pct:pairs.reduce((sum,pair)=>sum+pair[key].max_drawdown_pct,0)/pairs.length,
-    }));
+    const averages=['a','b'].map(key=>comparisonAverage(pairs,key));
     multiCards.replaceChildren(...pairs.map((pair,index)=>multiCard('シナリオ'+(index+1),[pair.a,pair.b])),
       multiCard('モデル別の参考平均',averages,true));
     multiResults.hidden=false;
@@ -1204,10 +1207,10 @@ compareExport.addEventListener('click',event=>{
   try {
     const exportedAt=new Date().toISOString();
     const {a,b}=comparisonRecord.models;
-    const namesFit=a.display_name.length+b.display_name.length<=MAX_COMPARISON_EXPORT_BYTES;
+    const namesFit=a.display_name.length+b.display_name.length<=MAX_COMPARISON_JSON_BYTES;
     const blob=namesFit ? new Blob([JSON.stringify({...comparisonRecord,exported_at:exportedAt},null,2)+'\n'],
       {type:'application/json'}) : null;
-    if(!blob || blob.size>MAX_COMPARISON_EXPORT_BYTES) {
+    if(!blob || blob.size>MAX_COMPARISON_JSON_BYTES) {
       setCompareMessage(multiStatus,'記録が64 KiBを超えたため、ダウンロードできませんでした。');
       return;
     }
@@ -1228,6 +1231,140 @@ compareExport.addEventListener('click',event=>{
     },1000));
   }
 });
+function hasComparisonKeys(value,...keys) {
+  return value!==null && typeof value==='object' && Object.getPrototypeOf(value)===Object.prototype &&
+    Object.keys(value).length===keys.length && keys.every(key=>Object.hasOwn(value,key));
+}
+function validExportTimestamp(value) {
+  if(typeof value!=='string' || !value.endsWith('Z'))return false;
+  const match=/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z$/.exec(value);
+  if(!match)return false;
+  const wholeSecond=match[1]+'.000Z';
+  const date=new Date(wholeSecond);
+  return Number.isFinite(date.getTime()) && date.toISOString()===wholeSecond;
+}
+function validImportedModel(value) {
+  return hasComparisonKeys(value,'model_id','display_name','model_effective_sha256') &&
+    typeof value.model_id==='string' && value.model_id.length<=45 &&
+    value.model_id===value.model_id.trim() && /^(self|demo_[a-z_]{1,40}|zip_[a-f0-9]{32})$/.test(value.model_id) &&
+    typeof value.display_name==='string' && value.display_name.length<=MAX_COMPARISON_JSON_BYTES &&
+    validFingerprint(value.model_effective_sha256);
+}
+function validImportedOutcome(value,amount) {
+  return hasComparisonKeys(value,'profit_coins','max_drawdown_pct','liquidated_at_step') &&
+    Number.isFinite(value.profit_coins) && value.profit_coins>=-amount &&
+    value.profit_coins<=Number.MAX_SAFE_INTEGER && Number.isFinite(value.max_drawdown_pct) &&
+    value.max_drawdown_pct>=0 && value.max_drawdown_pct<=100 &&
+    (value.liquidated_at_step===null || (Number.isInteger(value.liquidated_at_step) &&
+      value.liquidated_at_step>=1 && value.liquidated_at_step<=12));
+}
+function validImportedComparison(value) {
+  if(!hasComparisonKeys(value,'schema','exported_at','mode','real_market','order_placed','persisted','xp_awarded',
+    'disclaimer','settings','models','engine_source_sha256','trials','reference_averages'))return false;
+  if(value.schema!=='synthetic-practice-comparison-v1' || !validExportTimestamp(value.exported_at) ||
+    value.mode!=='SIMPLE_SYNTHETIC_PRACTICE_ONLY' || value.real_market!==false || value.order_placed!==false ||
+    value.persisted!==false || value.xp_awarded!==false || typeof value.disclaimer!=='string' ||
+    !validFingerprint(value.engine_source_sha256))return false;
+  const {settings,models,trials,reference_averages:averages}=value;
+  if(!hasComparisonKeys(settings,'amount_coins','leverage','days') ||
+    !Number.isInteger(settings.amount_coins) || settings.amount_coins<1 || settings.amount_coins>BALANCE ||
+    !Number.isInteger(settings.leverage) || settings.leverage<1 || settings.leverage>25 || settings.days!==12 ||
+    !hasComparisonKeys(models,'a','b') || !validImportedModel(models.a) || !validImportedModel(models.b) ||
+    models.a.model_id===models.b.model_id || !Array.isArray(trials) || trials.length!==4 ||
+    !hasComparisonKeys(averages,'a','b'))return false;
+  const tokens=new Set();
+  for(const [index,trial] of trials.entries()) {
+    if(!hasComparisonKeys(trial,'case_number','kind','scenario_kind','scenario_token','daily_synthetic_prices','a','b') ||
+      trial.case_number!==index+1 || trial.kind!==(index===0 ? 'published_initial' : 'new') ||
+      (trial.scenario_kind!=='new' && !(index===0 && trial.scenario_kind==='replay')) ||
+      !validScenarioToken(trial.scenario_token) || tokens.has(trial.scenario_token) ||
+      !Array.isArray(trial.daily_synthetic_prices) || trial.daily_synthetic_prices.length!==13 ||
+      !trial.daily_synthetic_prices.every(price=>Number.isFinite(price) && price>0 && price<=1e12) ||
+      !validImportedOutcome(trial.a,settings.amount_coins) || !validImportedOutcome(trial.b,settings.amount_coins))return false;
+    tokens.add(trial.scenario_token);
+  }
+  const additionalTrials=trials.slice(1);
+  return ['a','b'].every(key=>{
+    const average=averages[key];
+    if(!hasComparisonKeys(average,'profit_coins','max_drawdown_pct'))return false;
+    const expected=comparisonAverage(additionalTrials,key);
+    return Object.keys(expected).every(metric=>Number.isFinite(average[metric]) &&
+      Math.abs(average[metric]-expected[metric])<=Math.max(1e-8,Math.abs(expected[metric])*1e-12));
+  });
+}
+
+const importFile=element('quickImportFile');
+const importStatus=element('quickImportStatus');
+const importResults=element('quickImportResults');
+const importDetails=element('quickImportDetails');
+const importCards=element('quickImportCards');
+let importEpoch=0;
+function clearComparisonImport() {
+  importEpoch++;
+  importResults.hidden=true;
+  importDetails.replaceChildren();
+  importCards.replaceChildren();
+  importStatus.textContent='';
+  importFile.removeAttribute('aria-invalid');
+}
+function showComparisonImportError(message) {
+  importFile.setAttribute('aria-invalid','true');
+  importStatus.textContent=message;
+}
+function renderComparisonImport(record) {
+  const models=['a','b'].map(key=>{
+    const model=record.models[key];
+    const line=document.createElement('p');
+    const name=document.createElement('bdi');
+    const characters=Array.from(model.display_name);
+    name.textContent=characters.length>160 ? characters.slice(0,160).join('')+'…' : model.display_name;
+    line.textContent=key.toUpperCase()+' モデル SHA-256（冒頭）：'+model.model_effective_sha256.slice(0,12)+' ／ ';
+    line.append(name);
+    return line;
+  });
+  const engine=document.createElement('p');
+  engine.textContent='エンジン SHA-256（冒頭）：'+record.engine_source_sha256.slice(0,12);
+  const cards=record.trials.map(trial=>{
+    const kind=trial.scenario_kind==='replay' ? '再挑戦' : '新規';
+    return multiCard('ケース'+trial.case_number+'（'+kind+'）',[trial.a,trial.b],false,String);
+  });
+  const {a,b}=record.reference_averages;
+  cards.push(multiCard('参考平均（ケース2〜4）',[a,b],true,String));
+  importDetails.replaceChildren(...models,engine);
+  importCards.replaceChildren(...cards);
+  importResults.hidden=false;
+  importStatus.textContent='JSONの形式と参考平均の計算を確認しました。';
+}
+importFile.addEventListener('change',async()=>{
+  clearComparisonImport();
+  const epoch=importEpoch;
+  const files=importFile.files;
+  if(!files?.length)return;
+  if(files.length!==1 || files[0].size<=0 || files[0].size>MAX_COMPARISON_JSON_BYTES) {
+    showComparisonImportError('空でない64 KiB以下のJSONファイルを1つ選択してください。');
+    return;
+  }
+  let source;
+  try {
+    source=await files[0].text();
+  } catch {
+    if(epoch===importEpoch)showComparisonImportError('ファイルを読み込めませんでした。');
+    return;
+  }
+  if(epoch!==importEpoch)return;
+  try {
+    const record=JSON.parse(source);
+    if(!validImportedComparison(record))throw Error('Invalid comparison record');
+    renderComparisonImport(record);
+  } catch {
+    showComparisonImportError('比較記録のJSON形式または参考平均が正しくありません。');
+  }
+});
+window.addEventListener('pagehide',()=>{
+  clearComparisonImport();
+  importFile.value='';
+});
+
 function revealResult(value,ordered) {
   const panel=element('quickResult');
   panel.replaceChildren();
