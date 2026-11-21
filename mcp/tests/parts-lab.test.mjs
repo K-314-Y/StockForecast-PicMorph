@@ -58,6 +58,7 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
     'partBase','partReady','partHappy','partCautious','partOutfit','partHair',
     'loadOwn','loadSample','clear','frames','fps','mood','pause',
     'previewCanvas','stage','status','faceX','faceY','frameInfo',
+    'movePart','layerX','layerY','resetLayerPosition',
   ]) {
     assert.match(html,new RegExp('id="'+id+'"'),id);
   }
@@ -72,6 +73,10 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
   assert.match(script,/fetch\('\/api\/imported-characters\/register'/);
   assert.match(html,/id="registerZip"[^>]*disabled/);
+  assert.match(html,/id="movePart"[^>]*disabled/);
+  assert.match(html,/<option value="accessory" selected>/);
+  assert.match(html,/位置を調整しても予測モデルは変わりません/);
+  assert.match(html,/以前の位置は自動で復元されません/);
   assert.doesNotMatch(script,/\bXMLHttpRequest\b|sendBeacon\b/);
   assert.match(script,/createImageBitmap\(file\)/);
   assert.match(script,/bitmap\.close\(\)/);

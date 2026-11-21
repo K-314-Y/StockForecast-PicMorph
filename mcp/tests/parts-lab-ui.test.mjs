@@ -110,21 +110,25 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
           draw(canvas.getContext('2d'));
           return canvas.toDataURL(mime).split(',')[1];
         };
-        const atlas=(frames,side=64)=>({
-          body:image(side*frames,side,ctx=>{
+        const atlas=(frames,width=64,height=width)=>({
+          body:image(width*frames,height,ctx=>{
             for (let i=0;i<frames;i++) {
               ctx.fillStyle=i===0?'#15304b':'#305a72';
-              ctx.fillRect(i*side,0,side,side);
+              ctx.fillRect(i*width,0,width,height);
             }
           }),
-          ready:image(side*frames,side,ctx=>{
+          ready:image(width*frames,height,ctx=>{
             ctx.fillStyle='#eeeeee';ctx.fillRect(14,3,4,4);
+            for (let i=1;i<frames;i++) ctx.fillRect(i*width+21,9,4,4);
           }),
-          happy:image(side*frames,side,ctx=>{
+          happy:image(width*frames,height,ctx=>{
             ctx.fillStyle='#ffff00';ctx.fillRect(14,3,4,4);
           }),
         });
-        return {one:atlas(1,400),six:atlas(6),
+        const patch=color=>image(96,64,ctx=>{ctx.fillStyle=color;ctx.fillRect(14,3,4,4);});
+        return {one:atlas(1,400),six:atlas(6),manual:{
+          ...atlas(1,96,64),outfit:patch('#ff00ff'),hair:patch('#00ffff'),cautious:patch('#00ff00'),
+        },
           largeRed:image(80,80,ctx=>{ctx.fillStyle='#ff0000';ctx.fillRect(16,16,48,48);}),
           red:image(12,12,ctx=>{ctx.fillStyle='#ff0000';ctx.fillRect(2,2,8,8);}),
           green:image(12,12,ctx=>{ctx.fillStyle='#00ff00';ctx.fillRect(2,2,8,8);},'image/webp'),
@@ -151,18 +155,30 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const position=async index=>Promise.all(['x','y'].map(async key=>
         Number(await adjustment(index,key).inputValue())));
       const preview=page.locator('#previewCanvas');
+      const partPicker=page.locator('#movePart');
+      const resetPosition=page.locator('#resetLayerPosition');
+      const partPosition=async(prefix='layer')=>Promise.all(['X','Y'].map(async axis=>
+        Number(await page.locator('#'+prefix+axis).inputValue())));
       const point=async (x,y)=>{
         const box=await preview.boundingBox();
-        const side=await preview.evaluate(node=>node.width);
-        const size=Math.min(box.width,box.height);
-        return [box.x+(box.width-size)/2+x*size/side,
-          box.y+(box.height-size)/2+y*size/side];
+        const [width,height]=await preview.evaluate(node=>[node.width,node.height]);
+        const fit=Math.min(box.width/width,box.height/height);
+        return [box.x+(box.width-width*fit)/2+x*fit,
+          box.y+(box.height-height*fit)/2+y*fit];
       };
       const down=async(x,y)=>{
         await page.mouse.move(...await point(x,y));
         await page.mouse.down();
       };
       const dragging=()=>preview.getAttribute('data-overlay-dragging');
+      const partDragging=()=>preview.getAttribute('data-layer-dragging');
+      const movePart=async(from,to)=>{
+        await down(...from);
+        assert.equal(await partDragging(),'');
+        await page.mouse.move(...await point(...to),{steps:3});
+        await page.mouse.up();
+        assert.equal(await partDragging(),null);
+      };
       const upload=(index,name,data,mimeType='image/png')=>row(index).locator('input[type=file]')
         .setInputFiles({name,mimeType,buffer:bytes(data)});
       const pixels=(selector,x=0,y=0,width=1,height=1)=>page.locator(selector)
@@ -190,6 +206,112 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         await page.locator('#zipGameLink').waitFor();
         return result.json();
       };
+      const cdp=await page.context().newCDPSession(page);
+      const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{
+        type,touchPoints:x===undefined?[]:[{x,y}],
+      });
+
+      assert.equal(await partPicker.isDisabled(),true);
+      await page.locator('#loadSample').click();
+      await partPicker.locator('option[value=face]:enabled').waitFor({state:'attached'});
+      assert.equal(await partPicker.inputValue(),'accessory');
+      assert.equal(await partPicker.locator('option[value=hair]:disabled').count(),1);
+      await partPicker.selectOption('face');
+      await page.locator('#faceX').fill('10');
+      await page.locator('#frames').selectOption('1');
+      for (const [part,id] of Object.entries({
+        body:'partBase',ready:'partReady',happy:'partHappy',cautious:'partCautious',
+        outfit:'partOutfit',hair:'partHair',
+      })) {
+        await page.locator('#'+id).setInputFiles({
+          name:part+'.png',mimeType:'image/png',buffer:Buffer.from(fixture.manual[part],'base64'),
+        });
+      }
+      await page.locator('#loadOwn').click();
+      await partPicker.locator('option[value=hair]:enabled').waitFor({state:'attached'});
+      assert.equal(await partPicker.inputValue(),'accessory');
+      assert.deepEqual(await partPosition('face'),[0,0]);
+      await preview.evaluate(node=>{
+        node.style.width='280px';
+        node.style.height='230px';
+      });
+
+      // Face and outfit can both be grabbed through the hair drawn above them.
+      await partPicker.selectOption('face');
+      await preview.scrollIntoViewIfNeeded();
+      const cyan=[0,255,255,255], magenta=[255,0,255,255], gray=[238,238,238,255];
+      assert.deepEqual(await pixel(16,5),cyan);
+      await movePart([16,5],[24,15]);
+      assert.deepEqual(await partPosition('face'),[8,10]);
+      assert.deepEqual(await pixel(16,5),cyan);
+      assert.deepEqual(await pixel(24,15),gray);
+      for (const [mood,color] of [['happy',[255,255,0,255]],['cautious',[0,255,0,255]]]) {
+        await page.locator('#mood').selectOption(mood);
+        assert.deepEqual(await pixel(24,15),color);
+      }
+      await page.locator('#mood').selectOption('ready');
+      await page.locator('#faceY').fill('12');
+      assert.deepEqual(await pixel(24,18),gray);
+      await resetPosition.click();
+      assert.deepEqual(await partPosition('face'),[0,0]);
+
+      await partPicker.selectOption('outfit');
+      await preview.scrollIntoViewIfNeeded();
+      await movePart([16,5],[5,22]);
+      assert.deepEqual(await partPosition(),[-11,17]);
+      assert.deepEqual(await pixel(5,22),magenta);
+      await partPicker.selectOption('hair');
+      await preview.scrollIntoViewIfNeeded();
+      for (const [x,y] of [[5,22],[40,40],[16,-4]]) {
+        await down(x,y);
+        assert.equal(await partDragging(),null);
+        await page.mouse.move(...await point(26,13));
+        await page.mouse.up();
+        assert.deepEqual(await partPosition(),[0,0]);
+      }
+      await movePart([16,5],[26,13]);
+      assert.deepEqual(await partPosition(),[10,8]);
+      assert.deepEqual(await pixel(26,13),cyan);
+      assert.deepEqual(await pixel(16,5),gray);
+      await page.locator('#layerX').fill('999');
+      await page.locator('#layerY').fill('-999');
+      await page.locator('#layerY').blur();
+      assert.deepEqual(await partPosition(),[32,-32]);
+      assert.deepEqual(await pixel(26,13),bg);
+      await partPicker.selectOption('outfit');
+      assert.deepEqual(await partPosition(),[-11,17]);
+
+      await partPicker.selectOption('base');
+      await preview.scrollIntoViewIfNeeded();
+      await page.emulateMedia({reducedMotion:'no-preference'});
+      const [bodyX,bodyY]=await point(48,35);
+      const scrollBefore=await page.evaluate(()=>window.scrollY);
+      await touch('touchStart',bodyX,bodyY);
+      assert.equal(await partDragging(),'');
+      assert.deepEqual(await preview.evaluate(node=>{
+        const style=getComputedStyle(node);
+        return [style.cursor,style.touchAction,style.animationPlayState];
+      }),['grabbing','none','paused']);
+      const fit=(await preview.boundingBox()).width/96;
+      await touch('touchMove',bodyX+44*fit,bodyY-12*fit);
+      await page.waitForFunction(()=>document.getElementById('layerX').value==='32');
+      assert.deepEqual(await partPosition(),[32,-12]);
+      assert.deepEqual(await pixel(31,30),[0,0,0,0]);
+      assert.deepEqual(await pixel(32,30),bg);
+      await touch('touchCancel');
+      assert.equal(await partDragging(),null);
+      assert.deepEqual(await partPosition(),[32,-12]);
+      assert.equal(await page.evaluate(()=>window.scrollY),scrollBefore);
+      assert.equal(await preview.evaluate(node=>getComputedStyle(node).animationPlayState),'running');
+      await page.emulateMedia({reducedMotion:'reduce'});
+      await resetPosition.click();
+      assert.deepEqual(await partPosition(),[0,0]);
+      assert.deepEqual(await pixel(0,30),bg);
+      await page.locator('#clear').click();
+      assert.equal(await partPicker.isDisabled(),true);
+      assert.equal(await partPicker.inputValue(),'accessory');
+      assert.equal(await page.locator('#layerX').isDisabled(),true);
+      await preview.evaluate(node=>{node.style.width='';node.style.height='';});
 
       await page.locator('#zipFrames').selectOption('1');
       await zipInput.setInputFiles(legacyZip);
@@ -217,10 +339,6 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
 
       // Use Chrome touch input on the running single-frame animation.
       await page.emulateMedia({reducedMotion:'no-preference'});
-      const cdp=await page.context().newCDPSession(page);
-      const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{
-        type,touchPoints:x===undefined?[]:[{x,y}],
-      });
       const [touchX,touchY]=await point(195,195);
       await touch('touchStart',touchX,touchY);
       assert.equal(await dragging(),'');
@@ -344,11 +462,31 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.equal(await dragging(),null);
       await upload(1,'overlay-final.webp','green','image/webp');
       await waitEnabled();
+      await partPicker.selectOption('face');
+      await page.emulateMedia({reducedMotion:'no-preference'});
+      await page.waitForFunction(()=>{
+        if (!document.getElementById('frameInfo').textContent.startsWith('2 / 6')) return false;
+        document.getElementById('pause').click();
+        return true;
+      });
+      await preview.scrollIntoViewIfNeeded();
+      await down(15,4);
+      assert.equal(await partDragging(),null);
+      await page.mouse.up();
+      assert.deepEqual(await pixel(22,10),gray);
+      await movePart([22,10],[30,14]);
+      assert.deepEqual(await partPosition('face'),[8,4]);
+      assert.deepEqual(await pixel(22,10),[48,90,114,255]);
+      assert.deepEqual(await pixel(30,14),gray);
+      await page.emulateMedia({reducedMotion:'reduce'});
+      await page.waitForFunction(()=>document.getElementById('frameInfo').textContent.startsWith('1 / 6'));
       await page.locator('#mood').selectOption('happy');
+      await partPicker.selectOption('base');
       const expectedPortrait=await pixels('#previewCanvas',0,0,64,64);
       assert.deepEqual(await pixel(52,12),red);
       assert.deepEqual(await pixel(32,32),green);
-      assert.deepEqual(await pixel(15,4),[255,255,0,255]);
+      assert.deepEqual(await pixel(15,4),bg);
+      assert.deepEqual(await pixel(23,8),[255,255,0,255]);
       let releaseRegistration;
       let notifyRegistration;
       const registrationStarted=new Promise(resolve=>{notifyRegistration=resolve;});
@@ -364,6 +502,7 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         await registrationStarted;
         for (const selector of [
           '#zipFile','#clear','#mood','#frames','#fps','#zipAccessory','#zipAddAccessory',
+          '#movePart','#layerX','#layerY','#resetLayerPosition','#faceX','#faceY',
           '#zipEquipped input[type=file]','#zipEquipped [data-overlay]',
           '#zipEquipped button',
         ]) {
@@ -398,6 +537,14 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await openEdit(legacy.id);
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 1.*400 × 400/);
       assert.equal(await page.locator('#zipEquipped li').count(),1);
+      assert.equal(await partPicker.inputValue(),'accessory');
+      assert.deepEqual(await partPosition('face'),[0,0]);
+      assert.equal(await partPicker.locator('option[value=outfit]:disabled').count(),1);
+      await partPicker.selectOption('base');
+      assert.equal(await page.locator('#layerX').getAttribute('max'),'128');
+      await page.locator('#layerX').fill('14');
+      assert.deepEqual(await pixel(0,200),[0,0,0,0]);
+      await partPicker.selectOption('accessory');
       await upload(0,'overlay-legacy-edit.png','largeRed');
       await waitEditReady();
       assert.deepEqual(await pixel(200,200),red);
@@ -406,6 +553,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.keyboard.press('Escape');
       await page.locator('#confirmVisualEdit').waitFor({state:'hidden'});
       await closeEdit();
+      assert.equal(await partPicker.isDisabled(),true);
+      assert.deepEqual(await partPosition(),[0,0]);
       assert.deepEqual((await importedCharacterStore.image(legacy.id)).bytes,legacyBytes);
       assert.equal(writes.length,2);
 
@@ -435,6 +584,17 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         assert.equal(await page.locator(selector).isDisabled(),true,selector);
       assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),expectedPortrait);
       assert.deepEqual(await pixel(32,32),bg);
+      assert.deepEqual(await pixel(15,4),gray);
+      assert.deepEqual(await pixel(23,8),bg);
+      await partPicker.selectOption('base');
+      assert.deepEqual(await partPosition(),[0,0]);
+      await partPicker.selectOption('face');
+      assert.deepEqual(await partPosition(),[0,0]);
+      await page.locator('#layerX').fill('-6');
+      await page.locator('#layerY').fill('6');
+      assert.deepEqual(await partPosition('face'),[-6,6]);
+      assert.deepEqual(await pixel(9,10),gray);
+      await partPicker.selectOption('accessory');
       await saveEdit();
       assert.match(await page.locator('#confirmOverlayCount').textContent(),/0 \/ 3/);
       await page.locator('#abortPortraitSave').click();
@@ -450,6 +610,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const editedPortrait=await pixels('#previewCanvas',0,0,64,64);
       assert.deepEqual(await pixel(50,22),red);
       assert.deepEqual(await pixel(32,32),bg);
+      assert.deepEqual(await pixel(15,4),bg);
+      assert.deepEqual(await pixel(9,10),gray);
       const portraitFile=join(importedRoot,created.id+'.json');
       assert.deepEqual(JSON.parse(await readFile(portraitFile,'utf8')),stored);
       const updatedResponse=portraitResponse();

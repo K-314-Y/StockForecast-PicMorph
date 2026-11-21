@@ -43,9 +43,14 @@ let paused = false;
 let frame = 0;
 let lastChange = 0;
 let handle = 0;
-let overlayDrag = null;
+let drag = null;
 let hitContext;
 const canAttachOverlays=()=>Boolean(currentZipFiles || visualEdit);
+const layerPicker=$('movePart');
+const layerOffsets={base:{x:0,y:0},outfit:{x:0,y:0},face:{x:0,y:0},hair:{x:0,y:0}};
+const offsetAxes=['x','y'];
+const faceInputs={x:$('faceX'),y:$('faceY')};
+const layerInputs={x:$('layerX'),y:$('layerY')};
 
 function status(message, isError = false) {
   $('status').textContent = message;
@@ -61,11 +66,12 @@ function release(bundle) {
   for (const bitmap of new Set(Object.values(bundle.images))) bitmap.close();
 }
 function resetPack() {
-  endOverlayDrag();
+  endDrag();
   stopClock();
   if (pack) release(pack);
   pack = null;
-  updateOverlayDragAvailability();
+  hitContext=undefined;
+  resetLayerPositions();
   frame = 0;
   paused = false;
   $('pause').setAttribute('aria-pressed','false');
@@ -80,14 +86,14 @@ function resetPack() {
 }
 function setBusy(value) {
   busy = value;
-  if (busy) endOverlayDrag();
-  updateOverlayDragAvailability();
+  if (busy) endDrag();
+  refreshPartControls();
   $('loadOwn').disabled = value;
   $('loadSample').disabled = value;
   $('loadGenerated').disabled = value;
   $('zipFile').disabled = value;
   $('zipFrames').disabled = value;
-  for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood','faceX','faceY'])
+  for(const id of ['zipName',...zipLookFields,'zipHairColor','zipClothingColor','mood'])
     $(id).disabled=value || Boolean(visualEdit);
   $('frames').disabled=registering || Boolean(visualEdit);
   $('zipEquipment').disabled=value;
@@ -104,24 +110,60 @@ function setRegistering(value) {
   $('pause').disabled=value || !pack;
   setBusy(value);
 }
-function checkedOffset(id) {
-  const value = Number($(id).value);
-  return Number.isFinite(value) ? Math.max(-24,Math.min(24,value)) : 0;
+function layerBitmap(layer) {
+  if (layer==='face') return pack?.images[$('mood').value] || pack?.images.ready;
+  return pack?.images[layer];
 }
-function drawLayer(target, bitmap, frameIndex, dx=0, dy=0) {
+function offsetBounds(layer) {
+  const limit=layer==='face'?24:Math.min(128,Math.floor(Math.min(pack.width,pack.height)/2));
+  return {min:-limit,max:limit,initial:0};
+}
+function syncOffsetInputs(except) {
+  const selected=layerOffsets[layerPicker.value];
+  for (const axis of offsetAxes) {
+    if (faceInputs[axis]!==except) faceInputs[axis].value=layerOffsets.face[axis];
+    if (layerInputs[axis]!==except) layerInputs[axis].value=selected?.[axis]??0;
+  }
+}
+function refreshPartControls() {
+  const layer=layerPicker.value;
+  const loaded=Boolean(layerBitmap(layer));
+  const showOffsets=loaded && (layer!=='face' || Boolean(visualEdit));
+  layerPicker.disabled=busy || !pack;
+  for (const option of layerPicker.options) {
+    option.disabled=option.value!=='accessory' && !layerBitmap(option.value);
+  }
+  $('layerOffsets').hidden=!showOffsets;
+  $('resetLayerPosition').disabled=busy || !loaded;
+  $('faceOffsets').hidden=Boolean(visualEdit);
+  for (const axis of offsetAxes) {
+    faceInputs[axis].disabled=busy || !pack || Boolean(visualEdit);
+    const input=layerInputs[axis];
+    input.disabled=busy || !showOffsets;
+    if (loaded) {
+      const {min,max}=offsetBounds(layer);
+      input.min=min;
+      input.max=max;
+    }
+  }
+  syncOffsetInputs();
+  updateDragAvailability();
+}
+function resetLayerPositions() {
+  for (const offset of Object.values(layerOffsets)) offset.x=offset.y=0;
+  layerPicker.value='accessory';
+  refreshPartControls();
+}
+function drawLayer(target, layer, frameIndex) {
+  const bitmap=layerBitmap(layer);
   if (!bitmap) return;
-  const width = pack.width;
-  const height = pack.height;
-  target.drawImage(bitmap,frameIndex*width,0,width,height,dx,dy,width,height);
+  const {width,height}=pack;
+  const {x,y}=layerOffsets[layer];
+  target.drawImage(bitmap,frameIndex*width,0,width,height,x,y,width,height);
 }
 function drawCharacter(target,frameIndex) {
-  const mood = $('mood').value;
-  const images = pack.images;
   target.clearRect(0,0,pack.width,pack.height);
-  drawLayer(target,images.base,frameIndex);
-  drawLayer(target,images.outfit,frameIndex);
-  drawLayer(target,images[mood] || images.ready,frameIndex,checkedOffset('faceX'),checkedOffset('faceY'));
-  drawLayer(target,images.hair,frameIndex);
+  for (const layer of Object.keys(layerOffsets)) drawLayer(target,layer,frameIndex);
   for (const id of equippedIds) {
     const overlay=accessoryOverlays.get(id);
     if (overlay?.bitmap) target.drawImage(overlay.bitmap,...overlayRect(pack.width,pack.height,overlay));
@@ -134,10 +176,30 @@ function paint() {
     ' コマ｜' + String(pack.width) + ' × ' + String(pack.height) + ' px' +
     (reduced.matches ? '｜静止表示（動きを減らす設定）' : '');
 }
-function updateOverlayDragAvailability() {
-  const editable=Boolean(pack && canAttachOverlays() && !busy &&
+function updateDragAvailability() {
+  const editable=Boolean(pack && !busy);
+  const accessory=layerPicker.value==='accessory';
+  canvas.toggleAttribute('data-overlay-editable',editable && accessory && canAttachOverlays() &&
     equippedIds.some(id=>accessoryOverlays.get(id)?.bitmap));
-  canvas.toggleAttribute('data-overlay-editable',editable);
+  canvas.toggleAttribute('data-layer-editable',editable && !accessory && Boolean(layerBitmap(layerPicker.value)));
+}
+function pixelContext(width,height) {
+  hitContext??=document.createElement('canvas').getContext('2d',{willReadFrequently:true});
+  hitContext.canvas.width=width;
+  hitContext.canvas.height=height;
+  return hitContext;
+}
+function hitLayer(layer,x,y) {
+  const {width,height}=pack;
+  const px=Math.floor(x), py=Math.floor(y);
+  if (px<0 || py<0 || px>=width || py>=height) return null;
+  const {x:dx,y:dy}=layerOffsets[layer];
+  const sx=px-dx, sy=py-dy;
+  if (sx<0 || sy<0 || sx>=width || sy>=height) return null;
+  // Sample one pixel of the selected frame and layer, independent of overlap.
+  const target=pixelContext(1,1);
+  target.drawImage(layerBitmap(layer),frame*width+sx,sy,1,1,0,0,1,1);
+  return target.getImageData(0,0,1,1).data[3]?{layer}:null;
 }
 function hitOverlay(x,y) {
   for (let index=equippedIds.length-1;index>=0;index--) {
@@ -148,30 +210,46 @@ function hitOverlay(x,y) {
     const px=Math.floor(x-left), py=Math.floor(y-top);
     if (px<0 || py<0 || px>=width || py>=height) continue;
     // Read the alpha after resampling with the same settings as the portrait.
-    hitContext??=document.createElement('canvas').getContext('2d',{willReadFrequently:true});
-    hitContext.canvas.width=width;
-    hitContext.canvas.height=height;
-    hitContext.imageSmoothingQuality='high';
-    hitContext.drawImage(overlay.bitmap,0,0,width,height);
-    if (hitContext.getImageData(px,py,1,1).data[3]) return {overlay,rect};
+    const target=pixelContext(width,height);
+    target.imageSmoothingQuality='high';
+    target.drawImage(overlay.bitmap,0,0,width,height);
+    if (target.getImageData(px,py,1,1).data[3]) return {overlay,rect};
   }
   return null;
 }
-function endOverlayDrag() {
-  if (!overlayDrag) return;
-  const {pointerId}=overlayDrag;
-  overlayDrag=null;
-  canvas.removeAttribute('data-overlay-dragging');
+function endDrag() {
+  if (!drag) return;
+  const {pointerId,attribute}=drag;
+  drag=null;
+  canvas.removeAttribute(attribute);
   if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
 }
-function moveOverlay(event) {
-  if (overlayDrag?.pointerId!==event.pointerId) return;
-  const {overlay,rect:[left,top,width,height],startPoint,startX,startY}=overlayDrag;
+function pointerPoint(event) {
   const bounds=canvas.getBoundingClientRect();
-  if (!bounds.width || !bounds.height) return;
-  const point=canvasPoint(event,bounds,canvas.width,canvas.height);
-  const x=overlayPosition(left+point[0]-startPoint[0],canvas.width-width,left,startX);
-  const y=overlayPosition(top+point[1]-startPoint[1],canvas.height-height,top,startY);
+  if (!bounds.width || !bounds.height) return null;
+  return canvasPoint(event,bounds,canvas.width,canvas.height);
+}
+function moveDrag(event) {
+  if (drag?.pointerId!==event.pointerId) return;
+  const point=pointerPoint(event);
+  if (!point) return;
+  const {layer,overlay,rect,startPoint,startX,startY}=drag;
+  const dx=point[0]-startPoint[0], dy=point[1]-startPoint[1];
+  if (layer) {
+    const bounds=offsetBounds(layer);
+    const x=overlayValue(startX+dx,bounds);
+    const y=overlayValue(startY+dy,bounds);
+    const offset=layerOffsets[layer];
+    if (offset.x===x && offset.y===y) return;
+    offset.x=x;
+    offset.y=y;
+    syncOffsetInputs();
+    paint();
+    return;
+  }
+  const [left,top,width,height]=rect;
+  const x=overlayPosition(left+dx,canvas.width-width,left,startX);
+  const y=overlayPosition(top+dy,canvas.height-height,top,startY);
   if (overlay.x===x && overlay.y===y) return;
   overlay.x=x;
   overlay.y=y;
@@ -181,28 +259,29 @@ function moveOverlay(event) {
   paint();
 }
 canvas.addEventListener('pointerdown',event=>{
-  if (!event.isPrimary || event.button!==0 || overlayDrag ||
-      !canvas.hasAttribute('data-overlay-editable')) return;
-  const bounds=canvas.getBoundingClientRect();
-  if (!bounds.width || !bounds.height) return;
-  const startPoint=canvasPoint(event,bounds,canvas.width,canvas.height);
-  const hit=hitOverlay(...startPoint);
+  if (!event.isPrimary || event.button!==0 || drag) return;
+  const startPoint=pointerPoint(event);
+  if (!startPoint) return;
+  const layer=layerPicker.value;
+  const hit=canvas.hasAttribute('data-layer-editable')?hitLayer(layer,...startPoint):
+    canvas.hasAttribute('data-overlay-editable')?hitOverlay(...startPoint):null;
   if (!hit) return;
-  const {overlay}=hit;
+  const {x:startX,y:startY}=hit.overlay ?? layerOffsets[layer];
+  const attribute=hit.layer?'data-layer-dragging':'data-overlay-dragging';
   canvas.setPointerCapture(event.pointerId);
-  overlayDrag={...hit,pointerId:event.pointerId,startPoint,startX:overlay.x,startY:overlay.y};
-  canvas.setAttribute('data-overlay-dragging','');
+  drag={...hit,pointerId:event.pointerId,startPoint,startX,startY,attribute};
+  canvas.setAttribute(attribute,'');
   event.preventDefault();
 });
-canvas.addEventListener('pointermove',moveOverlay);
+canvas.addEventListener('pointermove',moveDrag);
 canvas.addEventListener('pointerup',event=>{
-  if (overlayDrag?.pointerId!==event.pointerId) return;
-  moveOverlay(event);
-  endOverlayDrag();
+  if (drag?.pointerId!==event.pointerId) return;
+  moveDrag(event);
+  endDrag();
 });
 for (const type of ['pointercancel','lostpointercapture']) {
   canvas.addEventListener(type,event=>{
-    if (overlayDrag?.pointerId===event.pointerId) endOverlayDrag();
+    if (drag?.pointerId===event.pointerId) endDrag();
   });
 }
 function nextFrame(time) {
@@ -367,7 +446,7 @@ async function normalizeGenerated(bitmap, layer, side) {
   c.putImageData(pixels,0,0);
   return await createImageBitmap(strip);
 }
-function displayLoaded(next,frames,isSample=false){
+function displayLoaded(next,frames){
   if(pack)release(pack);
   pack=next;
   $('frames').value=String(frames);
@@ -381,7 +460,7 @@ function displayLoaded(next,frames,isSample=false){
   $('stage').dataset.hasPreview='true';
   $('stage').dataset.single=String(frames===1);
   $('stage').dataset.paused='false';
-  $('faceX').value='0';$('faceY').value='0';
+  resetLayerPositions();
   startClock();
 }
 async function loadGeneratedSheets(){
@@ -440,11 +519,11 @@ function overlayStatus(overlay,message,isError=false) {
   for (const input of overlay.adjustments) input.disabled=!overlay.bitmap;
 }
 function releaseOverlay(overlay) {
-  if (overlayDrag?.overlay===overlay) endOverlayDrag();
+  if (drag?.overlay===overlay) endDrag();
   overlay.pending=null;
   overlay.bitmap?.close();
   overlay.bitmap=null;
-  updateOverlayDragAvailability();
+  updateDragAvailability();
 }
 async function loadOverlay(id,overlay,file) {
   if (!file || busy || !canAttachOverlays() || accessoryOverlays.get(id)!==overlay) return;
@@ -471,12 +550,12 @@ async function loadOverlay(id,overlay,file) {
     target.drawImage(bitmap,0,0);
     if (!hasOverlayAlpha(target.getImageData(0,0,check.width,check.height).data))
       throw Error('透明な背景が画像の1割以上あり、絵が描かれている素材を選んでください。');
-    if (overlayDrag?.overlay===overlay) endOverlayDrag();
+    if (drag?.overlay===overlay) endDrag();
     overlay.bitmap?.close();
     overlay.bitmap=bitmap;
     bitmap=null;
     overlayStatus(overlay,'表示中：'+file.name);
-    updateOverlayDragAvailability();
+    updateDragAvailability();
     paint();
   } catch (error) {
     if (isCurrent()) {
@@ -509,7 +588,7 @@ function createOverlayRow(id) {
     input.value=overlay[key];
     input.addEventListener('input',()=>{
       if (busy || !canAttachOverlays() || !overlay.bitmap) return;
-      if (overlayDrag?.overlay===overlay) endOverlayDrag();
+      if (drag?.overlay===overlay) endDrag();
       overlay[key]=overlayValue(input.valueAsNumber,bounds);
       paint();
     });
@@ -732,7 +811,7 @@ $('zipFile').addEventListener('change',()=>{
   const file=$('zipFile').files?.[0];
   if(file)void importCharacterZip(file);
 });
-$('zipFrames').addEventListener('change',endOverlayDrag);
+$('zipFrames').addEventListener('change',endDrag);
 
 async function encodeImage(file) {
   const bytes=new Uint8Array(await file.arrayBuffer());
@@ -876,7 +955,7 @@ $('cancelVisualEdit').addEventListener('click',()=>{
 const confirmVisualEdit=$('confirmVisualEdit');
 $('saveVisualEdit').addEventListener('click',()=>{
   if($('saveVisualEdit').disabled)return;
-  endOverlayDrag();
+  endDrag();
   const attached=[...accessoryOverlays.values()].filter(overlay=>overlay.bitmap).length;
   $('confirmOverlayCount').textContent=equippedIds.length?
     '重ね絵を再添付した装備 '+attached+' / '+equippedIds.length+' 件':'予測用アクセサリーの装備はありません。';
@@ -989,7 +1068,7 @@ $('clear').addEventListener('click',()=>{
 });
 $('pause').addEventListener('click',()=>{
   if (!pack || registering) return;
-  endOverlayDrag();
+  endDrag();
   paused=!paused;
   $('pause').setAttribute('aria-pressed',String(paused));
   $('pause').textContent=paused?'再生する':'停止する';
@@ -998,7 +1077,32 @@ $('pause').addEventListener('click',()=>{
 });
 $('mood').addEventListener('change',paint);
 $('fps').addEventListener('change',startClock);
-for (const id of ['faceX','faceY']) $(id).addEventListener('input',paint);
+layerPicker.addEventListener('change',()=>{
+  endDrag();
+  refreshPartControls();
+});
+$('resetLayerPosition').addEventListener('click',()=>{
+  if ($('resetLayerPosition').disabled) return;
+  endDrag();
+  const offset=layerOffsets[layerPicker.value];
+  offset.x=offset.y=0;
+  syncOffsetInputs();
+  paint();
+});
+for (const axis of offsetAxes) {
+  for (const input of [faceInputs[axis],layerInputs[axis]]) {
+    input.addEventListener('input',()=>{
+      if (input.disabled) return;
+      endDrag();
+      const layer=input===faceInputs[axis]?'face':layerPicker.value;
+      layerOffsets[layer][axis]=overlayValue(input.valueAsNumber,offsetBounds(layer));
+      syncOffsetInputs(input);
+      paint();
+    });
+    input.addEventListener('change',()=>syncOffsetInputs());
+  }
+}
+refreshPartControls();
 $('frames').addEventListener('change',()=>{
   if (registering || visualEdit) return;
   if (pack || busy) {
@@ -1012,7 +1116,7 @@ for (const [,input] of keys) $(input).addEventListener('change',()=>{
   if (pack) status('新しい画像を選びました。「選んだPNGで試す」で反映されます。');
 });
 function restartPreview() {
-  endOverlayDrag();
+  endDrag();
   startClock();
 }
 document.addEventListener('visibilitychange',restartPreview);

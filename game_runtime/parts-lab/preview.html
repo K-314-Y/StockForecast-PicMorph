@@ -36,8 +36,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 #stage[data-has-preview=true] #stagePlaceholder{display:none}
 @keyframes gentle-bob{0%,100%{transform:translateY(0) rotate(var(--bob-start,-.4deg))}50%{transform:translateY(-4px) rotate(var(--bob-end,.4deg))}}
 #stage[data-has-preview=true][data-single=true]:not([data-paused=true]) #previewCanvas{animation:gentle-bob 3.8s ease-in-out infinite var(--bob-play-state,running)}
-#previewCanvas[data-overlay-editable]{touch-action:none;--bob-start:0deg;--bob-end:0deg}
-#previewCanvas[data-overlay-dragging]{--bob-play-state:paused;cursor:grabbing;-webkit-user-select:none;user-select:none}
+#previewCanvas:is([data-overlay-editable],[data-layer-editable]){touch-action:none;--bob-start:0deg;--bob-end:0deg}
+#previewCanvas[data-layer-editable]{cursor:grab}
+#previewCanvas:is([data-overlay-dragging],[data-layer-dragging]){--bob-play-state:paused;cursor:grabbing;-webkit-user-select:none;user-select:none}
 .metadata{font-size:13px;color:#cbd8e7;margin:12px 0;overflow-wrap:anywhere}
 .caution{padding:12px;border-left:3px solid #f1ce84;background:#344057;color:#fff0cd;border-radius:6px}
 .generated-import{margin:16px 0;padding:12px;border:1px solid #66889d;border-radius:12px;background:#12243a}
@@ -84,7 +85,7 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <p class="metadata" id="editModel"></p>
 <p class="hint" id="editTraits"></p>
 <p class="caution">保存済みの画像にはアクセサリーが焼き込まれているため、元の重ね絵や位置は復元できません。残したい重ね絵は装備ごとに再アップロードしてください。保存すると、再添付していない重ね絵は新しい画像から消えます。</p>
-<p class="hint">予測用の装備を変えるには、キャラを新規登録してください。以前の合成に使った表示表情と顔位置は記録されていないため、通常の顔を元の位置で合成します。</p>
+<p class="hint">予測用の装備を変えるには、キャラを新規登録してください。パーツの移動は完成画像に焼き込まれ、個別の位置は復元できません。編集を開き直すと、保存されている体と通常の顔を元の位置から合成します。</p>
 <p>保存済みの画像</p>
 <img id="editSavedPortrait" alt="現在保存されているキャラの画像">
 <div id="editEquipmentMount"></div>
@@ -136,7 +137,7 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
     </fieldset>
   </li>
 </template>
-<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。プレビューで重ね絵の見える部分をドラッグして移動できます。横・縦位置は数値欄でも調整でき、中央が0%、端が±100%です。保存画像には最初のコマを使います。</p>
+<p id="zipOverlayHelp" class="hint" hidden>透明背景の静止PNG/WebP（5MB以下、縦横1024px以下）。「動かすパーツ」でアクセサリーを選び、プレビューで重ね絵の見える部分をドラッグします。横・縦位置は数値欄でも調整でき、中央が0%、端が±100%です。保存画像には最初のコマを使います。</p>
 <details id="zipAccessoryCreator">
 <summary>新しいアクセサリーを作る</summary>
 <div class="controls">
@@ -217,6 +218,15 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 </section>
 <section class="panel" aria-labelledby="previewTitle">
 <h2 id="previewTitle">2. 動きと表情を確認</h2>
+<label for="movePart">動かすパーツ
+<select id="movePart" aria-describedby="movePartHelp" disabled>
+<option value="accessory" selected>アクセサリー</option>
+<option value="base" disabled>体・土台</option>
+<option value="outfit" disabled>服</option>
+<option value="face" disabled>顔</option>
+<option value="hair" disabled>前髪</option>
+</select></label>
+<p id="movePartHelp" class="hint">パーツを選び、プレビューの絵がある部分をマウスや指でドラッグします。位置を調整しても予測モデルは変わりません。</p>
 <div id="stage" data-has-preview="false">
 <canvas id="previewCanvas" role="img" aria-label="選んだPNGパーツを合成したキャラクター" width="192" height="208"></canvas>
 <p id="stagePlaceholder">まず「デモ素材で試す」または自分のPNGを選んでください。</p>
@@ -226,14 +236,28 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <select id="mood"><option value="ready">通常</option><option value="happy">うれしい</option><option value="cautious">しんぱい</option></select></label>
 <label for="pause">アニメーション
 <button id="pause" type="button" disabled aria-pressed="false">停止する</button></label>
-<label for="faceX">顔の横位置（px）
-<input id="faceX" type="number" value="0" step="1" min="-24" max="24"></label>
-<label for="faceY">顔の縦位置（px）
-<input id="faceY" type="number" value="0" step="1" min="-24" max="24"></label>
 </div>
+<div id="layerOffsets" hidden>
+<div class="controls">
+<label for="layerX">選んだパーツの横位置（px）
+<input id="layerX" type="number" value="0" step="1" disabled></label>
+<label for="layerY">選んだパーツの縦位置（px）
+<input id="layerY" type="number" value="0" step="1" disabled></label>
+</div>
+</div>
+<div id="faceOffsets">
+<div class="controls">
+<label for="faceX">顔の横位置（px）
+<input id="faceX" type="number" value="0" step="1" min="-24" max="24" disabled></label>
+<label for="faceY">顔の縦位置（px）
+<input id="faceY" type="number" value="0" step="1" min="-24" max="24" disabled></label>
+</div>
+</div>
+<button id="resetLayerPosition" type="button" disabled>選んだパーツの位置を戻す</button>
 <p id="frameInfo" class="metadata">未読込</p>
 <p class="hint">髪・服は体の上に重なります。「うれしい」「しんぱい」が未指定なら通常の顔を表示。体はそのままで表情だけ変わります。</p>
 <p class="hint">動きを減らす設定では最初の1コマだけを表示します。プレビューは予測AI・XP・コインに影響しません。ZIPの登録ボタンを押した場合のみ、専用の予測AI設定を作成します。実際の予測精度は未検証です。</p>
+<p class="hint">ZIPキャラを保存すると、調整した位置は完成画像に焼き込まれます。再編集では元の素材が必要で、以前の位置は自動で復元されません。</p>
 </section>
 </div>
 <dialog id="confirmVisualEdit" aria-labelledby="confirmVisualTitle" aria-describedby="confirmVisualWarning">
