@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {copyFile,mkdtemp,rm,unlink,writeFile} from 'node:fs/promises';
+import {copyFile,lstat,mkdtemp,readFile,rm,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
@@ -10,6 +10,7 @@ import {createModelShopStore} from '../../game_runtime/model-shop.mjs';
 import {runSyntheticGame} from '../../game_runtime/practice.mjs';
 import {settleLeveragedPractice} from '../../game_runtime/leverage-practice.mjs';
 import {createPracticeEngineSourceGuard} from '../../game_runtime/practice-engine-fingerprint.mjs';
+import {createImportedCharacterStore} from '../../game_runtime/imported-characters.mjs';
 const MODEL={fast_window:3,slow_window:9,risk_fraction:.35,
   plugin_weights:{trend:100,momentum:0,volatility:0,reversion:0},
   plugin_strengths:{trend:100,momentum:100,volatility:100,reversion:100}};
@@ -23,11 +24,15 @@ const companion={revision:0,created:false,companion:null};
 async function withServer(fn,options={}){
   const dir=await mkdtemp(join(tmpdir(),'creature-quick-'));
   const shop=createModelShopStore({file:join(dir,'shop.json')});
+  const zipRoot=join(dir,'characters');
+  const zip=createImportedCharacterStore({root:zipRoot});
   let writes=0,predictions=0;
   const server=createGameServer({
     store:{public:async()=>snapshot().growth,complete:()=>{writes++;throw Error('XP write')},
       equip:()=>{writes++;throw Error('gear write')}},
-    companionStore:{read:async()=>options.companion??companion,save:()=>{writes++;throw Error('companion write')}},
+    companionStore:{read:options.readCompanion??(async()=>options.companion??companion),
+      save:()=>{writes++;throw Error('companion write')}},
+    importedCharacterStore:options.importedCharacterStore??zip,
     modelShopStore:options.modelShopStore??shop,
     practiceEngineSourceGuard:options.practiceEngineSourceGuard,
     loadSnapshot:options.loadSnapshot|| (async()=>snapshot()),
@@ -39,15 +44,15 @@ async function withServer(fn,options={}){
     },
   });
   await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
-  try {await fn({base:'http://127.0.0.1:'+server.address().port,shop,
+  try {await fn({base:'http://127.0.0.1:'+server.address().port,shop,zip,zipRoot,
     read:()=>({writes,predictions})});}
   finally {
     await new Promise(ok=>server.close(ok));
     await rm(dir,{recursive:true,force:true});
   }
 }
-async function post(base,body,headers={}){
-  const res=await fetch(base+'/api/quick-practice',{method:'POST',
+async function post(base,body,headers={},path='/api/quick-practice'){
+  const res=await fetch(base+path,{method:'POST',
     headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
   return {status:res.status,data:await res.json()};
 }
@@ -514,4 +519,173 @@ test('P9s ZIP fingerprints reflect the equipped analysis even with identical pre
   assert.equal(await run('v1_ffffffffffffffff'),original);
   methods=['bollinger_breakout','macd_momentum'];
   assert.notEqual(await run('v1_0123456789abcdef'),original);
+});
+
+const accessoryPath='/api/accessory-control';
+const accessoryBody={model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:5};
+const postAccessory=(base,patch={},path=accessoryPath)=>post(base,{...accessoryBody,...patch},{},path);
+const zipId='zip_'+'f'.repeat(32);
+const testSha='a'.repeat(64);
+
+test('accessory control compares real Python plans with only the strategy changed',async()=>{
+  const inputs=[],plans=[];
+  const saved={revision:1,created:true,companion:{approach:'momentum',risk_percent:50}};
+  await withServer(async({base,shop,read})=>{
+    const before=await shop.public();
+    const {status,data}=await postAccessory(base);
+    assert.equal(status,200,JSON.stringify(data));
+    assert.equal(data.mode,'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY');
+    for(const key of ['persisted','order_placed','xp_awarded','real_market'])assert.equal(data[key],false);
+    assert.equal(data.model_id,'self');
+    assert.equal(data.amount,1000);
+    assert.equal(data.leverage,5);
+    assert.match(data.engine_source_sha256,/^[a-f0-9]{64}$/);
+    assert.match(data.baseline_fingerprint,/^[a-f0-9]{64}$/);
+    assert.match(data.scenario_token,/^v1_[a-f0-9]{16}$/);
+    assert.equal(inputs.length,2);
+    assert.deepEqual(inputs[1],{...inputs[0],accessory_strategy:'glasses'});
+    assert.equal(inputs[0].accessory_strategy,'star');
+    assert.equal(inputs[0].scenario_token,data.scenario_token);
+    assert.equal(inputs[0].models.mine.risk_fraction,.5);
+    assert.equal(inputs[0].models.mine.plugin_weights.momentum,100);
+    assert.equal(data.daily_synthetic_prices.length,13);
+    for(const [index,arm] of [data.a,data.b].entries()){
+      const plan=plans[index];
+      assert.equal(arm.accessory,inputs[index].accessory_strategy);
+      assert.match(arm.model_effective_sha256,/^[a-f0-9]{64}$/);
+      assert.deepEqual(data.daily_synthetic_prices,[plan.initial_price,...plan.future_prices]);
+      const game=runSyntheticGame({...plan,initial_coins:1000,allocations:{mine:100,owl:0,turtle:0}});
+      assert.deepEqual(arm.daily_ai_signals,game.decisions.map(({signals})=>signals.mine));
+      const settled=settleLeveragedPractice({equityPath:game.raw_equity_path,amount:1000,leverage:5});
+      for(const key of ['profit_coins','max_drawdown_pct','liquidated_at_step'])assert.equal(arm[key],settled[key]);
+    }
+    assert.notEqual(data.a.model_effective_sha256,data.b.model_effective_sha256);
+    assert.deepEqual(await shop.public(),before);
+    assert.deepEqual(read(),{writes:0,predictions:2});
+  },{companion:saved,inspectPlan:(input,plan)=>{inputs.push(input);plans.push(plan);}});
+});
+
+test('accessory control rejects malformed input, demo, scenario reuse, queries and unsupported methods',async()=>{
+  await withServer(async({base,read})=>{
+    for(const patch of [{model_id:'demo_one'},{model_id:zipId+'\n'},{model_id:true},
+      {accessory_a:'STAR'},{accessory_b:'star'},{accessory_a:true},{accessory_b:null},
+      {amount:0},{amount:10001},{amount:true},{amount:1.5},{leverage:0},{leverage:'2'},
+      {leverage:26},{leverage:undefined},{scenario_token:'v1_0123456789abcdef'},
+      {models:{}},{accessory_methods:[]},{'extra|field':1}]) {
+      assert.equal((await postAccessory(base,patch)).status,400,JSON.stringify(patch));
+    }
+    for(const suffix of ['?foo=1','/other'])assert.equal((await postAccessory(base,{},accessoryPath+suffix)).status,404);
+    assert.equal((await fetch(base+accessoryPath)).status,404);
+    assert.equal((await post(base,{model_id:'self',amount:1000,accessory_strategy:'star'})).status,400);
+    for(const [body,status] of [['{"amount":',400],[' '.repeat(2049),413]]) {
+      assert.equal((await fetch(base+accessoryPath,{method:'POST',headers:{'Content-Type':'application/json'},body})).status,status);
+    }
+    assert.deepEqual(read(),{writes:0,predictions:0});
+  });
+});
+
+test('accessory ZIP lookup does not create missing storage or rewrite registered records',async()=>{
+  const png={mime:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGMMqFjAwMDAxMDAwMDAAAAQugFsZnyF3gAAAABJRU5ErkJggg=='};
+  const images={body:png,ready:png,portrait:png};
+  const colors={hair_color:'#a58bd9',clothing_color:'#78c2c5'};
+  const look={hair_style:'bob',expression:'cheerful',accessory:'none'};
+  const inputs=[];
+  await withServer(async({base,zip,zipRoot,read})=>{
+    assert.equal((await postAccessory(base,{model_id:zipId})).status,404);
+    await assert.rejects(lstat(zipRoot),{code:'ENOENT'});
+    assert.deepEqual(read(),{writes:0,predictions:0});
+    const legacy=await zip.register({name:'Legacy',look:{...look,accessory:'ribbon'},images,colors});
+    const equipped=await zip.register({name:'Equipped',look,images,colors,accessories:['star','glasses']});
+    const listed=await zip.list();
+    assert.deepEqual(listed.characters.map(({id})=>id).sort(),[legacy.id,equipped.id].sort());
+    for(const registered of [legacy,equipped]){
+      const saved=await zip.model(registered.id);
+      assert.deepEqual(await zip.model(registered.id,{readOnly:true}),saved);
+      const file=join(zipRoot,registered.id+'.json');
+      const before=await readFile(file);
+      const {status,data}=await postAccessory(base,{model_id:registered.id,accessory_b:'none'});
+      assert.equal(status,200,JSON.stringify(data));
+      assert.equal(data.model_id,registered.id);
+      assert.equal(data.b.accessory,'none');
+      assert.deepEqual(await readFile(file),before);
+      assert.deepEqual(await zip.model(registered.id),saved);
+      assert.ok(inputs.slice(-2).every(input=>!Object.hasOwn(input,'accessory_methods')));
+      assert.deepEqual(inputs.at(-2).models.mine,saved.model);
+    }
+    assert.deepEqual(await zip.list(),listed);
+    assert.equal((await postAccessory(base,{model_id:zipId})).status,404);
+    await writeFile(join(zipRoot,legacy.id+'.json'),'{}');
+    assert.equal((await postAccessory(base,{model_id:legacy.id})).status,503);
+    assert.deepEqual(read(),{writes:0,predictions:4});
+  },{inspectPlan:input=>{inputs.push(input);}});
+});
+
+test('accessory control fails closed when snapshot, companion or registered ZIP revisions change',async()=>{
+  for(const key of ['source_revision','lineup_revision','growth_revision','companion',
+    'model_version','model_revision','equipment_hash','accessory_strategy','removed']){
+    let changed=false;
+    const imported={model:MODEL,model_version:'original',model_revision:1,
+      equipment_hash:testSha,accessory_strategy:'ribbon'};
+    const needsZip=Object.hasOwn(imported,key)||key==='removed';
+    await withServer(async({base,read})=>{
+      const result=await postAccessory(base,{model_id:needsZip?zipId:'self'});
+      assert.equal(result.status,409,key);
+      assert.equal(result.data.a,undefined);
+      assert.deepEqual(read(),{writes:0,predictions:2});
+    },{
+      loadSnapshot:async()=>({...snapshot(),...(changed && key.endsWith('_revision')&&!needsZip?{[key]:42}:{})}),
+      readCompanion:async()=>({...companion,revision:changed&&key==='companion'?1:0}),
+      importedCharacterStore:{model:async(id,options)=>{
+        assert.equal(id,zipId);
+        assert.deepEqual(options,{readOnly:true});
+        if(changed&&key==='removed')throw Object.assign(Error('missing'),{status:404});
+        return changed?{...imported,[key]:'changed'}:imported;
+      }},
+      inspectPlan:input=>{if(input.accessory_strategy==='glasses')changed=true;},
+    });
+  }
+});
+
+test('accessory control checks engine source before, between and after predictions, even on failure',async()=>{
+  for(const [driftAt,status,expectedCalls] of [[0,409,0],[1,409,1],[2,409,2],[2,503,2]]){
+    let calls=0;
+    const guard={baseline:testSha,captureBaseline:()=>testSha,read:async()=>{
+      if(calls!==driftAt)return testSha;
+      if(status===503)throw Error('missing');
+      return 'b'.repeat(64);
+    }};
+    await withServer(async({base,read})=>{
+      const result=await postAccessory(base);
+      assert.equal(result.status,status,JSON.stringify(result.data));
+      assert.equal(result.data.code,'PRACTICE_ENGINE_SOURCE_UNVERIFIED');
+      assert.equal(result.data.a,undefined);
+      assert.deepEqual(read(),{writes:0,predictions:expectedCalls});
+    },{practiceEngineSourceGuard:guard,inspectPlan:()=>{
+      calls++;
+      if(status===503&&calls===driftAt)throw Error('prediction failed');
+    }});
+  }
+});
+
+test('accessory control rejects plans with mismatched prices, numeric model or fingerprints',async()=>{
+  for(const damage of [
+    plan=>{plan.initial_price+=1;},
+    plan=>{plan.future_prices[11]+=1;},
+    plan=>{plan.future_prices.pop();},
+    plan=>{plan.models.mine.risk_fraction=.5;},
+    plan=>{plan.models.mine.plugin_weights.trend=99;},
+    plan=>{plan.models.mine.plugin_strengths.trend=99;},
+    plan=>{plan.models.mine.effective_sha256='unsafe';},
+    (plan,first)=>{plan.models.mine.effective_sha256=first.models.mine.effective_sha256;},
+  ]){
+    let first;
+    await withServer(async({base})=>{
+      const result=await postAccessory(base);
+      assert.equal(result.status,503);
+      assert.equal(result.data.a,undefined);
+    },{inspectPlan:(input,plan)=>{
+      if(input.accessory_strategy==='star')first=plan;
+      else damage(plan,first);
+    }});
+  }
 });

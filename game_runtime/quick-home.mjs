@@ -796,6 +796,7 @@ async function loadModels() {
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
     showLinkedZip();
+    if(prior!==modelField.value)resetAccessoryControl();
     if(prior && prior!==modelField.value)clearReplay();
     if(compareBase)refreshCompareModels();
     statusField.textContent=(next.length>1 ?
@@ -839,6 +840,7 @@ element('quickForm').addEventListener('submit',event=>{
 for(const [id,ratio] of [['quickTen',0.1],['quickHalf',0.5],['quickAll',1]]) {
   element(id).addEventListener('click',()=>{
     if(busy)return;
+    if(amountField.value!==String(BALANCE*ratio))resetAccessoryControl();
     amountField.value=String(BALANCE*ratio);
     touched=true;
     resetReview();
@@ -848,11 +850,14 @@ element('quickEdit').addEventListener('click',()=>{
   resetReview();
   amountField.focus();
 });
-amountField.addEventListener('input',()=>{resetReview();});
+amountField.addEventListener('input',()=>{resetAccessoryControl();resetReview();});
+amountField.addEventListener('change',()=>resetAccessoryControl());
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
-modelField.addEventListener('change',()=>{resetReview();showLinkedZip();});
+modelField.addEventListener('change',()=>{resetAccessoryControl();resetReview();showLinkedZip();});
+modelField.addEventListener('input',()=>resetAccessoryControl());
 window.addEventListener('focus',()=>{if(!busy)void loadModels();});
-leverageField.addEventListener('change',()=>{showLeverageInfo();resetReview();});
+leverageField.addEventListener('change',()=>{resetAccessoryControl();showLeverageInfo();resetReview();});
+leverageField.addEventListener('input',()=>resetAccessoryControl());
 element('quickShop').addEventListener('click',openShop);
 element('quickNextShop').addEventListener('click',openShop);
 element('quickGrow').addEventListener('click',()=>{
@@ -901,6 +906,139 @@ function practiceModelName(value,ordered) {
     typeof value.companion_name==='string' && value.companion_name.trim() ?
     '自分のAI（相棒：'+value.companion_name+'）' : ordered.model_name;
 }
+
+const accessoryLabels={star:'星（ボリンジャーバンド）',glasses:'眼鏡（RSI）',
+  ribbon:'リボン（MACD）',none:'装備なし（移動平均トレンド）'};
+const accessoryA=element('quickAccessoryA'),accessoryB=element('quickAccessoryB');
+const accessoryRun=element('quickAccessoryRun'),accessoryStatus=element('quickAccessoryStatus');
+const accessoryResult=element('quickAccessoryResult'),accessorySummary=element('quickAccessorySummary');
+const accessoryRows=element('quickAccessoryRows');
+let accessoryEpoch=0,accessoryController=null;
+
+function resetAccessoryControl() {
+  accessoryEpoch++;
+  accessoryController?.abort();
+  accessoryController=null;
+  accessoryRun.disabled=false;
+  accessoryResult.hidden=true;
+  accessorySummary.replaceChildren();
+  accessoryRows.replaceChildren();
+  accessoryStatus.textContent='';
+}
+for(const select of [accessoryA,accessoryB]) {
+  select.addEventListener('input',resetAccessoryControl);
+  select.addEventListener('change',resetAccessoryControl);
+}
+window.addEventListener('pagehide',resetAccessoryControl);
+
+function validAccessoryResponse(value,ordered) {
+  const validArm=(arm,accessory)=>hasComparisonKeys(arm,'accessory','model_effective_sha256',
+    'daily_ai_signals','profit_coins','max_drawdown_pct','liquidated_at_step') &&
+    arm.accessory===accessory && validFingerprint(arm.model_effective_sha256) &&
+    Array.isArray(arm.daily_ai_signals) && arm.daily_ai_signals.length===12 &&
+    Array.from(arm.daily_ai_signals).every(signal=>signal==='LONG'||signal==='CASH') &&
+    validImportedOutcome({profit_coins:arm.profit_coins,max_drawdown_pct:arm.max_drawdown_pct,
+      liquidated_at_step:arm.liquidated_at_step},ordered.amount) &&
+    (arm.liquidated_at_step===null || (arm.profit_coins===-ordered.amount && arm.max_drawdown_pct===100));
+  return hasComparisonKeys(value,'mode','real_market','persisted','order_placed','xp_awarded',
+    'model_id','scenario_token','engine_source_sha256','amount','leverage','daily_synthetic_prices',
+    'baseline_fingerprint','a','b') && value.mode==='CONTROLLED_SYNTHETIC_ACCESSORY_ONLY' &&
+    value.real_market===false && value.persisted===false && value.order_placed===false &&
+    value.xp_awarded===false && value.model_id===ordered.model_id && value.amount===ordered.amount &&
+    value.leverage===ordered.leverage && validScenarioToken(value.scenario_token) &&
+    validFingerprint(value.engine_source_sha256) && validFingerprint(value.baseline_fingerprint) &&
+    Array.isArray(value.daily_synthetic_prices) && value.daily_synthetic_prices.length===13 &&
+    Array.from(value.daily_synthetic_prices).every(price=>Number.isFinite(price)&&price>0&&price<=1e12) &&
+    validArm(value.a,ordered.accessory_a) && validArm(value.b,ordered.accessory_b) &&
+    value.a.model_effective_sha256!==value.b.model_effective_sha256;
+}
+
+function renderAccessoryResult(value) {
+  const arms=[value.a,value.b];
+  for(const [index,arm] of arms.entries()) {
+    const summary=document.createElement('li');
+    summary.textContent=(index===0?'A':'B')+' '+accessoryLabels[arm.accessory]+' ／ 損益 '+
+      (arm.profit_coins>0?'+':'')+money(arm.profit_coins)+' C ／ 最大下落率 '+money(arm.max_drawdown_pct)+'%'+
+      (arm.liquidated_at_step===null?'':' ／ '+arm.liquidated_at_step+'日目に強制終了');
+    accessorySummary.append(summary);
+  }
+  for(let day=1;day<=12;day++) {
+    const row=document.createElement('tr');
+    const date=document.createElement('th');
+    date.setAttribute('scope','row');
+    date.textContent=String(day);
+    const price=document.createElement('td');
+    price.textContent=money(value.daily_synthetic_prices[day]);
+    row.append(date,price);
+    for(const arm of arms) {
+      const signal=document.createElement('td');
+      signal.textContent=arm.daily_ai_signals[day-1]==='LONG'?'株を持つ':'現金で待つ';
+      if(arm.liquidated_at_step!==null && day>arm.liquidated_at_step) {
+        const note=document.createElement('small');
+        note.textContent='損益に未反映';
+        signal.append(note);
+      }
+      row.append(signal);
+    }
+    accessoryRows.append(row);
+  }
+  const differences=value.a.daily_ai_signals.filter((signal,index)=>signal!==value.b.daily_ai_signals[index]).length;
+  const comparison=document.createElement('li');
+  comparison.textContent='判断が違った日 '+differences+'/12日（強制終了後の判断も含む）。'+
+    (differences===0?'この1例では判断が一致しました。手法自体の違いは残ります。':'');
+  accessorySummary.append(comparison);
+  accessoryResult.hidden=false;
+  accessoryStatus.textContent='試算額 '+money(value.amount)+' C ／ ×'+value.leverage+
+    ' ／ 架空の開始価格 '+money(value.daily_synthetic_prices[0])+'。';
+}
+
+accessoryRun.addEventListener('click',async event=>{
+  if(!event.isTrusted || accessoryController)return;
+  resetAccessoryControl();
+  const ordered={model_id:modelField.value,accessory_a:accessoryA.value,accessory_b:accessoryB.value,
+    amount:validAmount(),leverage:validLeverage()};
+  if(ordered.model_id!=='self' && !zipCharacters.some(zip=>zip.id===ordered.model_id)) {
+    accessoryStatus.textContent='自分のAIまたは登録済みZIPのAIを選んでください。';
+    return;
+  }
+  if(ordered.amount===null || ordered.leverage===null) {
+    accessoryStatus.textContent='試算額は1〜10,000の整数、倍率は1〜25から選んでください。';
+    return;
+  }
+  if(!Object.hasOwn(accessoryLabels,ordered.accessory_a) || !Object.hasOwn(accessoryLabels,ordered.accessory_b) ||
+     ordered.accessory_a===ordered.accessory_b) {
+    accessoryStatus.textContent='AとBで異なる分析を選んでください。';
+    return;
+  }
+  const epoch=accessoryEpoch;
+  const controller=new AbortController();
+  accessoryController=controller;
+  accessoryRun.disabled=true;
+  accessoryStatus.textContent='実験中…';
+  const isCurrent=()=>epoch===accessoryEpoch && ordered.model_id===modelField.value &&
+    ordered.accessory_a===accessoryA.value && ordered.accessory_b===accessoryB.value &&
+    ordered.amount===validAmount() && ordered.leverage===validLeverage();
+  try {
+    const value=await request('/api/accessory-control',ordered,controller.signal);
+    if(!isCurrent())return;
+    if(!validAccessoryResponse(value,ordered))throw Error('Invalid accessory result');
+    renderAccessoryResult(value);
+  } catch(error) {
+    if(!isCurrent())return;
+    resetAccessoryControl();
+    accessoryStatus.textContent=error?.code==='PRACTICE_ENGINE_SOURCE_UNVERIFIED' ?
+      '予測エンジンの計算コードを確認できません。' : error?.status===409 ?
+        '実験中にモデルが変更されました。再度お試しください。' : '実験結果を確認できませんでした。';
+  } finally {
+    if(epoch===accessoryEpoch) {
+      if(!isCurrent())resetAccessoryControl();
+      else {
+        accessoryController=null;
+        accessoryRun.disabled=false;
+      }
+    }
+  }
+});
 
 const compareModel = element('quickCompareModel');
 const compareRun = element('quickCompareRun');

@@ -10,6 +10,16 @@ const selfFingerprint='a'.repeat(64);
 const otherFingerprint='b'.repeat(64);
 const engineFingerprint='c'.repeat(64);
 
+function accessoryReply(body){
+  const arm=(accessory,model_effective_sha256,signal)=>({accessory,model_effective_sha256,
+    daily_ai_signals:Array(12).fill(signal),profit_coins:12,max_drawdown_pct:3,liquidated_at_step:null});
+  return {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY',real_market:false,persisted:false,order_placed:false,
+    xp_awarded:false,model_id:body.model_id,amount:body.amount,leverage:body.leverage,
+    scenario_token:'v1_0123456789abcdef',engine_source_sha256:engineFingerprint,
+    baseline_fingerprint:'d'.repeat(64),daily_synthetic_prices:Array.from({length:13},(_,i)=>100+i),
+    a:arm(body.accessory_a,selfFingerprint,'LONG'),b:arm(body.accessory_b,otherFingerprint,'CASH')};
+}
+
 async function mount(models=[],chatgpt=false,imported=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
   const downloads=[],objectUrls=new Map(),revokedUrls=[];
@@ -71,8 +81,20 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     if(id==='quickChatGPT')node.dataset.chatgptDialogue=chatgpt?'enabled':'disabled';
     nodes.set(id,node);
   }
+  for(const id of ['quickAccessoryA','quickAccessoryB']){
+    const node=nodes.get(id);
+    const contents=html.split('<select id="'+id+'">')[1].split('</select>')[0];
+    for(const [,value,selected,text] of contents.matchAll(/<option value="([^"]+)"( selected)?>([^<]+)<\/option>/g)){
+      const option=new Element('option');
+      option.value=value;
+      option.textContent=text;
+      node.append(option);
+      if(selected)node.value=value;
+    }
+  }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
-  const state={models,imported,session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
+  const state={models,imported,accessory:async body=>accessoryReply(body),
+    session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,order_placed:false,xp_awarded:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
     scenario_kind:body.scenario_token?'replay':'new',
@@ -98,6 +120,12 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     if(path==='/api/chatgpt-dialogue'){
       const value=await state.dialogue(body,options);
       return {ok:value.status==='ok',json:async()=>value};
+    }
+    if(path==='/api/accessory-control'){
+      assert.equal(options.method,'POST');
+      assert.equal(options.headers['Content-Type'],'application/json');
+      const value=await state.accessory(body,options);
+      return {ok:!value?.error,status:value?.error?409:200,json:async()=>parseJson(JSON.stringify(value))};
     }
     assert.equal(path,'/api/quick-practice');
     assert.equal(options.method,'POST');
@@ -4603,4 +4631,134 @@ test('P9r formats zero without a negative sign when a mean rounds to zero',async
   assert.deepEqual(average.children.slice(1).map(row=>row.textContent),[
     'A：参考平均損益 0 C ／ 最大下落率の平均 0%','B：参考平均損益 0 C ／ 最大下落率の平均 0%',
   ]);
+});
+
+test('accessory experiment is visible, labeled, compact and makes one explicit POST without changing replay',async()=>{
+  const nodes=htmlNodes();
+  const section=nodes.find(node=>node.id==='quickAccessoryControl');
+  assert.equal(section.tag,'section');
+  assert.deepEqual(section.parents.slice(-1),['simpleHome']);
+  assert.doesNotMatch(section.attributes,/\bhidden\b/);
+  assert.match(html,/@media\(max-width:550px\)\{\s*\.quick-accessory-fields\{grid-template-columns:1fr\}[^}]*\{padding-inline:3px\}/);
+  const {get,fire,calls,state,storageWrites}=await mount();
+  const experiments=()=>calls.filter(call=>call.path==='/api/accessory-control');
+  for(const id of ['quickAccessoryA','quickAccessoryB']){
+    assert.deepEqual(get(id).children.map(option=>option.value),['star','glasses','ribbon','none']);
+    assert.deepEqual(get(id).children.map(option=>option.textContent),[
+      '星（ボリンジャーバンド）','眼鏡（RSI）','リボン（MACD）','装備なし（移動平均トレンド）',
+    ]);
+  }
+  assert.equal(get('quickAccessoryA').value,'star');
+  assert.equal(get('quickAccessoryB').value,'glasses');
+  await fire('quickAccessoryRun','click',false);
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  await fire('quickFollowing');
+  const replayDay=get('quickReplayDay').textContent;
+  assert.equal(experiments().length,0);
+  state.accessory=async body=>{
+    const value=accessoryReply(body);
+    Object.assign(value.b,{profit_coins:-body.amount,max_drawdown_pct:100,liquidated_at_step:2});
+    return value;
+  };
+  await fire('quickAccessoryRun');
+  assert.deepEqual(experiments(),[{path:'/api/accessory-control',
+    body:{model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:1}}]);
+  assert.equal(get('quickAccessoryResult').hidden,false);
+  assert.match(get('quickAccessorySummary').children[2].textContent,/12\/12日/);
+  const rows=get('quickAccessoryRows').children;
+  assert.equal(rows.length,12);
+  for(const [i,{children}] of rows.entries()){
+    assert.deepEqual(children.map(cell=>cell.textContent),[String(i+1),String(101+i),'株を持つ','現金で待つ']);
+    assert.equal(children[0].getAttribute('scope'),'row');
+    assert.equal(children[3].children[0]?.textContent,i>=2?'損益に未反映':undefined);
+  }
+  assert.equal(get('quickReplay').hidden,false);
+  assert.equal(get('quickReplayDay').textContent,replayDay);
+  assert.equal(calls.filter(c=>c.path==='/api/quick-practice').length,1);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('accessory experiment cancels stale results on each control change, ZIP refresh and pagehide',async()=>{
+  for(const [id,event,next] of [
+    ['quickAccessoryA','change','ribbon'],['quickAccessoryB','change','none'],
+    ['quickAmount','input','1001'],['quickHalf','click'],['quickLeverage','change','5'],
+    ['quickModel','change','demo_one'],['refresh'],['pagehide'],
+  ]){
+    const zip='zip_'+'e'.repeat(32);
+    const imported={id:zip,ai_id:zip,name:'ZIP',model_version:'test',image_url:'/zip.png'};
+    const {get,fire,state,calls,pagehide,focus}=await mount([{id:'demo_one',name:'Demo',owned:true}],false,[imported]);
+    let resolve,signal;
+    const selected=id==='refresh'?zip:'self';
+    get('quickModel').value=selected;
+    state.accessory=(body,options)=>new Promise(ok=>{resolve=()=>ok(accessoryReply(body));signal=options.signal;});
+    const running=fire('quickAccessoryRun');
+    assert.equal(get('quickAccessoryRun').disabled,true,id);
+    await fire('quickAccessoryRun');
+    assert.equal(calls.filter(c=>c.path==='/api/accessory-control').length,1);
+    if(id==='pagehide')pagehide();
+    else if(id==='refresh'){
+      state.imported=[];
+      focus();
+      await new Promise(ok=>setImmediate(ok));
+      assert.equal(get('quickModel').value,'self');
+    } else {
+      if(next!==undefined)get(id).value=next;
+      await fire(id,event);
+    }
+    assert.equal(signal.aborted,true,id);
+    resolve();
+    await running;
+    assert.equal(get('quickAccessoryResult').hidden,true,id);
+    assert.equal(get('quickAccessoryRun').disabled,false,id);
+    assert.equal(get('quickAccessoryRows').children.length,0,id);
+    if(id==='quickModel'){
+      await fire('quickAccessoryRun');
+      assert.match(get('quickAccessoryStatus').textContent,/自分のAIまたは登録済みZIP/);
+      assert.equal(calls.filter(c=>c.path==='/api/accessory-control').length,1);
+    }
+  }
+});
+
+test('accessory experiment accepts matching judgments and rejects malformed results without DOM insertion',async()=>{
+  const {get,fire,state,storageWrites}=await mount();
+  state.accessory=async body=>{
+    const value=accessoryReply(body);
+    value.b.daily_ai_signals=value.a.daily_ai_signals;
+    return value;
+  };
+  await fire('quickAccessoryRun');
+  assert.match(get('quickAccessorySummary').children[2].textContent,/0\/12日.*手法自体の違い/);
+  for(const damage of [
+    value=>{value.extra='<img src=x onerror=alert(1)>';},
+    value=>{value.a.extra='<img src=x onerror=alert(1)>';},
+    value=>{value.b.daily_ai_signals[0]='<img src=x onerror=alert(1)>';},
+    value=>{value.b.daily_ai_signals.pop();},
+    value=>{value.daily_synthetic_prices[0]='100';},
+    value=>{value.daily_synthetic_prices.pop();},
+    value=>{value.a.accessory='ribbon';},
+    value=>{value.b.model_effective_sha256=value.a.model_effective_sha256;},
+    value=>{value.baseline_fingerprint='d'.repeat(64)+'\n';},
+    value=>{value.engine_source_sha256='bad';},
+    value=>{value.scenario_token+='\n';},
+    value=>{value.model_id='demo_one';},
+    value=>{value.real_market=0;},
+    value=>{value.amount='1000';},
+    value=>{value.leverage=2;},
+    value=>{value.a.profit_coins=-1001;},
+    value=>{value.a.max_drawdown_pct=101;},
+    value=>{value.a.liquidated_at_step=13;},
+    value=>{value.a.liquidated_at_step=2;},
+  ]){
+    state.accessory=async body=>{const value=accessoryReply(body);damage(value);return value;};
+    await fire('quickAccessoryRun');
+    assert.equal(get('quickAccessoryResult').hidden,true,damage.toString());
+    assert.equal(get('quickAccessorySummary').children.length,0);
+    assert.equal(get('quickAccessoryRows').children.length,0);
+    assert.match(get('quickAccessoryStatus').textContent,/実験結果を確認できません/);
+  }
+  state.accessory=async()=>({error:'<img src=x onerror=alert(1)>'});
+  await fire('quickAccessoryRun');
+  assert.doesNotMatch(get('quickAccessoryStatus').textContent,/<img/);
+  assert.deepEqual(storageWrites,[]);
 });

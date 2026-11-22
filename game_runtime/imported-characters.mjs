@@ -183,8 +183,8 @@ function summary(record,portraitHash=imageHash(Buffer.from(record.images.portrai
 }
 export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) {
   root=resolve(root);
-  async function ensureRoot() {
-    await mkdir(root,{recursive:true,mode:0o700});
+  async function ensureRoot(create=true) {
+    if(create)await mkdir(root,{recursive:true,mode:0o700});
     const info=await lstat(root);
     if(!info.isDirectory()||info.isSymbolicLink()||(info.mode & 0o777)!==0o700)
       throw fail('登録保存先が不正です',503);
@@ -239,9 +239,12 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
     return (await readdir(root)).filter(name=>name.endsWith('.json'))
       .map(name=>name.slice(0,-5)).filter(id=>CUSTOM_ACCESSORY_ID.test(id)).sort();
   }
-  async function load(id,details={}) {
+  async function load(id,details={},readOnly=false) {
     if(typeof id!=='string'||!IMPORTED_CHARACTER_ID.test(id))throw fail('キャラIDが不正です',404);
-    await ensureRoot();
+    await ensureRoot(!readOnly).catch(error=>{
+      if(readOnly && error.code==='ENOENT')throw fail('キャラが見つかりません',404);
+      throw error;
+    });
     let item;
     try {item=await readRecord(join(root,id+'.json'),MAX_IMPORTED_RECORD);}
     catch(error){
@@ -384,7 +387,7 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
       for(const filename of entries)chars.push(summary(await load(filename.slice(0,-5))));
       return {characters:chars};
     },
-    async model(id) {const record=await load(id);return {
+    async model(id,{readOnly=false}={}) {const record=await load(id,{},readOnly);return {
       model:record.generation.model,model_version:record.generation.model_version,
       model_revision:record.model_revision,name:record.name,ai_id:record.ai_id,
       ...(record.schema===2?{

@@ -5,7 +5,8 @@
  */
 import {createServer} from 'node:http';
 import {createChatGPTPlanDialogue, validateDialogueInput, validateDialogueResult} from './chatgpt-dialogue.mjs';
-import {randomBytes} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import {createCompanionStore, applyCompanion, validateCompanion} from './companion.mjs';
 import {createLookStore} from './looks.mjs';
 import {COMPANION_MODEL_VERSION, deriveForwardCompanionModel} from './forward-model.mjs';
@@ -86,6 +87,8 @@ const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
 const SLOTS = ['mine', 'owl', 'turtle'];
+const ACCESSORY_STRATEGIES = new Set(['star','glasses','ribbon','none']);
+const ACCESSORY_ZIP_REVISIONS = ['model_version','model_revision','equipment_hash','accessory_strategy'];
 
 function failure(message, status = 503) {
   return Object.assign(new Error(message), {status});
@@ -339,6 +342,76 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         {code:ENGINE_SOURCE_UNVERIFIED});
     }
     return current;
+  }
+  async function runAccessoryControl({model_id,accessory_a,accessory_b,amount,leverage}) {
+    const snapshot = await loadSnapshot();
+    const revisions = REVISIONS.map(key=>snapshot[key]);
+    const companion = await companionStore.read();
+    const companionRevision = companion.revision;
+    const originals = modelPlanFromSnapshot(snapshot,null);
+    const readZip = () => importedCharacterStore.model(model_id,{readOnly:true});
+    const imported = model_id==='self' ? null : await readZip();
+    const zipRevisions = imported && ACCESSORY_ZIP_REVISIONS.map(key=>imported[key]);
+    const mine = model_id==='self' ? applyCompanion(originals,companion).models.mine : imported.model;
+    const scenario_token = 'v1_'+randomBytes(8).toString('hex');
+    const common = structuredClone({...originals,models:{...originals.models,mine},scenario_token});
+    const engine_source_sha256 = await verifyPracticeEngineSource();
+    let planA,planB;
+    try {
+      planA = await predict({...structuredClone(common),accessory_strategy:accessory_a});
+    } finally {
+      await verifyPracticeEngineSource();
+    }
+    await verifyPracticeEngineSource();
+    try {
+      planB = await predict({...structuredClone(common),accessory_strategy:accessory_b});
+    } finally {
+      await verifyPracticeEngineSource();
+    }
+    const after = await loadSnapshot();
+    const currentCompanion = await companionStore.read();
+    const importedAfter = imported ? await readZip().catch(error=>{
+      if(error?.status===404)return null;
+      throw error;
+    }) : null;
+    if(REVISIONS.some((key,i)=>revisions[i]!==after[key]) ||
+       companionRevision!==currentCompanion.revision ||
+       (imported && (!importedAfter || ACCESSORY_ZIP_REVISIONS.some((key,i)=>zipRevisions[i]!==importedAfter[key])))) {
+      throw failure('実験中にモデルが変更されました。再度お試しください',409);
+    }
+    const validSha = value=>typeof value==='string' && value.length===64 && /^[a-f0-9]{64}$/.test(value);
+    const baseline = common.models.mine;
+    const matchesBaseline = plan=>{
+      const meta = plan?.models?.mine;
+      return validSha(meta?.effective_sha256) && meta.risk_fraction===baseline.risk_fraction &&
+        isDeepStrictEqual(meta.plugin_weights,baseline.plugin_weights) &&
+        isDeepStrictEqual(meta.plugin_strengths,baseline.plugin_strengths);
+    };
+    if(!Array.isArray(planA?.future_prices) || planA.future_prices.length!==12 ||
+       !isDeepStrictEqual(planA.future_prices,planB?.future_prices) ||
+       !Object.is(planA.initial_price,planB.initial_price) || planA.fee_rate!==planB.fee_rate ||
+       planA.model_sha256!==planB.model_sha256 || !matchesBaseline(planA) || !matchesBaseline(planB) ||
+       planA.models.mine.effective_sha256===planB.models.mine.effective_sha256) {
+      throw failure('実験条件の一致を確認できません');
+    }
+    const outcome = (plan,accessory)=>{
+      const result = runSyntheticGame({...plan,initial_coins:amount,allocations:{mine:100,owl:0,turtle:0}});
+      const {profit_coins,max_drawdown_pct,liquidated_at_step} =
+        settleLeveragedPractice({equityPath:result.raw_equity_path,amount,leverage});
+      return {accessory,model_effective_sha256:result.characters.mine.effective_sha256,
+        daily_ai_signals:result.decisions.map(decision=>decision.signals.mine),
+        profit_coins,max_drawdown_pct,liquidated_at_step};
+    };
+    const a=outcome(planA,accessory_a),b=outcome(planB,accessory_b);
+    const orderedEntries = object=>Object.entries(object).sort(([a],[b])=>a<b?-1:a>b?1:0);
+    const baseline_fingerprint = createHash('sha256').update(JSON.stringify([
+      baseline.fast_window,baseline.slow_window,baseline.risk_fraction,
+      orderedEntries(baseline.plugin_weights),orderedEntries(baseline.plugin_strengths),
+    ])).digest('hex');
+    await verifyPracticeEngineSource();
+    return {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY',real_market:false,persisted:false,
+      order_placed:false,xp_awarded:false,model_id,scenario_token,engine_source_sha256,amount,leverage,
+      daily_synthetic_prices:[planA.initial_price,...planA.future_prices],baseline_fingerprint,a,b};
   }
   const readForwardRecords = createForwardRecordReader(forwardRecords);
   if (forwardRecords?.fxSource !== undefined) {
@@ -723,8 +796,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         'Content-Security-Policy': "default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"});
       return res.end(body);
     }
-    if (req.method !== 'POST' ||
-        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/companion/forward-ai','/api/looks','/api/artwork'].includes(path)) {
+    const isAccessoryControl = path === '/api/accessory-control';
+    if (req.method !== 'POST' || (isAccessoryControl && req.url!==path) || (!isAccessoryControl &&
+        !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/companion/forward-ai','/api/looks','/api/artwork'].includes(path))) {
       return json(res, 404, {error: '見つかりません'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
@@ -774,6 +848,18 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       const fields = Object.keys(payload).sort();
       const names = fields.join('|');
+      if (isAccessoryControl) {
+        const {model_id,accessory_a,accessory_b,amount,leverage} = payload;
+        if(fields.length!==5 || names!=='accessory_a|accessory_b|amount|leverage|model_id' ||
+           (model_id!=='self' && (typeof model_id!=='string' || model_id.length!==36 ||
+             !IMPORTED_CHARACTER_ID.test(model_id))) ||
+           !ACCESSORY_STRATEGIES.has(accessory_a) || !ACCESSORY_STRATEGIES.has(accessory_b) ||
+           accessory_a===accessory_b || !Number.isSafeInteger(amount) || amount<1 || amount>10000 ||
+           !Number.isSafeInteger(leverage) || leverage<1 || leverage>25) {
+          throw failure('自分のAIまたは登録済みZIP、異なる2種類の分析、試算額と倍率を指定してください',400);
+        }
+        return json(res,200,await runAccessoryControl(payload));
+      }
       if (path === '/api/quick-practice') {
         if (!['amount|leverage|model_id','amount|model_id',
               'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names) ||
@@ -1111,7 +1197,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       });
     } catch (error) {
       const status = error?.status || (/不正|配分|100%|整数/.test(error?.message) ? 400 : 503);
-      if (path === '/api/quick-practice' && error?.code === ENGINE_SOURCE_UNVERIFIED) {
+      if ((path === '/api/quick-practice' || isAccessoryControl) && error?.code === ENGINE_SOURCE_UNVERIFIED) {
         return json(res,status,{error:error.message, code:ENGINE_SOURCE_UNVERIFIED});
       }
       return json(res, status, {error: status >= 500 ? 'ゲームサーバーの準備ができていません' : error.message});
