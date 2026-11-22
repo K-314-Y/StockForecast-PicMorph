@@ -25,6 +25,7 @@ let currentZipFiles = null;
 let visualEdit = null;
 let editLoad = null;
 let loadingEditPicker = false;
+let editPickerEpoch = 0;
 const zipLookFields=['zipHairStyle','zipExpression'];
 const characterEndpoint='/api/imported-characters';
 const accessoryEndpoint=characterEndpoint+'/accessories';
@@ -885,22 +886,32 @@ function refreshEditPicker() {
   picker.disabled=busy || loadingEditPicker || Boolean(visualEdit) || picker.options.length<=1;
   $('openVisualEdit').disabled=picker.disabled || savingAccessory || !picker.value;
 }
-async function loadEditPicker(selected=$('editCharacter').value) {
+async function loadEditPicker(selected=$('editCharacter').value, autoOpen=false) {
+  const pickerEpoch=++editPickerEpoch;
+  const previewEpoch=epoch;
   loadingEditPicker=true;
   refreshEditPicker();
   try {
     const {characters}=await editRequest(characterEndpoint);
+    if(pickerEpoch!==editPickerEpoch)return;
     const picker=$('editCharacter');
     picker.replaceChildren(new Option('選択してください',''),...characters.map(character=>
       new Option(character.name+'（'+character.id+'）',character.id)));
     picker.value=characters.some(item=>item.id===selected)?selected:'';
-    $('editStatus').textContent=characters.length?'':'登録済みのZIPキャラはありません。';
+    $('editStatus').textContent=autoOpen && !picker.value ?
+      'リンク先のZIPキャラが見つかりません。登録済みのキャラを選んでください。' :
+      characters.length?'':'登録済みのZIPキャラはありません。';
   }catch(error){
-    $('editStatus').textContent=error.message;
+    if(pickerEpoch===editPickerEpoch)$('editStatus').textContent=error.message;
+    return;
   }finally{
-    loadingEditPicker=false;
-    refreshEditPicker();
+    if(pickerEpoch===editPickerEpoch) {
+      loadingEditPicker=false;
+      refreshEditPicker();
+    }
   }
+  // A draft started while the list was loading takes precedence.
+  if(autoOpen && previewEpoch===epoch)await openVisualEdit();
 }
 async function editRequest(url,options={}) {
   const response=await fetch(url,{mode:'same-origin',cache:'no-store',credentials:'same-origin',...options});
@@ -990,8 +1001,7 @@ async function loadSavedEdit(id,myEpoch,signal) {
     for(const {bitmap} of overlays.values())bitmap.close();
   }
 }
-$('editCharacter').addEventListener('change',refreshEditPicker);
-$('openVisualEdit').addEventListener('click',async()=>{
+async function openVisualEdit() {
   if($('openVisualEdit').disabled)return;
   const id=$('editCharacter').value;
   const myEpoch=++epoch;
@@ -1012,7 +1022,9 @@ $('openVisualEdit').addEventListener('click',async()=>{
     if(editLoad===controller)editLoad=null;
     if(myEpoch===epoch)setBusy(false);
   }
-});
+}
+$('editCharacter').addEventListener('change',refreshEditPicker);
+$('openVisualEdit').addEventListener('click',openVisualEdit);
 $('cancelVisualEdit').addEventListener('click',()=>{
   if(busy||!visualEdit)return;
   ++epoch;
@@ -1104,7 +1116,10 @@ $('confirmPortraitRestore').addEventListener('click',async()=>{
     if(myEpoch===epoch)setBusy(false);
   }
 });
-void loadEditPicker();
+const editIds=new URLSearchParams(location.search).getAll('edit');
+const editId=editIds[0];
+const openLinkedEdit=editIds.length===1 && editId.length===36 && /^zip_[a-f0-9]{32}$/.test(editId);
+void loadEditPicker(openLinkedEdit?editId:undefined,openLinkedEdit);
 
 $('registerZip').addEventListener('click',async()=>{
   if($('registerZip').disabled||busy||visualEdit||!currentZipFiles)return;

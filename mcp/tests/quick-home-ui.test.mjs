@@ -116,14 +116,14 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   state.copy=async text=>{copies.push(text);};
   state.navigator={clipboard:{writeText:text=>state.copy(text)}};
   const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
-    Blob,URL:{
-      createObjectURL(blob){
+    Blob,location:{origin:'http://localhost'},URL:class extends URL {
+      static createObjectURL(blob){
         assert.ok(blob instanceof Blob);
         const url='blob:comparison-'+ ++nextObjectUrl;
         objectUrls.set(url,blob);
         return url;
-      },
-      revokeObjectURL(url){assert.ok(objectUrls.delete(url));revokedUrls.push(url);},
+      }
+      static revokeObjectURL(url){assert.ok(objectUrls.delete(url));revokedUrls.push(url);}
     },
     navigator:state.navigator,
     getComputedStyle:node=>({display:'block',visibility:'visible',opacity:'1',...node.style}),
@@ -1778,12 +1778,21 @@ test('a registered ZIP character selects its own AI and owns its result image an
   const id='zip_'+'a'.repeat(32);
   const own={id,ai_id:id,name:'ラベンダー',image_url:'/api/imported-characters/image/'+id,
     model_version:'companion-v1_0_100_0_0_75',trained:false,live_market:false};
-  const {get,fire,state,calls}=await mount([],false,[own]);
+  const {get,fire,state,calls,focus}=await mount([],false,[own]);
+  const link=get('quickZipEditLink');
+  assert.equal(link.hidden,true);
+  assert.equal(link.getAttribute('href'),null);
   assert.equal(get('quickModel').children.some(child=>child.value===id),true);
   get('quickModel').value=id;
   await fire('quickModel','change');
   assert.equal(get('quickZipLinked').hidden,false);
   assert.equal(get('quickZipPortrait').src,own.image_url);
+  assert.equal(link.hidden,false);
+  assert.equal(link.getAttribute('href'),'http://localhost/parts-lab/preview.html?edit='+id);
+  focus();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls.map(call=>call.path),['/api/model-shop','/api/model-shop']);
+  assert.equal(get('quickZipPortrait').srcAssignments,1);
   const practice=state.practice;
   state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:own.name});
   await fire('quickForm','submit');
@@ -1796,6 +1805,10 @@ test('a registered ZIP character selects its own AI and owns its result image an
   await fire('quickAgain');
   assert.equal(get('quickMini').hidden,true);
   assert.equal(get('quickReplayOwner').textContent,'');
+  get('quickModel').value='self';
+  await fire('quickModel','change');
+  assert.equal(link.hidden,true);
+  assert.equal(link.getAttribute('href'),null);
 });
 
 test('ChatGPT is hidden by default and never requests on load, run or reflection submit',async()=>{

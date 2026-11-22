@@ -612,10 +612,19 @@ let zipCharacters = [];
 function showLinkedZip() {
   const record=zipCharacters.find(item=>item.id===modelField.value);
   const panel=element('quickZipLinked'),portrait=element('quickZipPortrait');
+  const editLink=element('quickZipEditLink');
   panel.hidden=!record;
   panel.style.display=record?'flex':'none';
-  if(record)portrait.src=record.image_url;
-  else portrait.removeAttribute('src');
+  editLink.hidden=!record;
+  if(record) {
+    if(portrait.getAttribute('src')!==record.image_url)portrait.src=record.image_url;
+    const editUrl=new URL('/parts-lab/preview.html',window.location.origin);
+    editUrl.searchParams.set('edit',record.id);
+    editLink.setAttribute('href',editUrl.href);
+  } else {
+    portrait.removeAttribute('src');
+    editLink.removeAttribute('href');
+  }
   const accessoryLabel={star:'星',glasses:'眼鏡',ribbon:'リボン',none:'なし'};
   const analysisLabel={
     bollinger_breakout:'ボリンジャーバンドで急な上昇を検出',
@@ -764,7 +773,8 @@ async function loadModels() {
     const importedWarning=!!data.imported_characters_error;
     const imported=Array.isArray(data.imported_characters)?data.imported_characters:[];
     zipCharacters=imported.filter(item=>
-      /^zip_[a-f0-9]{32}$/.test(item?.id) && item.ai_id===item.id &&
+      typeof item?.id==='string' && item.id.length===36 &&
+      /^zip_[a-f0-9]{32}$/.test(item.id) && item.ai_id===item.id &&
       typeof item.name==='string' && typeof item.model_version==='string');
     const next=[{id:'self',name:'自分のAI（未作成なら標準AI）'}];
     for(const character of zipCharacters)

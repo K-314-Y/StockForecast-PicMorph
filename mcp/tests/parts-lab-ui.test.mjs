@@ -73,11 +73,15 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const pageErrors=[];
       const external=[];
       const writes=[];
-      page.on('pageerror',error=>pageErrors.push(error.message));
-      page.on('request',request=>{
-        if (request.method()==='POST') writes.push(new URL(request.url()).pathname);
+      const visualReads=[];
+      const context=page.context();
+      context.on('weberror',event=>pageErrors.push(event.error().message));
+      context.on('request',request=>{
+        const path=new URL(request.url()).pathname;
+        if (request.method()!=='GET') writes.push(path);
+        else if (path.startsWith('/api/imported-characters/visual-edit/')) visualReads.push(path);
       });
-      await page.route('**/*',route=>{
+      await context.route('**/*',route=>{
         if (route.request().url().startsWith(origin+'/')) return route.continue();
         external.push(route.request().url());
         return route.abort();
@@ -787,23 +791,137 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await stale.close();
 
       await page.goto(origin+'/game');
+      const editLink=page.locator('#quickZipEditLink');
+      assert.equal(await editLink.isVisible(),false);
       await page.locator('#quickModel').selectOption(created.id);
       const gamePortrait='#quickZipPortrait';
       await page.locator(gamePortrait).waitFor();
       assert.deepEqual(await pixels(gamePortrait,0,0,64,64),secondPortrait);
 
+      await page.locator('#quickAmount').fill('2750');
+      await page.locator('#quickLeverage').selectOption('3');
       await page.locator('#quickConfirm').click();
       const practiced=page.waitForResponse(res=>res.url()===origin+'/api/quick-practice');
       await page.locator('#quickRun').click();
       const practice=await practiced;
       assert.equal(practice.status(),200,await practice.text());
-      assert.equal((await practice.json()).daily_ai_signals.length,12);
+      const beforeEdit=await practice.json();
+      assert.equal(beforeEdit.daily_ai_signals.length,12);
       await page.locator('#quickMiniPortrait').waitFor();
       assert.deepEqual(await pixels('#quickMiniPortrait',0,0,64,64),secondPortrait);
+      await page.locator('#quickFollowing').click();
+      const replayDay=await page.locator('#quickReplayDay').textContent();
+      const gameImage=page.locator(gamePortrait);
+      const beforeSrc=await gameImage.getAttribute('src');
+      const getState=async path=>{
+        const response=await page.request.get(origin+path);
+        assert.equal(response.status(),200,path);
+        return response.json();
+      };
+      const readTrainingState=()=>Promise.all(['/api/growth','/api/trained/versions'].map(getState));
+      const trainingBefore=await readTrainingState();
+
+      assert.equal(await editLink.textContent(),'このキャラの見た目を編集');
+      assert.equal(await editLink.getAttribute('target'),'_blank');
+      assert.equal(await editLink.getAttribute('rel'),'noopener noreferrer');
+      const editorUrl=origin+'/parts-lab/preview.html?edit='+created.id;
+      assert.equal(await editLink.getAttribute('href'),editorUrl);
+      const writesBeforeOpen=writes.length;
+      const readsBeforeOpen=visualReads.length;
+      const [editor]=await Promise.all([context.waitForEvent('page'),editLink.click()]);
+      editor.setDefaultTimeout(5000);
+      assert.equal(editor.url(),editorUrl);
+      await editor.locator('#visualEdit').waitFor();
+      await editor.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      assert.equal(await editor.evaluate(()=>window.opener),null);
+      assert.equal(await editor.locator('#editCharacter').inputValue(),created.id);
+      assert.deepEqual(visualReads.slice(readsBeforeOpen),[editPath]);
+      assert.equal(writes.length,writesBeforeOpen);
+      assert.deepEqual(await readFile(portraitFile),committed);
+
+      const moveLinkedLayer=async(part,prior,next)=>{
+        await editor.locator('#movePart').selectOption(part);
+        const input=editor.locator('#layerX');
+        assert.equal(await input.inputValue(),prior);
+        await input.fill(next);
+      };
+      await moveLinkedLayer('face','-6','-11');
+      await moveLinkedLayer('base','3','9');
+      await editor.locator('#saveVisualEdit').click();
+      assert.equal(writes.length,writesBeforeOpen);
+      const [linkedSave]=await Promise.all([
+        editor.waitForResponse(res=>res.url()===origin+editPath && res.request().method()==='POST'),
+        editor.locator('#confirmPortraitSave').click(),
+      ]);
+      assert.equal(linkedSave.status(),200,await linkedSave.text());
+      const latest=await linkedSave.json();
+      assert.equal(latest.id,created.id);
+      assert.notEqual(latest.image_sha256,new URL(beforeSrc,origin).searchParams.get('v'));
+      const expectedSrc=new URL(beforeSrc,origin);
+      expectedSrc.searchParams.set('v',latest.image_sha256);
+      const refreshed=page.waitForResponse(res=>res.url()===origin+'/api/model-shop');
+      await page.bringToFront();
+      await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+      assert.equal((await refreshed).status(),200);
+      await page.waitForFunction(src=>document.getElementById('quickZipPortrait').src===src,expectedSrc.href);
+      assert.notDeepEqual(await pixels(gamePortrait,0,0,64,64),secondPortrait);
+      assert.equal(await page.locator('#quickModel').inputValue(),created.id);
+      assert.equal(await page.locator('#quickAmount').inputValue(),'2750');
+      assert.equal(await page.locator('#quickLeverage').inputValue(),'3');
+      assert.equal(await page.locator('#quickReplay').isVisible(),true);
+      assert.equal(await page.locator('#quickReplayDay').textContent(),replayDay);
+      assert.deepEqual(await readTrainingState(),trainingBefore);
+      assert.deepEqual(await getModel(),originalModel);
+      const afterLinkedSave=await predictSameScenario();
+      for (const key of ['model_id','model_effective_sha256','engine_source_sha256'])
+        assert.equal(afterLinkedSave[key],beforeEdit[key],key);
+      assert.deepEqual(afterLinkedSave.daily_ai_signals,baseline.daily_ai_signals);
+      assert.deepEqual(afterLinkedSave.daily_balances,baseline.daily_balances);
+
+      const readsBeforeInvalid=visualReads.length;
+      const unknown='zip_'+(created.id.endsWith('0')?'1':'0').repeat(32);
+      const previewUrl=origin+'/parts-lab/preview.html';
+      for (const query of [
+        'edit=../'+created.id,'edit='+created.id+'%0A','edit='+created.id+'&edit='+legacy.id,
+        'edit='+unknown,
+      ]) {
+        await editor.goto(previewUrl+'?'+query);
+        await editor.locator('#editCharacter:enabled').waitFor();
+        assert.equal(await editor.locator('#editCharacter').inputValue(),'');
+        assert.equal(await editor.locator('#visualEdit').isVisible(),false);
+        assert.equal(await editor.locator('#openVisualEdit').isDisabled(),true);
+      }
+      assert.match(await editor.locator('#editStatus').textContent(),/リンク先のZIPキャラが見つかりません/);
+      assert.deepEqual(visualReads.slice(readsBeforeInvalid),[]);
+      await editor.locator('#editCharacter').selectOption(legacy.id);
+      await editor.locator('#openVisualEdit').click();
+      await editor.locator('#legacyVisualWarning').waitFor();
+      await editor.goto(previewUrl+'?edit='+legacy.id);
+      await editor.locator('#legacyVisualWarning').waitFor();
+      assert.equal(await editor.locator('#editCharacter').inputValue(),legacy.id);
+      assert.deepEqual(visualReads.slice(readsBeforeInvalid),[legacyPath,legacyPath]);
+
+      // A slow initial list cannot replace a newer local draft.
+      let holdList;
+      const heldList=new Promise(resolve=>{holdList=resolve;});
+      await editor.route(origin+'/api/imported-characters',holdList,{times:1});
+      await editor.goto(editorUrl);
+      const listRoute=await heldList;
+      await editor.locator('#loadSample').click();
+      await editor.locator('#movePart').selectOption('face');
+      await editor.locator('#faceX').fill('10');
+      await listRoute.continue();
+      await editor.locator('#editCharacter:enabled').waitFor();
+      assert.equal(await editor.locator('#editCharacter').inputValue(),created.id);
+      assert.equal(await editor.locator('#visualEdit').isVisible(),false);
+      assert.equal(await editor.locator('#faceX').inputValue(),'10');
+      assert.deepEqual(visualReads.slice(readsBeforeInvalid),[legacyPath,legacyPath]);
+      await editor.close();
+
       assert.deepEqual(writes,[
         '/api/imported-characters/register','/api/imported-characters/register',
         legacyPath,legacyPath+'/restore',editPath,editPath+'/restore',editPath+'/restore',
-        editPath,'/api/quick-practice',
+        editPath,'/api/quick-practice',editPath,
       ]);
       assert.deepEqual(external,[]);
       assert.deepEqual(pageErrors,[]);
