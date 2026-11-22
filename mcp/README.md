@@ -476,3 +476,79 @@ with a `fallback_reason`. Inference uses local files and disables ONNX Runtime
 telemetry. The 8897 read-only endpoint continues to offer six metadata tools.
 The two image-returning cutout tools require explicit user intent in their
 descriptions. Client approval behavior depends on the MCP client.
+
+### 独立パーツのカタログ形式（V6 優先B・第1段階）
+
+`independent_parts.py` の `prepare_catalog_part` は、明示的に選ばれた保存済み
+切り抜きの v1 manifest と `part.png` を受け取り、独立パーツの v1 manifest と
+6コマ PNG をメモリ内で返します。`validate_catalog_part` は読み戻した manifest、
+PNG の SHA-256、配置、6コマの内容を検証します。切り抜きと元画像は変更しません。
+
+- `part_id` は `pt_` と32桁の16進数です。`kind_id` は `creator.ribbon` のような
+  名前空間付き ID で、新しいアクセサリーを種類一覧の変更なしに扱えます。
+- `layer_anchor` は `base → outfit → face → hair` のいずれかです。指定した層の
+  上、次の層の下に置く契約です。`hair` を指定した場合は最前面になります。
+- `rights` には `basis`（`original`／`license`／`permission`）、`holder`、
+  `reference` を記録します。ライセンスまたは許諾の場合は参照情報が必須です。
+  権利や承認の事実は呼び出し元で確認します。SHA-256 は内容の照合に使います。
+- 元の192×208セルを同じ座標のまま6回並べた1152×208の静止レイヤーです。
+  元のキャラ ID、画像と切り抜きの SHA-256、表情、元のコマ番号を記録します。
+
+この段階で扱うのはデータ形式と検証です。カタログへの登録・削除、ブラウザの
+プレビューやキャラへの装着は今後の接続先です。Windows 向けの書き込み経路はありません。
+
+### 独立パーツのローカル登録（S95、Linux）
+
+8896 の非公開 MCP で、保存済み候補を本人が**独立パーツとして登録すること**に
+明示的に同意した後だけ `register_independent_part` を使います。
+`save_segment_candidate` が返した `candidate_id` と `part_png_sha256` を、
+登録の `candidate_id` と `expected_candidate_sha256` に渡します。本人と確認した
+`kind_id`（例 `creator.ribbon`）、`layer_anchor`、`rights` も指定します。
+
+候補と登録済み元PNGのSHA-256、元コマの出典と画素を再検証してから、
+`local_state/independent_parts/pt_<id>/` に新しい `part.png` と `manifest.json` を
+一括公開します。最大32件です。候補manifestのレビュー必須フラグは、本人が過去に
+承認した事実の証明にはなりません。元画像と候補は読み取りのみです。
+
+`list_independent_parts` は保存済みPNGとmanifestを検証してID・種類・配置層・
+出典ID・画像SHA-256を返します。壊れたエントリがあれば一覧はエラーになります。
+登録・一覧ともに応答に画像本体は含みません。8896 は計18ツールになり、8897 の
+メタデータ専用接続は従来の6ツールです。
+
+Linux CLI は `python3 -B -E mcp/independent_parts_catalog.py` に `register`、
+`list`、`validate` のいずれかを渡し、改行付きJSONを一行だけ標準入力に渡します。
+`register` は MCP と同じ項目、`list` は `{}`、`validate` は `{"part_id":"pt_…"}`
+を受け付けます。`validate` と `list` は保存済みの独立パーツ自体を検証します。
+
+### Parts Lab の一時装備（S96、Linux）
+
+`/parts-lab/preview.html` の「保存済みパーツ一覧を確認」は、検証済みの
+メタデータだけを取得します。1コマが192×208のキャラを読み込んでから、
+「このパーツを重ねて試す」で選んだ `pt_` のPNGを取得します。登録時の配置層を
+初期値に、X/Y・重ね順・表示を調整でき、取り外しや再読込で一時装備は消えます。
+
+Linuxのローカル同一オリジン専用GETで、一覧と画像を分けています。画像は
+選択リクエスト用ヘッダーを要求し、manifestとPNGの整合性を読み直します。
+CLI の `image` は `{"part_id":"pt_…"}` を受け、検証済みPNGを子プロセス内の
+応答にだけBase64で返します。MCPの一覧は引き続きメタデータ専用です。
+カタログ登録はS95の明示的な操作です。キャラごとの装備保存、AIモデルとの紐付け、
+Windowsでのカタログ表示・書き込みは未対応です。
+
+### 登録キャラごとの装備設定（S97、Linux）
+
+Parts Lab で登録済みキャラを読み込み、カタログパーツを試着します。「このキャラの
+装備を保存する」で確認すると、配置層・X/Y・表示・重ね順をそのキャラに保存します。
+ファイルから直接読み込んだ一時パーツがある間は保存できません。全パーツを取り外して
+0件を保存すると、保存済み設定も空になります。別の画面で更新されていた場合は、
+「保存済み装備を復元する」で確認してから編集をやり直してください。
+
+再読込後はキャラを選び直し、復元ボタンを押します。全パーツの取得と検証が通ってから
+試着を切り替えます。通常のキャラ読込で取得するのは装備のメタデータまでです。
+保存は最大8パーツ、最大32キャラです。PNGの保存やカタログ登録は別の操作です。
+
+`GET/POST /api/character-equipment/v1/<cp_id>` は、登録済みキャラを確認し、参照する
+カタログPNGをSHA-256で照合します。POST は同一オリジンのJSONに限り、リクエストの
+`expected_revision` が古い場合は409を返します。設定は
+`local_state/character_equipment/<cp_id>.json` に分離して保存します。既存キャラ画像、
+アクティブキャラ、XP、コイン、予測、AIモデル、8896/8897のMCPとは独立しています。
+Windowsからの利用は未対応です。

@@ -22,6 +22,9 @@ import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, 
 import {compareHistoricalMarket} from './historical-market.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
+import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
+import {CHARACTER_EQUIPMENT_API,MAX_EQUIPMENT_BYTES,createCharacterEquipmentStore,
+  equipmentRecord,validateEquipmentSave} from './character-equipment.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
@@ -303,6 +306,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   artworkStore = createArtworkStore(),
                                   artworkExpressionStore = createArtworkExpressionStore(),
                                   catalogRoot, activeCharacterStore = createActiveCharacterStore(),
+                                  independentPartReader = process.platform==='linux' ? createIndependentPartReader() : null,
+                                  equipmentStore = process.platform==='linux' ? createCharacterEquipmentStore() : null,
                                   characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
                                   userPngImporter = process.platform==='linux' ? createUserPngImporter() : null,
                                   appearanceCatalog = readAppearanceCatalog,
@@ -318,6 +323,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   const characterDemos=createCharacterDemoCatalog(catalogRoot);
   const isRegisteredDemo=async id=>(await characterDemos.list()).some(item=>item.generated_id===id);
   let demoImagesInFlight=0;
+  let independentPartBusy=false;
+  let equipmentInFlight=0;
   let demoRegistrationBusy=false;
   let userPngImportBusy=false;
   let dialogueBusy = false;
@@ -355,6 +362,48 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if ([rawPath,path].some(target=>target===CHARACTER_EQUIPMENT_API || target.startsWith(CHARACTER_EQUIPMENT_API+'/'))) {
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      const save=req.method==='POST';
+      const origin=req.headers.origin;
+      if ((save || origin!==undefined) && origin!==`http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      const id=/^\/api\/character-equipment\/v1\/(cp_[0-9a-f]{32})$/.exec(rawPath)?.[1];
+      if (!id || req.url!==path || (!save && req.method!=='GET') || process.platform!=='linux' ||
+          !equipmentStore || !independentPartReader) {
+        return json(res,404,{error:'登録キャラの装備設定を利用できません'});
+      }
+      if (equipmentInFlight>=2) return json(res,429,{error:'装備設定を処理中です'});
+      equipmentInFlight++;
+      const controller=new AbortController();
+      const cancel=()=>controller.abort();
+      res.once('close',cancel);
+      try {
+        const input=save ? validateEquipmentSave(await getBody(req,MAX_EQUIPMENT_BYTES)) : null;
+        if (!(await isRegisteredDemo(id))) return json(res,404,{error:'登録済みキャラが見つかりません'});
+        const record=save ? null : equipmentRecord(await equipmentStore.read(id,controller.signal),id);
+        const parts=save ? input.parts : record.parts;
+        if (parts.length) {
+          const catalog=await independentPartReader.list(controller.signal);
+          const hashes=new Map(catalog.parts.map(part=>[part.part_id,part.image_sha256]));
+          if (!parts.every(part=>hashes.get(part.part_id)===part.image_sha256)) {
+            return json(res,422,{error:'装備のパーツが削除されたか、画像が変更されています'});
+          }
+        }
+        if (res.destroyed) return;
+        // Once started, let the atomic write finish even if the browser leaves.
+        const result=save ? equipmentRecord(await equipmentStore.save(id,input),id) : record;
+        if (!res.destroyed) return json(res,200,result);
+      } catch(error) {
+        const code=[400,409,413,415].includes(error?.status)?error.status:503;
+        if (!res.destroyed) return json(res,code,{error:code===503?'装備設定を安全に読み書きできませんでした':error.message});
+      } finally {
+        res.off('close',cancel);
+        equipmentInFlight--;
+      }
+      return;
+    }
     if (rawPath===ACTIVE_CHARACTER_API || path===ACTIVE_CHARACTER_API) {
       const origin=req.headers.origin;
       if (origin!==undefined && origin!==`http://${req.headers.host}`) {
@@ -452,6 +501,44 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         return json(res,error?.status===429?429:503,
           {error:error?.status===429?'別のキャラを生成中です':'キャラを登録できませんでした。Linux側の保存容量などを確認してください'});
       } finally {demoRegistrationBusy=false;}
+    }
+    if ([rawPath,path].some(target=>target===INDEPENDENT_PARTS_API || target.startsWith(INDEPENDENT_PARTS_API+'/'))) {
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      if (req.headers.origin!==undefined && req.headers.origin!==`http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      const imageId=/^\/api\/independent-parts\/(pt_[0-9a-f]{32})\/part\.png$/.exec(rawPath)?.[1];
+      if (req.method!=='GET' || req.url!==path || (!imageId && path!==INDEPENDENT_PARTS_API) ||
+          process.platform!=='linux' || !independentPartReader) {
+        return json(res,404,{error:'保存済みパーツ一覧を利用できません'});
+      }
+      // Same-origin script requests only. Navigation, image tags and preloads lack this header.
+      if (imageId && req.headers['x-creature-part-preview']!=='1') {
+        return json(res,403,{error:'パーツラボで画像を選んでください'});
+      }
+      if (independentPartBusy) return json(res,429,{error:'保存済みパーツを確認中です'});
+      independentPartBusy=true;
+      const controller=new AbortController();
+      const cancel=()=>controller.abort();
+      res.once('close',cancel);
+      try {
+        if (!imageId) {
+          const entries=await independentPartReader.list(controller.signal);
+          if (!res.destroyed) return json(res,200,entries);
+        } else {
+          const part=await independentPartReader.image(imageId,controller.signal);
+          if (res.destroyed) return;
+          if (!part) return json(res,404,{error:'保存済みパーツが見つかりません'});
+          res.setHeader('X-Creature-Part-SHA256',part.sha256);
+          return artworkImage(res,{mime:'image/png',bytes:part.bytes});
+        }
+      } catch {
+        if (!res.destroyed) return json(res,503,{error:'保存済みパーツの整合性を確認できませんでした'});
+      } finally {
+        res.off('close',cancel);
+        independentPartBusy=false;
+      }
+      return;
     }
     if ([rawPath,path].some(target=>target===CHARACTER_DEMOS_API || target.startsWith(CHARACTER_DEMOS_API+'/'))) {
       const origin=req.headers.origin;

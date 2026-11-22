@@ -67,7 +67,21 @@ private local Creature Lab Node game. It has no real-trading capability.
    the local algorithm may mix overlapping shapes. Never call it fully
    automatic AI separation. Do not view private saved artwork without an
    explicit user request. The metadata-only MCP cannot access these tools.
-7. Never expose private images publicly, automate account approvals, modify
+7. On the full private Linux MCP, use `register_independent_part` only after
+   the user explicitly approves catalog registration and its kind ID, layer
+   anchor and rights metadata. Pass the saved cutout's `candidate_id` and
+   `part_png_sha256` as `expected_candidate_sha256`. A review-required flag
+   records the workflow requirement. Confirm user approval separately.
+   `list_independent_parts` validates stored entries and returns metadata.
+   The two tools are unavailable through the six-tool metadata-only MCP.
+   On Linux the Parts Lab can list verified catalog metadata after an
+   explicit click. It fetches an image only when the user selects that part.
+   Layer and position changes stay in the preview until the user confirms
+   the explicit equipment save for the loaded registered character. Remove
+   transient file parts before saving. After reloading, select the character
+   and use the explicit restore button. The equipment configuration has no
+   link to the active character, XP, coins, forecasts or AI models.
+8. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 
 Useful requests: “今の私のキャラを確認”, “保存前に12日間の模擬相場で

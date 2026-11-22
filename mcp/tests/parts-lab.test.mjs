@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {createContext,runInContext} from 'node:vm';
 import {createGameServer} from '../../game_runtime/server.mjs';
 
 const pagePath = new URL('../../game_runtime/parts-lab/preview.html',import.meta.url);
@@ -68,11 +69,13 @@ test('PNG parts UI requires explicit local input, preserves privacy and accessib
   assert.doesNotMatch(html,/<script(?![^>]*src)/);
   assert.doesNotMatch(script,/localStorage|sessionStorage|indexedDB/);
   // Gallery fetches only its local catalog and four fixed PNG roles, all via GET.
-  assert.deepEqual(script.match(/['"]\/api\/[^'"]+['"]/g),["'/api/character-demos'"]);
+  assert.deepEqual(script.match(/['"]\/api\/[^'"]+['"]/g).sort(),["'/api/character-demos'","'/api/character-equipment/v1'","'/api/independent-parts'"]);
   assert.match(script,/fetch\(url,\{mode:'same-origin',method:'GET',cache:'no-store',redirect:'error',signal\}\)/);
   assert.match(script,/fetchDemo\(DEMOS_API,request\.signal\)/);
   assert.match(script,/fetchDemo\(DEMOS_API\+'\/'\+item\.generated_id\+'\/'\+part\+'\.png'/);
-  assert.doesNotMatch(script,/\b(?:POST|PUT|PATCH|DELETE)\b|innerHTML|document\.cookie/);
+  assert.deepEqual(script.match(/\bPOST\b/g),['POST']);
+  assert.match(script,/fetch\(url,\{method:'POST'.*\n.*expected_revision:demo\.revision/);
+  assert.doesNotMatch(script,/\b(?:PUT|PATCH|DELETE)\b|innerHTML|document\.cookie/);
   assert.doesNotMatch(script,/\bXMLHttpRequest\b|sendBeacon\b/);
   assert.match(script,/createImageBitmap\(file\)/);
   assert.match(script,/bitmap\.close\(\)/);
@@ -124,4 +127,183 @@ test('the only game entrypoint is an opt-in link inside the appearance studio',a
   assert.match(studio,/rel="noopener noreferrer"/);
   assert.match(studio,/SAVEもアップロードも行いません/);
   assert.doesNotMatch(game.split('id="frontCharacter"')[1].split('id="simpleHome"')[0],/parts-lab\/preview/);
+});
+
+function previewRuntime(extra={}) {
+  const elements=new Map();
+  const draws=[];
+  const context=createContext({
+    document:{getElementById(id){
+      if(!elements.has(id)) elements.set(id,{
+        dataset:{},value:id==='mood'?'ready':'0',addEventListener(){},replaceChildren(){},
+        getContext(){return {clearRect(){},drawImage(...args){draws.push(args);}};},
+      });
+      return elements.get(id);
+    },addEventListener(){}},
+    window:{matchMedia(){return {matches:false,addEventListener(){}};},addEventListener(){}},
+    fetch:()=>new Promise(()=>{}),AbortController,setTimeout:()=>0,
+    ...extra,
+  });
+  const run=source=>runInContext(source,context);
+  run(script);
+  return {context,run,draws,elements};
+}
+
+function pngHeader(width,height,chunk='IDAT') {
+  // A small header fixture for the pre-decode check. Browser decoding is
+  // responsible for validating compressed pixels and realizing the bitmap.
+  const bytes=Buffer.alloc(57);
+  bytes.writeUInt32BE(0x89504e47);bytes.writeUInt32BE(0x0d0a1a0a,4);
+  bytes.writeUInt32BE(13,8);bytes.write('IHDR',12);
+  bytes.writeUInt32BE(width,16);bytes.writeUInt32BE(height,20);
+  bytes.write(chunk,37);bytes.write('IEND',49);
+  return bytes.buffer;
+}
+
+test('independent files are opt-in and checked before browser decode',()=>{
+  assert.match(html,/独立パーツのプレビュー/);
+  assert.match(html,/未保存・ゲーム登録されない/);
+  assert.match(html,/id="independentFiles"[^>]+multiple disabled/);
+  const {context,run}=previewRuntime();
+  context.png=pngHeader(192,208);
+  assert.equal(run("independentImageSize(png,'image/png').frames"),1);
+  context.png=pngHeader(1152,208);
+  assert.equal(run("independentImageSize(png,'image/png').frames"),6);
+  context.png=pngHeader(384,208);
+  assert.throws(()=>run("independentImageSize(png,'image/png')"),/192×208/);
+  context.png=pngHeader(192,208,'acTL');
+  assert.throws(()=>run("independentImageSize(png,'image/png')"),/アニメーション/);
+  assert.throws(()=>run("independentImageSize(png,'image/webp')"),/正常な透過PNG/);
+
+  const extended=Buffer.alloc(30);
+  extended.write('RIFF');extended.writeUInt32LE(22,4);extended.write('WEBPVP8X',8);
+  extended.writeUInt32LE(10,16);extended[20]=16;
+  extended.writeUIntLE(191,24,3);extended.writeUIntLE(207,27,3);
+  context.webp=extended.buffer;
+  assert.equal(run("independentImageSize(webp,'image/webp').frames"),1);
+  extended[20]|=2;
+  assert.throws(()=>run("independentImageSize(webp,'image/webp')"),/アニメーション/);
+});
+
+test('independent layers keep order, frame alignment and offsets across expressions',()=>{
+  const {run,draws,elements}=previewRuntime();
+  run(`pack={width:192,height:208,frames:6,images:{base:'body',outfit:'outfit',ready:'ready',happy:'happy',hair:'hair'}};
+    frame=3;
+    independentParts.push(
+      {bitmap:'fixed',anchor:'base',frames:1,visible:true,x:7,y:-4},
+      {bitmap:'atlas',anchor:'outfit',frames:6,visible:true,x:0,y:0},
+      {bitmap:'blind',anchor:'face',frames:1,visible:false},
+      {bitmap:'above face',anchor:'face',frames:1,visible:true,x:0,y:0},
+      {bitmap:'first',anchor:'hair',frames:6,visible:true,x:0,y:0},
+      {bitmap:'last',anchor:'hair',frames:1,visible:true,x:0,y:0});
+    paint();`);
+  assert.deepEqual(draws.map(([name])=>name),['body','fixed','outfit','atlas','ready','above face','hair','first','last']);
+  assert.deepEqual(draws[1],['fixed',0,0,192,208,7,-4,192,208]);
+  assert.equal(draws[3][1],3*192);
+  elements.get('mood').value='happy';
+  draws.length=0;
+  run('paint()');
+  assert.equal(draws[4][0],'happy');
+  assert.deepEqual(draws[1].slice(5,7),[7,-4]);
+  draws.length=0;
+  run('pack.width=256;paint()');
+  assert.deepEqual(draws.map(([name])=>name),['body','outfit','happy','hair']);
+});
+
+test('clearing an in-flight independent read closes late bitmaps and keeps the list empty',async()=>{
+  let releaseDecode,decodeStarted;
+  const decoding=new Promise(resolve=>{decodeStarted=resolve;});
+  const {context,run,elements}=previewRuntime({createImageBitmap(){
+    decodeStarted();
+    return new Promise(resolve=>{releaseDecode=resolve;});
+  }});
+  context.file={name:'fixture.png',size:57,type:'image/png',arrayBuffer:async()=>pngHeader(192,208)};
+  const task=run('pack={width:192,height:208,frames:6};loadIndependentParts([file])');
+  await decoding;
+  assert.equal(elements.get('independentFiles').disabled,true);
+  run('clearIndependentParts()');
+  let closed=0;
+  releaseDecode({width:192,height:208,close(){closed++;}});
+  await task;
+  assert.equal(closed,1);
+  assert.equal(run('independentParts.length'),0);
+  assert.equal(run('independentLoad'),undefined);
+  assert.equal(elements.get('cancelIndependent').hidden,true);
+});
+
+test('saved part loads its selected URL only and a late decode closes after clear',async()=>{
+  const requests=[];
+  const {context,run}=previewRuntime({clearTimeout(){},Blob});
+  context.entry={part_id:'pt_'+'a'.repeat(32),kind_id:'creator.ribbon',layer_anchor:'outfit',image_sha256:'b'.repeat(64)};
+  context.atlas=new Uint8Array(pngHeader(1152,208));
+  context.track=(url,sha,signal)=>requests.push({url,sha,signal});
+  run(`savedPartResponse=async (url,mime,limit,signal,sha)=>{track(url,sha,signal);return atlas;};
+    pack={width:256,height:256,frames:6};`);
+  await run('equipSavedPart(entry)');
+  assert.equal(requests.length,0);
+  let release,started,closed=0;
+  const decoding=new Promise(resolve=>{started=resolve;});
+  context.createImageBitmap=()=>{started();return new Promise(resolve=>{release=resolve;});};
+  const work=run('pack={width:192,height:208,frames:6};equipSavedPart(entry)');
+  await decoding;
+  assert.equal(requests[0].url,'/api/independent-parts/'+context.entry.part_id+'/part.png');
+  assert.equal(requests[0].sha,context.entry.image_sha256);
+  run('clearIndependentParts()');
+  assert.equal(requests[0].signal.aborted,true);
+  release({width:1152,height:208,close(){closed++;}});
+  await work;
+  assert.equal(closed,1);
+  assert.equal(run('independentParts.length'),0);
+});
+
+test('equipment restore discards every staged bitmap on error or character switch',async()=>{
+  const {context,run,elements}=previewRuntime({clearTimeout(){},TextDecoder});
+  const part={part_id:'pt_'+'a'.repeat(32),layer_anchor:'face',x:-4,y:22,visible:false,image_sha256:'b'.repeat(64)};
+  const id='cp_'+'c'.repeat(32);
+  context.equipmentBytes=new TextEncoder().encode(JSON.stringify({schema:1,character_id:id,revision:5,
+    parts:[part,{...part,part_id:'pt_'+'d'.repeat(32)}]}));
+  context.id=id;
+  run(`pack={width:192,height:208,frames:6};registeredDemo={id,name:'Fixture',revision:1};
+    savedPartResponse=async ()=>equipmentBytes;independentParts.push({catalogId:'original'});`);
+  let calls=0,closed=0;
+  context.decode=async()=>{if(++calls===2)throw Error('corrupt PNG');return {close(){closed++;}};};
+  run('decodeSavedPart=decode');
+  await run("equipmentAction('restore')");
+  assert.equal(closed,1);
+  assert.equal(run('independentParts[0].catalogId'),'original');
+  assert.equal(run('registeredDemo.revision'),1);
+  assert.match(elements.get('equipmentStatus').textContent,/復元できません/);
+  let started,resume;
+  const decoding=new Promise(resolve=>{started=resolve;});
+  context.decode=()=>{started();return new Promise(resolve=>{resume=resolve;});};
+  run('decodeSavedPart=decode');
+  const pending=run("equipmentAction('restore')");
+  await decoding;
+  run(`cancelEquipmentRequest();registeredDemo={id:'cp_'+'e'.repeat(32),name:'Next',revision:0};`);
+  resume({close(){closed++;}});
+  await pending;
+  assert.equal(closed,2);
+  assert.equal(run('registeredDemo.revision'),0);
+  assert.equal(run('independentParts[0].catalogId'),'original');
+});
+
+test('late equipment save acknowledgements cannot change another character revision',async()=>{
+  const {context,run,elements}=previewRuntime({clearTimeout(){},TextDecoder});
+  const id='cp_'+'a'.repeat(32);
+  context.id=id;
+  context.equipmentBytes=new TextEncoder().encode(JSON.stringify({schema:1,character_id:id,revision:2,parts:[]}));
+  let response,request;
+  context.fetch=(url,options)=>{request={url,options};return new Promise(resolve=>{response=resolve;});};
+  run(`pack={width:192,height:208,frames:6};registeredDemo={id,name:'Original',revision:1};
+    boundedPartResponse=async()=>equipmentBytes;`);
+  const pending=run("equipmentAction('save')");
+  assert.equal(request.url,'/api/character-equipment/v1/'+id);
+  assert.equal(request.options.method,'POST');
+  assert.deepEqual(JSON.parse(request.options.body),{expected_revision:1,parts:[]});
+  run(`cancelEquipmentRequest();registeredDemo={id:'cp_'+'b'.repeat(32),name:'Next',revision:0};`);
+  assert.equal(request.options.signal.aborted,true);
+  response({});
+  await pending;
+  assert.equal(run('registeredDemo.revision'),0);
+  assert.equal(elements.get('equipmentStatus').textContent,'');
 });

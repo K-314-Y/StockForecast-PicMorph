@@ -23,6 +23,7 @@ const READ_ONLY_TOOLS = new Set([
   'get_my_character_sheet','get_my_companion','get_my_look','get_my_artwork',
   'get_my_creature_growth','list_my_trained_brains',
 ]);
+const FULL_TOOL_COUNT = 18;
 const API = 'http://127.0.0.1:8890';
 const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 65536;
@@ -46,6 +47,7 @@ const lookSchema=z.object({
 
 const partsHelper = fileURLToPath(new URL('./character_parts.py', import.meta.url));
 const segmentationHelper = fileURLToPath(new URL('./artwork_segment.py', import.meta.url));
+const catalogHelper = fileURLToPath(new URL('./independent_parts_catalog.py', import.meta.url));
 const generatedIdSchema = z.object({
   generated_id:z.string().length(35).regex(/^cp_[0-9a-f]{32}$/),
 }).strict();
@@ -74,18 +76,35 @@ const confirmSegmentationSchema=segmentationSchema.extend({
   expected_sha256:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const localWrite = {readOnlyHint:false,destructiveHint:false,openWorldHint:false};
+const candidateId=z.string().length(35).regex(/^sg_[0-9a-f]{32}$/);
+const partSha=z.string().length(64).regex(/^[0-9a-f]{64}$/);
+const partKind=z.string().max(64).regex(/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/);
+const layerAnchor=z.enum(['base','outfit','face','hair']);
+const rightsText=max=>z.string().max(max).regex(/^[^\p{C}]*$/u).refine(value=>value===value.trim());
+const partRights=z.object({
+  basis:z.enum(['original','license','permission']),
+  holder:rightsText(120).refine(value=>value.length>0),
+  reference:rightsText(240),
+}).strict().refine(rights=>rights.basis==='original' || rights.reference.length>0);
+const partRegistration=z.object({candidate_id:candidateId,expected_candidate_sha256:partSha,
+  kind_id:partKind,layer_anchor:layerAnchor,rights:partRights}).strict();
+const catalogEntry=z.object({part_id:z.string().length(35).regex(/^pt_[0-9a-f]{32}$/),
+  kind_id:partKind,layer_anchor:layerAnchor,source_id:generatedIdSchema.shape.generated_id,
+  candidate_id:candidateId,image_sha256:partSha}).strict();
+const catalogList=z.object({parts:z.array(catalogEntry).max(32)}).strict();
 let partsBusy = false;
+let catalogBusy = false;
 
-function runPartsHelper(operation,input,signal) {
+function runPartsHelper(operation,input,signal,helper=partsHelper) {
   return new Promise((resolve,reject)=>{
     let outcome;
-    const child=execFile('python3',['-B','-E',partsHelper,operation],{
+    const child=execFile('python3',['-B','-E',helper,operation],{
       env:{PATH:process.env.PATH ?? '/usr/bin:/bin',LANG:'C.UTF-8'},
       signal,timeout:10000,maxBuffer:16384,killSignal:'SIGKILL',
     },(error,stdout)=>{outcome={error,stdout};});
     // execFile may report cancellation before the child has exited and released the lock.
     child.once('close',()=>{
-      if(outcome.error) reject(outcome.error);
+      if(!outcome || outcome.error) reject(outcome?.error??Error('Local helper failed'));
       else resolve(outcome.stdout);
     });
     child.stdin.on('error',()=>child.kill('SIGKILL'));
@@ -112,6 +131,25 @@ async function characterParts(operation, input, signal, message) {
       : 'The local character parts helper failed or timed out.');
   } finally {
     partsBusy = false;
+  }
+}
+
+async function independentCatalog(operation,input,signal) {
+  if(process.platform!=='linux')return partsError('独立パーツカタログはLinux側で利用してください。');
+  if(catalogBusy)return partsError('独立パーツカタログを処理中です。');
+  catalogBusy=true;
+  try {
+    const {result,error}=JSON.parse(await runPartsHelper(operation,input,signal,catalogHelper));
+    if(typeof error==='string')return partsError(error.slice(0,180));
+    const listing=operation==='list';
+    const value=(listing?catalogList:catalogEntry).parse(result);
+    return {content:[{type:'text',text:listing ?
+      `整合性を確認した独立パーツは${value.parts.length}件です。` :
+      `独立パーツ ${value.part_id} をカタログに登録しました。`}],structuredContent:value};
+  } catch {
+    return partsError(signal?.aborted?'独立パーツの処理が中止されました。':'独立パーツを安全に処理できませんでした。');
+  } finally {
+    catalogBusy=false;
   }
 }
 
@@ -530,6 +568,18 @@ export function makeCompanionChatGptMcp({apiBase=API,readOnly=false,segmentRevie
     inputSchema:confirmSegmentationSchema,
     annotations:localWrite,
   },(args,extra)=>segmentWithImage(apiBase,segmentReviews,'save',args,extra?.signal));
+  registerTool('register_independent_part',{
+    title:'Creature Lab: 保存済み切り抜きを独立パーツとして登録',
+    description:'本人がこの切り抜き・種類ID・配置層・権利情報でのカタログ保存を明示的に承認した時だけ使用。save_segment_candidateのcandidate_idとpart_png_sha256を引き継いで、元画像と候補を再検証し新規パーツとしてローカル登録する。応答はメタデータのみ。',
+    inputSchema:partRegistration,
+    annotations:localWrite,
+  },(input,extra)=>independentCatalog('register',input,extra?.signal));
+  registerTool('list_independent_parts',{
+    title:'Creature Lab: 登録済み独立パーツの整合性と一覧を確認',
+    description:'独立パーツのmanifestとPNGの整合性をローカルで確認し、ID・種類・配置層・出典ID・SHA-256だけを返す。',
+    inputSchema:z.object({}).strict(),
+    annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
+  },(input,extra)=>independentCatalog('list',input,extra?.signal));
   registerTool('generate_character_parts',{
     title:'Creature Lab: オリジナルのキャラパーツを生成',
     description:'名前・髪色・服色・飾り・シードから、体と3表情の透過6コマPNG、GIF、manifestをローカル作成する。色は #RRGGBB。engine=original-template の手続き描画。',
@@ -578,7 +628,7 @@ export function createCompanionChatGptHttpServer({apiBase=API,readOnly=false}={}
     if(req.method==='GET' && url.pathname==='/health') {
       res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'})
         .end(JSON.stringify({ok:true,name:'creature-lab-companion',private:true,port,
-          tools:readOnly ? READ_ONLY_TOOLS.size : 16}));
+          tools:readOnly ? READ_ONLY_TOOLS.size : FULL_TOOL_COUNT}));
       return;
     }
     if(url.pathname!=='/mcp' || !['POST','GET','DELETE'].includes(req.method)) {

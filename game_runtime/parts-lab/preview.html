@@ -53,6 +53,17 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 
 .generated-import summary{font-weight:700;cursor:pointer;line-height:1.65;padding:3px}
 .generated-import summary:focus-visible{outline:3px solid #f9dc8b}
+.independent-parts{margin-block:18px 0;padding-block-start:16px;border-top:1px solid #66889d}
+.independent-parts h3{font-size:16px;margin:0 0 8px}
+.independent-parts p{margin:8px 0;overflow-wrap:anywhere}
+.independent-parts input[type=file]{min-width:0}
+.independent-parts ul{display:grid;gap:10px;list-style:none;padding:0;margin:12px 0 0}
+#savedPartsList li{min-width:0;overflow-wrap:anywhere}
+.independent-parts fieldset{min-inline-size:0;margin:0;padding:10px;border:1px solid #66889d;border-radius:10px;background:#12243a}
+.independent-parts legend{max-width:100%;padding:0 4px;overflow-wrap:anywhere;font-weight:700}
+.independent-visibility{display:flex;gap:7px;align-items:center;min-height:32px}
+.independent-parts .controls{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+.independent-parts [data-error=true]{color:#ffe0a8}
 
 @media(max-width:750px){.layout{grid-template-columns:minmax(0,1fr)}.preview-panel{order:-1}}
 @media(max-width:460px){.files,.controls{grid-template-columns:minmax(0,1fr)}}
@@ -145,6 +156,43 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <p id="frameInfo" class="metadata">未読込</p>
 <p class="hint">髪・服は体の上に重なります。「うれしい」「しんぱい」が未指定なら通常の顔を表示。体はそのままで表情だけ変わります。</p>
 <p class="hint">動きを減らす設定では最初の1コマだけを表示します。ここでの操作は予測AI・XP・コインには影響しません。</p>
+<section class="independent-parts" aria-labelledby="independentTitle">
+<h3 id="independentTitle" tabindex="-1">独立パーツのプレビュー</h3>
+<p><strong>未保存・ゲーム登録されない</strong>。試着や位置調整はこのタブ内で行います。</p>
+<p class="hint">登録済みキャラには、カタログパーツの装備設定だけを保存できます。PNG、キャラ画像、XP、コイン、予測やモデルは変更しません。</p>
+<button id="loadSavedParts" type="button">保存済みパーツ一覧を確認</button>
+<p id="savedPartsStatus" class="hint" role="status"></p>
+<ul id="savedPartsList" aria-label="保存済み独立パーツ"></ul>
+<label for="independentFiles">重ねる透過PNG / WebPを選ぶ
+<input id="independentFiles" type="file" accept="image/png,image/webp,.png,.webp" multiple disabled aria-describedby="independentHint independentAvailability"></label>
+<p id="independentHint" class="hint">192×208の1コマ、または1152×208の横6コマ。最大8個、各5MB以下。同じ層では後から追加したパーツが前に重なります。</p>
+<p id="independentAvailability" class="hint">先に1コマが192×208のキャラを読み込んでください。</p>
+<button id="cancelIndependent" type="button" hidden>パーツの読み込みを中止</button>
+<p id="independentStatus" role="status"></p>
+<ul id="independentList" aria-label="追加した独立パーツ"></ul>
+<template id="independentRow">
+ <li><fieldset>
+  <legend></legend>
+  <label class="independent-visibility"><input type="checkbox" name="visible" checked>表示する</label>
+  <label>重ねる位置<select name="anchor">
+   <option value="base">体の上（base）</option><option value="outfit">服の上（outfit）</option>
+   <option value="face">顔の上（face）</option><option value="hair" selected>髪の上（hair）</option>
+  </select></label>
+  <div class="controls">
+   <label>横 X（px）<input type="number" name="x" value="0" step="1" min="-24" max="24"></label>
+   <label>縦 Y（px）<input type="number" name="y" value="0" step="1" min="-24" max="24"></label>
+  </div>
+  <button type="button">取り外す</button>
+ </fieldset></li>
+</template>
+<div class="actions">
+<button id="saveEquipment" type="button" disabled aria-describedby="equipmentHint">このキャラの装備を保存する</button>
+<button id="restoreEquipment" type="button" disabled aria-describedby="equipmentHint">保存済み装備を復元する</button>
+</div>
+<p id="equipmentHint" class="hint">登録済みキャラを読み込むと利用できます。復元は手動です。</p>
+<p id="equipmentStatus" role="status"></p>
+<p class="hint">保存する装備が0件なら、保存済みの装備設定を空にします。カタログへのパーツ登録は非公開MCPで行います。</p>
+</section>
 </section>
 </div>
 </main>

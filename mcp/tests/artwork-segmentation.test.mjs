@@ -55,7 +55,7 @@ async function fixture(t,{readOnly=false,http=false}={}) {
  await mkdir(join(dir,'mcp'),{recursive:true});
  await mkdir(join(dir,'game_runtime'),{recursive:true});
  for(const name of ['character_parts.py','character_parts_render.py','import_png_character.py',
-     'artwork_segment.py','segment_onnx.py','companion-chatgpt.mjs']) {
+     'artwork_segment.py','segment_onnx.py','independent_parts.py','independent_parts_catalog.py','companion-chatgpt.mjs']) {
    await copyFile(new URL('../'+name,import.meta.url),join(dir,'mcp',name));
  }
  for(const name of ['artwork.mjs','image-validation.mjs'])
@@ -104,7 +104,7 @@ test('MCP previews color-mask PNG without creating files or altering the game',a
  const {dir,id,url,client}=await fixture(t);
  const initial=await(await fetch(url+'/api/active-character')).json();
  const tools=(await client.listTools()).tools;
- assert.equal(tools.length,16);
+ assert.equal(tools.length,18);
  for(const name of ['inspect_character_image_for_parts','preview_segment_candidate','save_segment_candidate'])
   assert(tools.some(x=>x.name===name),name);
  for(const name of ['inspect_character_image_for_parts','preview_segment_candidate'])
@@ -125,6 +125,54 @@ test('MCP previews color-mask PNG without creating files or altering the game',a
  assert.match(preview.structuredContent.source_sha256,/^[0-9a-f]{64}$/);
  await assert.rejects(readdir(join(dir,'local_state','segment_candidates')),{code:'ENOENT'});
  assert.deepEqual(await(await fetch(url+'/api/active-character')).json(),initial);
+});
+
+test('private HTTP MCP registers a saved cutout and lists only verified metadata',async t=>{
+ const {dir,id,url,client}=await fixture(t,{http:true});
+ const catalog=join(dir,'local_state','independent_parts');
+ const empty=await call(client,'list_independent_parts',{});
+ assert.deepEqual(empty.structuredContent,{parts:[]});
+ await assert.rejects(readdir(catalog),{code:'ENOENT'});
+ const originalUrl=url+'/api/character-demos/'+id+'/ready.png';
+ const original=Buffer.from(await(await fetch(originalUrl)).arrayBuffer());
+ const preview=await call(client,'preview_segment_candidate',args(id));
+ assert.equal(preview.isError,undefined,JSON.stringify(preview));
+ const saved=await call(client,'save_segment_candidate',{
+  ...args(id),expected_sha256:preview.structuredContent.source_sha256,
+ });
+ assert.equal(saved.isError,undefined,JSON.stringify(saved));
+ const candidate=join(dir,saved.structuredContent.local_directory);
+ const sourceFiles=await Promise.all(['part.png','manifest.json'].map(name=>readFile(join(candidate,name))));
+ const input={candidate_id:saved.structuredContent.candidate_id,
+  expected_candidate_sha256:saved.structuredContent.part_png_sha256,
+  kind_id:'creator.ribbon-green',layer_anchor:'hair',rights:{basis:'original',holder:'Fixture',reference:''}};
+ for(const changes of [{path:candidate},{candidate_id:'../bad'},{expected_candidate_sha256:'0'.repeat(64)},
+   {kind_id:'face'},{rights:{...input.rights,holder:'bad\ntext'}},{rights:{...input.rights,basis:'permission'}}]){
+  const rejected=await call(client,'register_independent_part',{...input,...changes});
+  assert.equal(rejected.isError,true,JSON.stringify(rejected));
+  assert(rejected.content.every(item=>item.type==='text'));
+ }
+ await assert.rejects(readdir(catalog),{code:'ENOENT'});
+ const registered=await call(client,'register_independent_part',input);
+ assert.equal(registered.isError,undefined,JSON.stringify(registered));
+ const part=registered.structuredContent;
+ assert.deepEqual(Object.keys(part).sort(),['candidate_id','image_sha256','kind_id','layer_anchor','part_id','source_id']);
+ assert.match(part.part_id,/^pt_[0-9a-f]{32}$/);
+ assert.match(part.image_sha256,/^[0-9a-f]{64}$/);
+ assert.equal(part.source_id,id);
+ assert.equal(part.candidate_id,input.candidate_id);
+ assert.equal(part.kind_id,input.kind_id);
+ assert.equal(part.layer_anchor,input.layer_anchor);
+ const list=await call(client,'list_independent_parts',{});
+ assert.deepEqual(list.structuredContent,{parts:[part]});
+ for(const response of [registered,list])assert(response.content.every(item=>item.type==='text'));
+ assert.deepEqual(await Promise.all(['part.png','manifest.json'].map(name=>readFile(join(candidate,name)))),sourceFiles);
+ assert.deepEqual(Buffer.from(await(await fetch(originalUrl)).arrayBuffer()),original);
+ assert.equal((await(await fetch(url+'/api/active-character')).json()).active_demo_id,null);
+ await writeFile(join(catalog,part.part_id,'part.png'),'corrupt');
+ const broken=await call(client,'list_independent_parts',{});
+ assert.equal(broken.isError,true);
+ assert.equal(broken.structuredContent,undefined);
 });
 
 async function helper(dir,payload,model) {
