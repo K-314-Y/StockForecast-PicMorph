@@ -69,6 +69,12 @@ async function mount(models=[],chatgpt=false) {
     const body=options?.body?JSON.parse(options.body):undefined;
     calls.push({path,body});
     if(path==='/api/model-shop')return {ok:true,json:async()=>({models:state.models})};
+    if(path==='/api/accessory-analysis/v1'){
+      assert.equal(options?.method??'GET','GET');
+      assert.equal(body,undefined);
+      const value=await state.accessory(options);
+      return {ok:!value?.error,json:async()=>value};
+    }
     if(path==='/api/chatgpt-session'){
       assert.equal(options?.method??'GET','GET');
       assert.equal(body,undefined);
@@ -2877,4 +2883,133 @@ test('sprint75: abandoning a blind run and pagehide in flight never unlock a tok
   await resolve();await running;
   await fire('quickForm','submit');
   assert.equal(get('quickScenarioOption').hidden,true);
+});
+
+const accessoriesApi='/api/accessory-analysis/v1';
+const practiceApi='/api/quick-practice';
+const accessoryCharacter='cp_'+'a'.repeat(32);
+const accessoryRule={kind_id:'fixture.pin',focus:'momentum',intensity:3};
+function accessoryMetadata() {
+  return {schema:1,revision:4,policies:[accessoryRule,{kind_id:'fixture.hidden',focus:'trend',intensity:1}],
+    kinds:[],stale_kinds:[],
+    equipped:{character_id:accessoryCharacter,active_revision:2,equipment_revision:6,visible_kinds:[accessoryRule.kind_id]}};
+}
+async function chooseAccessory({fire,get},checked=true) {
+  get('quickAccessoryOptIn').checked=checked;
+  await fire('quickAccessoryOptIn','change');
+}
+
+test('accessory option is native, inside review, and never fetched or sent without a check',async()=>{
+  assert.match(html,/<div id="quickReview"[^>]*>[\s\S]*?<input id="quickAccessoryOptIn" type="checkbox" aria-describedby="quickAccessoryStatus" autocomplete="off" disabled>/);
+  assert.match(html,/<p id="quickAccessoryStatus"[^>]*role="status"/);
+  const ui=await mount();
+  const {fire,get,calls}=ui;
+  assert.equal(get('quickAccessoryOptIn').checked,false);
+  assert.equal(get('quickAccessoryOptIn').disabled,true);
+  await fire('quickForm','submit');
+  assert.equal(get('quickAccessoryOptIn').disabled,false);
+  assert.equal(calls.some(call=>call.path===accessoriesApi),false);
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1),{path:practiceApi,body:{model_id:'self',amount:1000,leverage:1}});
+  assert.match(get('quickResult').children.at(-1).textContent,/通常の分析/);
+});
+
+test('explicit check reads metadata and sends only verified revisions once, with an applied outcome',async()=>{
+  const ui=await mount();
+  const {fire,get,calls,state,storageWrites}=ui;
+  state.accessory=async()=>accessoryMetadata();
+  get('generatedAvatarSelect').options=[{value:accessoryCharacter,textContent:'合成キャラ'}];
+  const practice=state.practice;
+  state.practice=async body=>({...await practice(body),model_id:'self',accessory_analysis:{
+    source:'saved_accessory_analysis',character_id:accessoryCharacter,policy_revision:4,applied_rules:[accessoryRule],
+    trained:false,real_market:false,persisted:false,weights_changed:false,
+  }});
+  await fire('quickForm','submit');
+  await chooseAccessory(ui);
+  assert.deepEqual(calls.at(-1),{path:accessoriesApi,body:undefined});
+  assert.match(get('quickAccessoryStatus').textContent,/合成キャラ.*fixture\.pin（直近の勢い・強度3）/);
+  assert.doesNotMatch(get('quickAccessoryStatus').textContent,/fixture\.hidden/);
+  assert.equal(get('quickRun').disabled,false);
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:1,
+    accessory_analysis:{character_id:accessoryCharacter,active_revision:2,equipment_revision:6,expected_revision:4}});
+  assert.match(get('quickResult').children.at(-1).textContent,/適用：fixture\.pin.*分析の重みは同じでした/);
+  assert.doesNotMatch(get('quickResult').children.at(-1).textContent,/改善|精度/);
+  assert.equal(get('quickAccessoryOptIn').checked,false);
+  assert.equal(storageWrites.length,0);
+  assert.ok(calls.every(call=>!call.path.endsWith('.png')));
+});
+
+test('absent, stale and malformed metadata locks run until the user explicitly unchecks',async()=>{
+  const ui=await mount();
+  const {fire,get,calls,state}=ui;
+  for(const [changes,expected] of [
+    [{equipped:{...accessoryMetadata().equipped,character_id:null}},/登録キャラを表示/],
+    [{policies:[]},/保存済みルールがありません/],
+    [{stale_kinds:['fixture.deleted']},/保存し直してください/],
+    [{revision:null},/確認できません/],
+    [{error:'unavailable'},/確認できません/],
+  ]) {
+    state.accessory=async()=>({...accessoryMetadata(),...changes});
+    await fire('quickForm','submit');
+    await chooseAccessory(ui);
+    assert.match(get('quickAccessoryStatus').textContent,expected);
+    assert.equal(get('quickRun').disabled,true);
+    await fire('quickRun');
+    assert.equal(calls.at(-1).path,accessoriesApi);
+    await chooseAccessory(ui,false);
+    assert.equal(get('quickRun').disabled,false);
+  }
+  await fire('quickRun');
+  assert.deepEqual(calls.at(-1).body,{model_id:'self',amount:1000,leverage:1});
+});
+
+test('slow metadata is aborted on model/edit/character switch and pagehide, and cannot arm a later run',async()=>{
+  const ui=await mount([{id:'demo_trend',name:'Fixture',owned:true}]);
+  const {fire,get,calls,state,pagehide}=ui;
+  for(const invalidate of [
+    async()=>{get('quickModel').value='demo_trend';await fire('quickModel','change');},
+    ()=>fire('quickEdit'),
+    ()=>fire('useGeneratedAvatar'),
+    pagehide,
+  ]) {
+    get('quickModel').value='self';
+    await fire('quickForm','submit');
+    let release,signal;
+    state.accessory=options=>{signal=options.signal;return new Promise(resolve=>{release=resolve;});};
+    const waiting=chooseAccessory(ui);
+    assert.equal(get('quickRun').disabled,true);
+    await fire('quickRun');
+    await invalidate();
+    assert.equal(signal.aborted,true);
+    release(accessoryMetadata());
+    await waiting;
+    assert.doesNotMatch(get('quickAccessoryStatus').textContent,/fixture\.pin/);
+    assert.equal(calls.some(call=>call.path===practiceApi),false);
+  }
+  get('quickModel').value='demo_trend';
+  await fire('quickForm','submit');
+  assert.equal(get('quickAccessoryOptIn').disabled,true);
+  const count=calls.length;
+  await chooseAccessory(ui);
+  assert.equal(calls.length,count);
+});
+
+test('conflict or unconfirmed accessory outcome cannot silently retry or reveal baseline',async()=>{
+  const ui=await mount();
+  const {fire,get,calls,state}=ui;
+  state.accessory=async()=>accessoryMetadata();
+  const practice=state.practice;
+  for(const reply of [async()=>({error:'登録キャラ・装備・分析設定を再確認してください'}),practice]) {
+    state.practice=reply;
+    await fire('quickForm','submit');
+    await chooseAccessory(ui);
+    const count=calls.length;
+    await fire('quickRun');
+    assert.equal(calls.length,count+1);
+    assert.ok(calls.at(-1).body.accessory_analysis);
+    assert.equal(get('quickResult').hidden,true);
+    assert.match(get('quickStatus').textContent,/試算できませんでした/);
+    assert.equal(get('quickAccessoryOptIn').checked,false);
+  }
 });

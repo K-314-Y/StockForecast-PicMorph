@@ -25,7 +25,7 @@ import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-c
 import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
 import {CHARACTER_EQUIPMENT_API,MAX_EQUIPMENT_BYTES,createCharacterEquipmentStore,
   equipmentRecord,validateEquipmentSave} from './character-equipment.mjs';
-import {analysisCatalog,deriveAccessoryAnalysis,equippedAnalysisKinds,stalePolicyKinds} from './accessory-analysis.mjs';
+import {analysisCatalog,deriveAccessoryAnalysis,equippedAnalysisKinds,stalePolicyKinds,validateAnalysisContext} from './accessory-analysis.mjs';
 import {ACCESSORY_ANALYSIS_API,MAX_ANALYSIS_REQUEST,analysisRecord,createAccessoryAnalysisStore,
   validateAnalysisSave} from './accessory-analysis-store.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
@@ -339,13 +339,30 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
-  async function readAnalysisEquipment(catalog,signal) {
+  const analysisChanged=()=>failure('登録キャラ・装備・分析設定を再確認してください。設定が更新されました',409);
+  function checkAnalysisContext(expected,equipped,record) {
+    if(record.revision!==expected.expected_revision ||
+       ['character_id','active_revision','equipment_revision'].some(key=>equipped[key]!==expected[key]))throw analysisChanged();
+  }
+  async function readAnalysisEquipment(catalog,signal,expected) {
     const {active_demo_id:id,revision:active_revision}=await activeCharacterStore.read();
+    if(expected && (id!==expected.character_id || active_revision!==expected.active_revision))throw analysisChanged();
     if(id===null)return {character_id:null,active_revision,equipment_revision:0,parts:[],visible_kinds:[]};
     if(!(await isRegisteredDemo(id)))throw failure('表示中の登録キャラを確認できません',422);
     const record=equipmentRecord(await equipmentStore.read(id,signal),id);
     return {character_id:id,active_revision,equipment_revision:record.revision,parts:record.parts,
       visible_kinds:equippedAnalysisKinds(record.parts,catalog)};
+  }
+  async function readPracticeAnalysis(expected,baseline) {
+    const [listing,saved]=await Promise.all([independentPartReader.list(),accessoryAnalysisStore.read()]);
+    const record=analysisRecord(saved);
+    if(record.revision!==expected.expected_revision)throw analysisChanged();
+    const catalog=analysisCatalog(listing.parts);
+    const equipped=await readAnalysisEquipment(catalog,undefined,expected);
+    checkAnalysisContext(expected,equipped,record);
+    const derived=deriveAccessoryAnalysis(baseline,record.policies,equipped.parts,catalog);
+    if(!derived.applied.length)throw failure('表示中の装備に使える保存済み分析設定がありません。装備と分析設定を確認してください',422);
+    return derived;
   }
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
@@ -421,11 +438,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           finally {clearTimeout(deadline);}
         }
         const changes=save ? validateAnalysisSave(input) : null;
-        if(compare && (!input || Object.keys(input).sort().join('|')!=='active_revision|character_id|equipment_revision|expected_revision' ||
-           typeof input.character_id!=='string' || input.character_id.length!==35 || !/^cp_[0-9a-f]{32}$/.test(input.character_id) ||
-           ![input.active_revision,input.equipment_revision,input.expected_revision].every(n=>Number.isSafeInteger(n)&&n>=0))) {
-          throw failure('比較対象と現在のrevisionを指定してください',400);
-        }
+        if(compare)validateAnalysisContext(input);
         const catalog=analysisCatalog((await independentPartReader.list(signal)).parts);
         if(save) {
           if(stalePolicyKinds(changes.policies,catalog).length)throw failure('カタログに存在しない種類は保存できません',422);
@@ -442,10 +455,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             stale_kinds:stalePolicyKinds(record.policies,catalog)});
           return;
         }
-        const stale=()=>failure('分析設定または装備が更新されました。再読込してください',409);
-        const same=(context,recipe)=>recipe.revision===input.expected_revision &&
-          ['character_id','active_revision','equipment_revision'].every(key=>context[key]===input[key]);
-        if(!same(equipped,record))throw stale();
+        checkAnalysisContext(input,equipped,record);
         if(stalePolicyKinds(record.policies,catalog).length) {
           throw failure('カタログに存在しない種類の分析設定があります。設定を保存し直してください',422);
         }
@@ -457,7 +467,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const result=await predict({base_model:original.base_model,models:{mine:candidate,owl:baseline,turtle:baseline}});
         if(res.destroyed)return;
         const [current,currentEquipment]=await Promise.all([accessoryAnalysisStore.read(signal),readAnalysisEquipment(catalog,signal)]);
-        if(!same(currentEquipment,analysisRecord(current)))throw stale();
+        checkAnalysisContext(input,currentEquipment,analysisRecord(current));
         const report=compareLabPlan(result,baseline,candidate);
         if(!res.destroyed)return json(res,200,{...report,scope:'ACCESSORY_RULES_FIXED_SYNTHETIC_12',trained:false,
           provenance:{...equipped,policy_revision:record.revision,applied_rules:applied},
@@ -943,8 +953,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       if (path === '/api/artwork') return json(res, 200, await artworkStore.save(payload));
       const names = Object.keys(payload).sort().join('|');
       if (path === '/api/quick-practice') {
-        if (!['amount|leverage|model_id','amount|model_id',
-              'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names) ||
+        const hasAnalysis=Object.hasOwn(payload,'accessory_analysis');
+        const invalidNames=hasAnalysis ?
+          Object.keys(payload).some(key=>!['accessory_analysis','amount','leverage','model_id','scenario_token'].includes(key)) :
+          !['amount|leverage|model_id','amount|model_id',
+            'amount|leverage|model_id|scenario_token','amount|model_id|scenario_token'].includes(names);
+        if (invalidNames ||
             (Object.hasOwn(payload,'scenario_token') &&
               (typeof payload.scenario_token !== 'string' || payload.scenario_token.length !== 19 ||
                !/^v1_[0-9a-f]{16}$/.test(payload.scenario_token))) ||
@@ -958,22 +972,37 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
             !/^(self|demo_[a-z_]{1,40})$/.test(payload.model_id)) {
           throw failure('AI、1〜10,000の整数コイン額、1〜25の整数倍率を指定してください',400);
         }
+        let context;
+        if(hasAnalysis) {
+          if(req.headers.origin!==`http://${req.headers.host}`)throw failure('ローカルの同一画面からのみ利用できます',403);
+          if(req.url!==path || payload.model_id!=='self')throw failure('装備の分析は自分のAIでのみ選べます',400);
+          context=validateAnalysisContext(payload.accessory_analysis);
+          if(process.platform!=='linux' || !accessoryAnalysisStore || !independentPartReader || !equipmentStore)
+            throw failure('この環境では装備の分析を使えません',422);
+        }
         const leverage = payload.leverage ?? 1;
         const snapshot = await loadSnapshot();
         const companion = await companionStore.read();
         const originals = modelPlanFromSnapshot(snapshot,null);
-        const mine = payload.model_id === 'self' ?
+        const baseline = payload.model_id === 'self' ?
           applyCompanion(originals,companion).models.mine :
           await modelShopStore.licensedModel(payload.model_id);
+        const analysis=context ? await readPracticeAnalysis(context,baseline) : undefined;
         const scenarioKind = Object.hasOwn(payload,'scenario_token') ? 'replay' : 'new';
         const scenarioToken = payload.scenario_token ?? 'v1_'+randomBytes(8).toString('hex');
-        const plan = await predict({...originals,models:{...originals.models,mine},
+        // The bridge hashes base_model for provenance. Only the mine slot uses the rule.
+        const plan = await predict({...originals,...(analysis ? {base_model:baseline} : {}),
+          models:{...originals.models,mine:analysis?.candidate ?? baseline},
           scenario_token:scenarioToken});
         const after = await loadSnapshot();
         const currentCompanion = await companionStore.read();
         if(REVISIONS.some(key=>snapshot[key]!==after[key]) ||
            companion.revision !== currentCompanion.revision) {
           throw failure('練習中にモデルが変更されました。再度お試しください',409);
+        }
+        if(analysis) {
+          const current=await readPracticeAnalysis(context,baseline);
+          if(JSON.stringify(current.applied)!==JSON.stringify(analysis.applied))throw analysisChanged();
         }
         // Unallocated coins remain in cash; only the entered amount is simulated.
         // This practice does not mutate either shop currency or XP.
@@ -986,6 +1015,21 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const normal = settleLeveragedPractice({
           equityPath:result.raw_equity_path,amount:payload.amount,leverage:1,
         });
+        let accessorySummary;
+        if(analysis) {
+          const applied=result.characters.mine;
+          if(result.steps!==12 || Object.keys(analysis.candidate.plugin_weights)
+            .some(key=>applied.plugin_weights[key]!==analysis.candidate.plugin_weights[key])) {
+            throw failure('装備の分析を反映した練習結果を確認できません',503);
+          }
+          accessorySummary={source:'saved_accessory_analysis',character_id:context.character_id,
+            policy_revision:context.expected_revision,applied_rules:analysis.applied,
+            baseline_weights:baseline.plugin_weights,candidate_weights:applied.plugin_weights,
+            baseline_sha256:result.model_sha256,candidate_sha256:applied.effective_sha256,
+            weights_changed:Object.keys(baseline.plugin_weights).some(key=>baseline.plugin_weights[key]!==applied.plugin_weights[key]),
+            effective_hash_changed:result.model_sha256!==applied.effective_sha256,
+            trained:false,real_market:false,persisted:false};
+        }
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
           scenario_token:scenarioToken, scenario_kind:scenarioKind,
@@ -1016,6 +1060,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           real_market:false, persisted:false, order_placed:false,
           xp_awarded:false,
           notice:'統計的に架空の価格です。現実的な市場再現やバックテストではありません。架空相場の終値ベースで損益倍率を試算しています。資金が0になれば途中終了し復活しません。実際の強制決済とは異なり、所持コインも注文も変更しません。',
+          ...(accessorySummary ? {accessory_analysis:accessorySummary} : {}),
         });
       }
       if (path === '/api/model-shop/buy') {

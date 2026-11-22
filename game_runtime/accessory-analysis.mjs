@@ -1,4 +1,4 @@
-/** Explicit kind-to-indicator rules for the fixed synthetic comparison. */
+/** Explicit kind-to-indicator rules for synthetic comparison and practice. */
 import {INDICATORS,validateLabModel} from './model-lab.mjs';
 import {validateEquipmentParts} from './character-equipment.mjs';
 
@@ -7,6 +7,15 @@ const validKind=id=>typeof id==='string' && id.length<=64 && id===id.trim() && K
 const keys=value=>value && typeof value==='object' && !Array.isArray(value)?Object.keys(value).sort().join('|'):'';
 const fail=(message,status)=>Object.assign(Error(message),{status});
 const compareKind=(a,b)=>a.kind_id<b.kind_id?-1:a.kind_id>b.kind_id?1:0;
+
+export function validateAnalysisContext(input) {
+  if(keys(input)!=='active_revision|character_id|equipment_revision|expected_revision' ||
+     typeof input.character_id!=='string' || input.character_id.length!==35 || !/^cp_[a-f0-9]{32}$/.test(input.character_id) ||
+     ![input.active_revision,input.equipment_revision,input.expected_revision].every(n=>Number.isSafeInteger(n)&&n>=0)) {
+    throw fail('登録キャラと装備・分析設定の現在の版数を指定してください',400);
+  }
+  return input;
+}
 
 export function validateAnalysisPolicies(value) {
   if(!Array.isArray(value) || value.length>32)throw fail('分析設定は32種類までです',400);

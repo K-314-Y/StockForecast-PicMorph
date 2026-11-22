@@ -280,3 +280,141 @@ test('accessory HTTP requires same origin and strict revisions, catalog and equi
   assert.equal((await api.post({expected_revision:1,policies:[]})).status,200);
   assert.equal(calls.length,0);
 });
+
+const QUICK='/api/quick-practice';
+const practiceInput={amount:1800,leverage:3,model_id:'self',scenario_token:'v1_0000000000000005'};
+async function practiceContext(api,policies=[pin]) {
+  const saved=await api.post({expected_revision:0,policies});
+  assert.equal(saved.status,200);
+  return compareInput(await api.get().then(response=>response.json()));
+}
+
+test('quick practice applies only the selected rule to one real Python run on the same scenario',async t=>{
+  const {start,cp,part,local,calls,snapshot,baselineSnapshot}=await fixture(t);
+  const api=await start();
+  const context=await practiceContext(api);
+  const files=[
+    join(local,'accessory_analysis','analysis.json'),
+    join(local,'character_equipment',cp+'.json'),
+    join(local,'independent_parts',part.part_id,'part.png'),
+  ];
+  const before=await Promise.all(files.map(path=>readFile(path)));
+  const response=await api.post(practiceInput,QUICK);
+  assert.equal(response.status,200);
+  const baselineBody=await response.text();
+  const regular=JSON.parse(baselineBody);
+  assert.equal(Object.hasOwn(regular,'accessory_analysis'),false);
+
+  const chosen=await api.post({...practiceInput,accessory_analysis:context},QUICK);
+  const value=await chosen.json();
+  assert.equal(chosen.status,200,JSON.stringify(value));
+  assert.equal(calls.length,2,'one Python call per practice');
+  assert.deepEqual(calls[0].models.mine,base);
+  assert.deepEqual(calls[1],{...calls[0],models:{...calls[0].models,mine:{...base,plugin_weights:target}}});
+  assert.deepEqual(value.daily_synthetic_prices,regular.daily_synthetic_prices);
+  for(const field of ['scenario_token','scenario_kind','invested_coins','leverage','real_market','persisted','order_placed','xp_awarded'])
+    assert.equal(value[field],regular[field]);
+  assert.deepEqual(value.daily_ai_signals.flatMap((signal,i)=>signal===regular.daily_ai_signals[i]?[]:[i+1]),[2]);
+  const summary=value.accessory_analysis;
+  assert.deepEqual(summary,{
+    source:'saved_accessory_analysis',character_id:cp,policy_revision:1,applied_rules:[pin],
+    baseline_weights:base.plugin_weights,candidate_weights:target,
+    baseline_sha256:'45b6170419160970da384cc178498cc56264b3dfbca3583da69805bf3f335067',
+    candidate_sha256:'c66f30330a67480575e143c2c946255a491a605cc64df8e62cfdba49ad7eca45',
+    weights_changed:true,effective_hash_changed:true,trained:false,real_market:false,persisted:false,
+  });
+  const defaultOnly=await start({
+    independentPartReader:{list(){assert.fail('Default practice must not read the catalog');}},
+    accessoryAnalysisStore:{read(){assert.fail('Default practice must not read policy');}},
+    equipmentStore:{read(){assert.fail('Default practice must not read equipment');}},
+    activeCharacterStore:{read(){assert.fail('Default practice must not read the character');}},
+  });
+  const noOrigin=await fetch(defaultOnly.origin+QUICK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(practiceInput)});
+  assert.equal(noOrigin.status,200);
+  assert.equal(await noOrigin.text(),baselineBody,'ordinary response and legacy origin behavior remain exact');
+  assert.deepEqual(await Promise.all(files.map(path=>readFile(path))),before);
+  assert.equal(JSON.stringify(snapshot),baselineSnapshot);
+  assert.deepEqual((await readdir(local)).sort(),['accessory_analysis','character_equipment','character_parts','independent_parts']);
+  t.diagnostic('Real Python on a fixed replay token: day 2 '+regular.daily_ai_signals[1]+' → '+value.daily_ai_signals[1]);
+});
+
+test('opt-in refuses forged origins, arbitrary models, unapplied rules, stale revisions and invalid equipment',async t=>{
+  const {start,cp,part,local,calls,equipment}=await fixture(t);
+  const api=await start();
+  const context=compareInput(await api.get().then(response=>response.json()));
+  const send=(accessory_analysis,overrides={},headers={})=>api.post({...practiceInput,accessory_analysis,...overrides},QUICK,headers);
+  const noOrigin=await fetch(api.origin+QUICK,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...practiceInput,accessory_analysis:context})});
+  assert.equal(noOrigin.status,403);
+  for(const headers of [{Origin:'https://outside.invalid'},{Origin:api.origin.replace('127.0.0.1','localhost')},{'Sec-Fetch-Site':'cross-site'}])
+    assert.equal((await send(context,{},headers)).status,403);
+  for(const bad of [null,{},[context],{...context,weights:base.plugin_weights},{...context,active_revision:4.5},
+    {...context,expected_revision:false},{...context,equipment_revision:-1},{...context,character_id:'../file'}]) {
+    assert.equal((await send(bad)).status,400);
+  }
+  assert.equal((await send(context,{model_id:'demo_trend'})).status,400);
+  assert.equal((await send(context,{'leverage|scenario_token':'extra'})).status,400);
+  assert.equal((await send(context)).status,422,'empty saved rules must not fall back to baseline');
+  const saved=await practiceContext(api);
+  for(const mismatched of [{character_id:'cp_'+'f'.repeat(32)},{active_revision:0},{expected_revision:0},{equipment_revision:0}])
+    assert.equal((await send({...saved,...mismatched})).status,409);
+  await equipment.save(cp,{expected_revision:1,parts:[{...part,visible:false}]});
+  assert.equal((await send({...saved,equipment_revision:2})).status,422);
+  await equipment.save(cp,{expected_revision:2,parts:[{...part,image_sha256:'0'.repeat(64)}]});
+  assert.equal((await send({...saved,equipment_revision:3})).status,422);
+  await equipment.save(cp,{expected_revision:3,parts:[]});
+  await rm(join(local,'independent_parts',part.part_id),{recursive:true});
+  assert.equal((await send({...saved,equipment_revision:4})).status,422);
+  assert.equal(calls.length,0);
+});
+
+test('opt-in discards a computed run if the active character, records or model change during prediction',async t=>{
+  const {start,cp,part,active,companion,snapshot,equipment}=await fixture(t);
+  const setup=await start();
+  let context=await practiceContext(setup);
+  let during=()=>{};
+  let calls=0;
+  const api=await start({predict:async plan=>{
+    calls++;
+    const result=await pythonPredict(plan);
+    await during();
+    return result;
+  }});
+  const run=()=>api.post({...practiceInput,accessory_analysis:context},QUICK);
+  during=()=>{active.active_demo_id='cp_'+'b'.repeat(32);active.revision++;};
+  assert.equal((await run()).status,409);
+  active.active_demo_id=cp;
+  active.revision++;
+  context={...context,active_revision:active.revision};
+  during=()=>equipment.save(cp,{expected_revision:1,parts:[{...part,x:1}]});
+  assert.equal((await run()).status,409);
+  context.equipment_revision++;
+  during=async()=>assert.equal((await setup.post({expected_revision:1,policies:[{...pin,intensity:2}]})).status,200);
+  assert.equal((await run()).status,409);
+  context.expected_revision++;
+  // Inject a fresh snapshot per read, as in the production loader.
+  const modelApi=await start({
+    loadSnapshot:async()=>({...snapshot}),
+    predict:async plan=>{calls++;const result=await pythonPredict(plan);await during();return result;},
+  });
+  during=()=>{snapshot.source_revision++;};
+  assert.equal((await modelApi.post({...practiceInput,accessory_analysis:context},QUICK)).status,409);
+  during=()=>{companion.revision++;};
+  assert.equal((await run()).status,409);
+  assert.equal(calls,5);
+});
+
+test('valid rules with identical effective weights report the unchanged model honestly',async t=>{
+  const {start,companion,calls}=await fixture(t);
+  Object.assign(companion,{created:true,revision:1,companion:{name:'Fixture',approach:'momentum',risk_percent:35}});
+  const api=await start();
+  const context=await practiceContext(api);
+  const response=await api.post({...practiceInput,accessory_analysis:context},QUICK);
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(body.accessory_analysis.weights_changed,false);
+  assert.equal(body.accessory_analysis.effective_hash_changed,false);
+  assert.equal(body.accessory_analysis.baseline_sha256,body.accessory_analysis.candidate_sha256);
+  assert.deepEqual(calls[0].base_model,calls[0].models.mine,'hash baseline must include the saved companion');
+  assert.deepEqual(body.accessory_analysis.applied_rules,[pin]);
+});

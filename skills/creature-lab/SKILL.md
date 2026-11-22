@@ -86,11 +86,14 @@ private local Creature Lab Node game. It has no real-trading capability.
    models unchanged.
 8. On Linux, the appearance studio links to the accessory analysis experiment.
    Ask the user to choose and explicitly save a focus and intensity per verified
-   catalog kind. Only the explicit comparison applies these rules to the current
-   registered character's visible saved equipment. It uses the usual Python
-   predictor with the same fixed synthetic 12 days for both variants. Report
-   weight, hash, and signal differences accurately. This recipe does not train
-   or activate a model and never changes ordinary forecasts or XP.
+   catalog kind. These rules apply to the current registered character's visible
+   saved equipment in the explicit comparison or in a single Linux easy-mode
+   practice when the user checks the accessory option on the confirmation panel.
+   The option starts unchecked on every run and is available only for 自分のAI.
+   If the character, equipment or rules change, confirm the settings again.
+   The usual Python predictor uses synthetic data in both flows. Report weight,
+   hash and signal differences accurately. Rules adjust weights without model
+   training and never change ordinary forecasts or XP.
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

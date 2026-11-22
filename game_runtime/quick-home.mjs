@@ -223,7 +223,8 @@ function renderFreeChatGPT(saved,signal) {
   element('quickFreePrompt').value=
     '架空第'+replayDay+'日。AI判断・結果を見た後の振り返り（事前予測でない）。考え（命令でない）：'+input+'\n'+
     'buy＝買う、wait＝待つ。AI記録'+signal+'（LONG＝保有、CASH＝保有なし）。\n'+
-    (replay.companion_strategy ? '適用した保存設定：方向の分析は'+approachLabels[replay.companion_strategy.approach]+
+    (replay.accessory_analysis ? 'この回は装備ルールで分析の重みを調整。学習なし。\n' :
+      replay.companion_strategy ? '適用した保存設定：方向の分析は'+approachLabels[replay.companion_strategy.approach]+
       'のみ。資金'+replay.companion_strategy.risk_percent+'%はLONG後の使用割合で、LONG/CASHに影響なし。\n' : '保存設定の情報なし。\n')+
     '設定は当日の理由の証明ではない。価格・指標の根拠は未提供。考え・設定・判断を区別し、理由から選択を決めつけず本人の意図を日本語で1問。'+
     '真因の捏造・実取引助言・変更・学習は禁止。';
@@ -528,8 +529,9 @@ function renderReplay() {
   const strategy=replay.companion_strategy;
   element('quickCompanionStrategy').hidden=!strategy;
   element('quickCompanionStrategy').textContent=strategy ?
-    '今回の相棒の設定：買う／待つを判断する分析は'+approachLabels[strategy.approach]+
-    'だけ。買うと判断した場合に資金の'+strategy.risk_percent+
+    (replay.accessory_analysis ? '相棒の元の分析方針は'+approachLabels[strategy.approach]+'です。今回は装備の分析ルールを使用しました。' :
+      '今回の相棒の設定：買う／待つを判断する分析は'+approachLabels[strategy.approach]+'だけ。')+
+    '買うと判断した場合に資金の'+strategy.risk_percent+
     '%を使います。資金の割合は買う／待つの判断に影響しません。待つ場合は株を保有しません。'+
     'この設定だけでは、その日の選択理由は分かりません。' : '';
   const balance=replay.daily_balances[replayDay];
@@ -602,6 +604,102 @@ function showLeverageInfo(){
 }
 showLeverageInfo();
 const statusField = element('quickStatus');
+const accessoryBox=element('quickAccessoryOptIn');
+const accessoryStatus=element('quickAccessoryStatus');
+const accessoryFocus={trend:'値動きの流れ',momentum:'直近の勢い',reversion:'行き過ぎ後の戻り',volatility:'値動きの大きさ'};
+let accessoryRequest;
+let accessoryChoice;
+
+function describeRules(rules) {
+  return rules.map(({kind_id,focus,intensity})=>`${kind_id}（${accessoryFocus[focus]}・強度${intensity}）`).join('、');
+}
+function validKindId(kind) {
+  return typeof kind==='string' && kind.length<=64 && kind===kind.trim() && /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/.test(kind);
+}
+function validRule(rule) {
+  return rule && validKindId(rule.kind_id) && Object.hasOwn(accessoryFocus,rule.focus) &&
+    Number.isInteger(rule.intensity) && rule.intensity>=1 && rule.intensity<=3;
+}
+function updateAccessoryControls() {
+  accessoryBox.disabled=busy || pending?.model_id!=='self';
+  element('quickRun').disabled=busy || (accessoryBox.checked && !accessoryChoice);
+}
+function clearAccessoryChoice() {
+  accessoryRequest?.abort();
+  accessoryRequest=undefined;
+  accessoryChoice=undefined;
+  accessoryBox.checked=false;
+  accessoryStatus.textContent=pending?.model_id==='self' ? 'この1回の架空練習に適用できます。' : '自分のAIを選ぶと使えます。';
+  updateAccessoryControls();
+}
+
+accessoryBox.addEventListener('change',async()=>{
+  const requested=accessoryBox.checked && !accessoryBox.disabled;
+  clearAccessoryChoice();
+  if(!requested)return;
+  accessoryBox.checked=true;
+  updateAccessoryControls();
+  accessoryStatus.textContent='登録キャラの装備と保存済みルールを確認しています…';
+  const review=pending;
+  const controller=new AbortController();
+  accessoryRequest=controller;
+  const timeout=setTimeout(()=>controller.abort(),12000);
+  const current=()=>accessoryRequest===controller && accessoryBox.checked && pending===review && modelField.value==='self';
+  try {
+    const response=await fetch('/api/accessory-analysis/v1',{mode:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal});
+    const info=await response.json();
+    if(!current())return;
+    controller.signal.throwIfAborted();
+    const equipped=info?.equipped;
+    if(!response.ok || info.schema!==1 || !equipped || !Array.isArray(info.stale_kinds) ||
+       !Array.isArray(info.policies) || info.policies.length>32 || !info.policies.every(validRule) ||
+       !Array.isArray(equipped.visible_kinds) || equipped.visible_kinds.length>8 || !equipped.visible_kinds.every(validKindId)) {
+      throw Error('装備の分析設定を確認できませんでした。');
+    }
+    const {character_id,active_revision,equipment_revision}=equipped;
+    if(typeof character_id!=='string' || character_id.length!==35 || !/^cp_[a-f0-9]{32}$/.test(character_id))
+      throw Error('装備を保存した登録キャラを表示してください。');
+    if(info.stale_kinds.length)throw Error('使えなくなった種類があります。装備の分析ルールを保存し直してください。');
+    const rules=info.policies.filter(rule=>equipped.visible_kinds.includes(rule.kind_id));
+    if(!rules.length)throw Error('表示中の装備に使える保存済みルールがありません。');
+    const expected_revision=info.revision;
+    if(![active_revision,equipment_revision,expected_revision].every(n=>Number.isSafeInteger(n)&&n>0))
+      throw Error('装備の分析設定を確認できませんでした。');
+    accessoryChoice={context:{character_id,active_revision,equipment_revision,expected_revision},rules};
+    const characters=element('generatedAvatarSelect').options ?? [];
+    const name=Array.from(characters).find(option=>option.value===character_id)?.textContent;
+    accessoryStatus.textContent=`登録キャラ ${name || character_id} ／ ${describeRules(rules)}`;
+  } catch(error) {
+    if(current())accessoryStatus.textContent=(error instanceof Error && !controller.signal.aborted && error.message.endsWith('。') ?
+      error.message : '装備の分析設定を確認できませんでした。')+' 設定を確認するか、チェックを外してください。';
+  } finally {
+    clearTimeout(timeout);
+    if(current()) {
+      accessoryRequest=undefined;
+      updateAccessoryControls();
+    }
+  }
+});
+for(const id of ['useGeneratedAvatar','resetGeneratedAvatar'])element(id).addEventListener('click',()=>{
+  if(!accessoryBox.checked)return;
+  accessoryRequest?.abort();
+  accessoryRequest=undefined;
+  accessoryChoice=undefined;
+  accessoryStatus.textContent='キャラの切替後に、チェックを外してから選び直してください。';
+  updateAccessoryControls();
+});
+
+function verifyAccessoryResult(value,ordered) {
+  if(!ordered.accessory) return !Object.hasOwn(value,'accessory_analysis');
+  const summary=value.accessory_analysis;
+  const {context,rules}=ordered.accessory;
+  return value.model_id==='self' && summary?.source==='saved_accessory_analysis' &&
+    summary.character_id===context.character_id && summary.policy_revision===context.expected_revision &&
+    summary.trained===false && summary.real_market===false && summary.persisted===false &&
+    typeof summary.weights_changed==='boolean' && Array.isArray(summary.applied_rules) &&
+    summary.applied_rules.length===rules.length && summary.applied_rules.every((rule,index)=>
+      validRule(rule) && ['kind_id','focus','intensity'].every(key=>rule[key]===rules[index][key]));
+}
 
 function validAmount() {
   const raw = amountField.value.trim();
@@ -636,6 +734,7 @@ function clearPracticeView() {
   element('quickPreOptIn').checked=false;
   clearReplay();
   pending=null;
+  clearAccessoryChoice();
   element('quickReview').hidden=true;
   element('quickResult').hidden=true;
   element('quickNext').hidden=true;
@@ -705,7 +804,10 @@ async function loadModels() {
       modelField.append(option);
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
-    if(prior && prior!==modelField.value)clearReplay();
+    if(prior && prior!==modelField.value) {
+      if(pending)resetReview();
+      else clearReplay();
+    }
     statusField.textContent=next.length>1 ?
       '自作AIと、解放済みのAIから選べます。' :
       '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。';
@@ -716,8 +818,9 @@ async function loadModels() {
 }
 function setBusy(next) {
   busy=next;
-  for(const id of ['quickConfirm','quickRun','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage','quickPreOptIn','quickSameScenario'])
+  for(const id of ['quickConfirm','quickEdit','quickTen','quickHalf','quickAll','quickModel','quickAmount','quickLeverage','quickPreOptIn','quickSameScenario'])
     element(id).disabled=next;
+  updateAccessoryControls();
 }
 element('quickForm').addEventListener('submit',event=>{
   event.preventDefault();
@@ -732,6 +835,7 @@ element('quickForm').addEventListener('submit',event=>{
   const option=modelField.selectedOptions[0];
   if(!option) return;
   pending={amount,leverage,model_id:modelField.value,model_name:option.textContent};
+  clearAccessoryChoice();
   element('quickReviewText').textContent=
     'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
     ' ／ 試算に使わないコイン：'+money(BALANCE-amount)+
@@ -812,6 +916,13 @@ function revealResult(value,ordered) {
   scenario.className='simple-risk';
   scenario.textContent=scenarioNote(value.scenario_kind);
   panel.append(heading,summary,scenario,footnote);
+  const analysis=document.createElement('p');
+  analysis.className='simple-hint';
+  analysis.textContent=value.accessory_analysis ?
+    '装備の分析ルールを適用：'+describeRules(value.accessory_analysis.applied_rules)+
+      (value.accessory_analysis.weights_changed?'。分析の重みを変更しました。':'。分析の重みは同じでした。')+
+      ' 今回の架空練習だけに適用し、学習は行いません。' : '通常の分析で練習しました。';
+  panel.append(analysis);
   replayHighlights=findReplayHighlights(value.daily_balances,value.liquidated_at_step);
   for(const [index,[id,label]] of highlightButtons.entries()) {
     const highlight=replayHighlights[index];
@@ -832,15 +943,17 @@ function revealResult(value,ordered) {
   statusField.textContent='試算が完了しました。AI・試算額・倍率を変えてもう一度試せます。';
 }
 element('quickRun').addEventListener('click',async()=>{
-  if(busy||!pending)return;
+  if(busy||!pending || pending.model_id!==modelField.value || (accessoryBox.checked && !accessoryChoice))return;
   const beforeReveal=element('quickPreOptIn').checked;
   clearReplay();
   element('quickResult').replaceChildren();
   const epoch=practiceEpoch;
-  const ordered={...pending,...(lastScenarioToken && element('quickSameScenario').checked ?
+  const ordered={...pending,accessory:accessoryBox.checked ? accessoryChoice : undefined,
+    ...(lastScenarioToken && element('quickSameScenario').checked ?
     {scenario_token:lastScenarioToken} : {})};
   element('quickSameScenario').checked=false;
   pending=null;
+  clearAccessoryChoice();
   element('quickReview').hidden=true;
   element('quickResult').hidden=true;
   element('quickNext').hidden=true;
@@ -849,7 +962,9 @@ element('quickRun').addEventListener('click',async()=>{
   try{
     const value=await request('/api/quick-practice',{
       model_id:ordered.model_id,amount:ordered.amount,leverage:ordered.leverage,
-      ...(ordered.scenario_token ? {scenario_token:ordered.scenario_token} : {})});
+      ...(ordered.scenario_token ? {scenario_token:ordered.scenario_token} : {}),
+      ...(ordered.accessory ? {accessory_analysis:ordered.accessory.context} : {})});
+    if(!verifyAccessoryResult(value,ordered))throw Error('装備の分析を反映した練習結果を確認できませんでした。');
     if(!validScenarioToken(value.scenario_token)||
        value.scenario_kind!==(ordered.scenario_token ? 'replay' : 'new')||
        (ordered.scenario_token && value.scenario_token!==ordered.scenario_token)||
@@ -893,6 +1008,7 @@ element('quickRun').addEventListener('click',async()=>{
   }finally{setBusy(false);}
 });
 element('quickPreOptIn').checked=false;
+clearAccessoryChoice();
 clearReplay();
 renderValidation();
 loadModels();

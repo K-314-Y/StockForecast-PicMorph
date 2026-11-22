@@ -462,6 +462,9 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <h3>練習内容の確認</h3><p id="quickReviewText"></p><p id="quickReviewRisk" class="simple-risk"></p>
   <div id="quickScenarioOption" hidden><label class="quick-pre-option" for="quickSameScenario"><input id="quickSameScenario" type="checkbox" aria-describedby="quickScenarioNote" autocomplete="off"> 前回と同じ架空相場で比較する</label></div>
   <p id="quickScenarioNote" class="simple-risk" role="status"></p>
+  <label class="quick-pre-option" for="quickAccessoryOptIn"><input id="quickAccessoryOptIn" type="checkbox" aria-describedby="quickAccessoryStatus" autocomplete="off" disabled> 装備アクセサリーの分析を使う（任意・実験）</label>
+  <p id="quickAccessoryStatus" class="simple-hint" role="status" style="overflow-wrap:anywhere"></p>
+  <p class="simple-hint"><a href="/accessory-analysis.html">装備の分析ルールを設定する</a></p>
   <label class="quick-pre-option" for="quickPreOptIn"><input id="quickPreOptIn" type="checkbox" aria-describedby="quickPreHelp" autocomplete="off"> 結果を見る前に3回だけ自分の判断を試す（任意）</label>
   <p id="quickPreHelp" class="simple-hint">過去の架空価格を使う練習で、実相場ではありません。選択でAIの売買・損益は変わりません。実際の投資技能を測るものではなく、選択は送信・保存せず、ChatGPTも呼び出しません。</p>
   <div class="actions"><button id="quickRun" class="primary" type="button">この内容で12日間を試す</button><button id="quickEdit" type="button">AI・試算額・倍率を修正</button></div>
