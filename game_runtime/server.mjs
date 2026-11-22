@@ -25,6 +25,9 @@ import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-c
 import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
 import {CHARACTER_EQUIPMENT_API,MAX_EQUIPMENT_BYTES,createCharacterEquipmentStore,
   equipmentRecord,validateEquipmentSave} from './character-equipment.mjs';
+import {analysisCatalog,deriveAccessoryAnalysis,equippedAnalysisKinds,stalePolicyKinds} from './accessory-analysis.mjs';
+import {ACCESSORY_ANALYSIS_API,MAX_ANALYSIS_REQUEST,analysisRecord,createAccessoryAnalysisStore,
+  validateAnalysisSave} from './accessory-analysis-store.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
@@ -51,6 +54,10 @@ const MODEL_LAB_JS = new URL('./model-lab-ui.mjs', import.meta.url);
 const MODEL_SHOP_JS = new URL('./model-shop-ui.mjs', import.meta.url);
 const QUICK_HOME_JS = new URL('./quick-home.mjs', import.meta.url);
 const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
+const ACCESSORY_ANALYSIS_ASSETS=new Map([
+  ['/accessory-analysis.html',new URL('./accessory-analysis.html',import.meta.url)],
+  ['/accessory-analysis-ui.mjs',new URL('./accessory-analysis-ui.mjs',import.meta.url)],
+]);
 // Fixed read-only assets only: never resolve a request path on the filesystem.
 const ARTWORK_LAB = new Map([
   ['/artwork-lab/preview_extract.html', new URL('../experiments/image_parts/preview_extract.html', import.meta.url)],
@@ -308,6 +315,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   catalogRoot, activeCharacterStore = createActiveCharacterStore(),
                                   independentPartReader = process.platform==='linux' ? createIndependentPartReader() : null,
                                   equipmentStore = process.platform==='linux' ? createCharacterEquipmentStore() : null,
+                                  accessoryAnalysisStore = process.platform==='linux' ? createAccessoryAnalysisStore() : null,
                                   characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
                                   userPngImporter = process.platform==='linux' ? createUserPngImporter() : null,
                                   appearanceCatalog = readAppearanceCatalog,
@@ -325,11 +333,20 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   let demoImagesInFlight=0;
   let independentPartBusy=false;
   let equipmentInFlight=0;
+  let accessoryAnalysisInFlight=0;
   let demoRegistrationBusy=false;
   let userPngImportBusy=false;
   let dialogueBusy = false;
   let dialogueAttempts = [];
   let sessionBusy = false;
+  async function readAnalysisEquipment(catalog,signal) {
+    const {active_demo_id:id,revision:active_revision}=await activeCharacterStore.read();
+    if(id===null)return {character_id:null,active_revision,equipment_revision:0,parts:[],visible_kinds:[]};
+    if(!(await isRegisteredDemo(id)))throw failure('表示中の登録キャラを確認できません',422);
+    const record=equipmentRecord(await equipmentStore.read(id,signal),id);
+    return {character_id:id,active_revision,equipment_revision:record.revision,parts:record.parts,
+      visible_kinds:equippedAnalysisKinds(record.parts,catalog)};
+  }
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
   const tickets = new Map();
@@ -362,6 +379,99 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if (ACCESSORY_ANALYSIS_ASSETS.has(rawPath) || ACCESSORY_ANALYSIS_ASSETS.has(path)) {
+      if (req.method!=='GET' || req.url!==path || process.platform!=='linux' || !accessoryAnalysisStore ||
+          (req.headers.origin!==undefined && req.headers.origin!==`http://${req.headers.host}`)) {
+        return json(res,404,{error:'分析実験を開けません'});
+      }
+      try {
+        const body=await readFile(ACCESSORY_ANALYSIS_ASSETS.get(path));
+        res.writeHead(200,{'Content-Type':path.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8',
+          'Content-Length':body.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+          'X-Frame-Options':'DENY','Cross-Origin-Resource-Policy':'same-origin','Referrer-Policy':'no-referrer',
+          'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"});
+        return res.end(body);
+      } catch {return json(res,404,{error:'分析実験を開けません'});}
+    }
+    if ([rawPath,path].some(target=>target===ACCESSORY_ANALYSIS_API || target.startsWith(ACCESSORY_ANALYSIS_API+'/'))) {
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      const write=req.method==='POST';
+      const origin=req.headers.origin;
+      if ((write || origin!==undefined) && origin!==`http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      const compare=write && path===ACCESSORY_ANALYSIS_API+'/compare';
+      const save=write && path===ACCESSORY_ANALYSIS_API;
+      const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
+      if ((!compare && !save && !info) || req.url!==path || process.platform!=='linux' ||
+          !accessoryAnalysisStore || !independentPartReader || !equipmentStore) {
+        return json(res,404,{error:'装飾品の分析実験を利用できません'});
+      }
+      if(accessoryAnalysisInFlight>=2)return json(res,429,{error:'分析実験を処理中です'});
+      accessoryAnalysisInFlight++;
+      const controller=new AbortController();
+      const {signal}=controller;
+      const cancel=()=>controller.abort();
+      res.once('close',cancel);
+      try {
+        let input=null;
+        if(write) {
+          const deadline=setTimeout(()=>req.destroy(),6000);
+          try {input=await getBody(req,MAX_ANALYSIS_REQUEST);}
+          finally {clearTimeout(deadline);}
+        }
+        const changes=save ? validateAnalysisSave(input) : null;
+        if(compare && (!input || Object.keys(input).sort().join('|')!=='active_revision|character_id|equipment_revision|expected_revision' ||
+           typeof input.character_id!=='string' || input.character_id.length!==35 || !/^cp_[0-9a-f]{32}$/.test(input.character_id) ||
+           ![input.active_revision,input.equipment_revision,input.expected_revision].every(n=>Number.isSafeInteger(n)&&n>=0))) {
+          throw failure('比較対象と現在のrevisionを指定してください',400);
+        }
+        const catalog=analysisCatalog((await independentPartReader.list(signal)).parts);
+        if(save) {
+          if(stalePolicyKinds(changes.policies,catalog).length)throw failure('カタログに存在しない種類は保存できません',422);
+          if(!res.destroyed) {
+            const record=analysisRecord(await accessoryAnalysisStore.save(changes));
+            if(!res.destroyed)return json(res,200,record);
+          }
+          return;
+        }
+        const record=analysisRecord(await accessoryAnalysisStore.read(signal));
+        const {parts,...equipped}=await readAnalysisEquipment(catalog,signal);
+        if(info) {
+          if(!res.destroyed)return json(res,200,{...record,kinds:catalog.kinds,equipped,
+            stale_kinds:stalePolicyKinds(record.policies,catalog)});
+          return;
+        }
+        const stale=()=>failure('分析設定または装備が更新されました。再読込してください',409);
+        const same=(context,recipe)=>recipe.revision===input.expected_revision &&
+          ['character_id','active_revision','equipment_revision'].every(key=>context[key]===input[key]);
+        if(!same(equipped,record))throw stale();
+        if(stalePolicyKinds(record.policies,catalog).length) {
+          throw failure('カタログに存在しない種類の分析設定があります。設定を保存し直してください',422);
+        }
+        const [snapshot,companion]=await Promise.all([loadSnapshot(),companionStore.read()]);
+        const original=modelPlanFromSnapshot(snapshot,null);
+        const baseline=validateLabModel(applyCompanion(original,companion).models.mine);
+        const {candidate,applied}=deriveAccessoryAnalysis(baseline,record.policies,parts,catalog);
+        if(res.destroyed)return;
+        const result=await predict({base_model:original.base_model,models:{mine:candidate,owl:baseline,turtle:baseline}});
+        if(res.destroyed)return;
+        const [current,currentEquipment]=await Promise.all([accessoryAnalysisStore.read(signal),readAnalysisEquipment(catalog,signal)]);
+        if(!same(currentEquipment,analysisRecord(current)))throw stale();
+        const report=compareLabPlan(result,baseline,candidate);
+        if(!res.destroyed)return json(res,200,{...report,scope:'ACCESSORY_RULES_FIXED_SYNTHETIC_12',trained:false,
+          provenance:{...equipped,policy_revision:record.revision,applied_rules:applied},
+          weights_changed:Object.keys(baseline.plugin_weights).some(key=>baseline.plugin_weights[key]!==candidate.plugin_weights[key]),
+          effective_hash_changed:report.baseline.effective_sha256!==report.candidate.effective_sha256});
+      } catch(error) {
+        const code=[400,409,413,415,422].includes(error?.status)?error.status:503;
+        if(!res.destroyed)return json(res,code,{error:code===503?'分析実験を安全に実行できませんでした':error.message});
+      } finally {
+        res.off('close',cancel);
+        accessoryAnalysisInFlight--;
+      }
+      return;
+    }
     if ([rawPath,path].some(target=>target===CHARACTER_EQUIPMENT_API || target.startsWith(CHARACTER_EQUIPMENT_API+'/'))) {
       res.setHeader('Cross-Origin-Resource-Policy','same-origin');
       const save=req.method==='POST';

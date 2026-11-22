@@ -66,28 +66,28 @@ def check_capacity(folder, existing):
     require(existing or len(names) < MAX_RECORDS, "Character equipment storage is full.")
 
 
-def write_record(folder, name, record, paths, snapshots):
+def write_record(folder, name, record, paths, snapshots, *, max_bytes=MAX_BYTES, staging=STAGING):
     data = json_bytes(record)
-    require(len(data) <= MAX_BYTES, "Equipment record is too large.")
-    fd = os.open(STAGING, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+    require(len(data) <= max_bytes, "Local record is too large.")
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         existing = bool(snapshots)
-        require(private_file(folder, STAGING, MAX_BYTES, snapshots) == data, "Equipment staging changed.")
+        require(private_file(folder, staging, max_bytes, snapshots) == data, "Local staging changed.")
         recheck(paths, snapshots)
         if existing:
-            os.replace(STAGING, name, src_dir_fd=folder, dst_dir_fd=folder)
+            os.replace(staging, name, src_dir_fd=folder, dst_dir_fd=folder)
         else:
             try:
-                move_exclusive(folder, STAGING, name)
+                move_exclusive(folder, staging, name)
             except FileExistsError as exc:
                 raise Conflict() from exc
         os.fsync(folder)
     finally:
-        remove_temporary_file(folder, STAGING)
+        remove_temporary_file(folder, staging)
 
 
 def run(operation, args):

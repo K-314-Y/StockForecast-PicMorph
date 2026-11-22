@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>装飾品の分析重み | Creature Lab</title>
+<style>
+  body { font: 1rem/1.6 system-ui,sans-serif; color:#edf0f6; background:#141925; margin:0; }
+  main { max-width:58rem; margin:auto; padding:1rem; }
+  a { color:#9fd8ff; }
+  fieldset, article { min-width:0; border:1px solid #647188; border-radius:.5rem; margin:.5rem 0; padding:.7rem; overflow-wrap:anywhere; }
+  .controls { display:flex; flex-wrap:wrap; align-items:center; gap:.65rem; }
+  label { display:flex; flex-direction:column; }
+  button, select { font:inherit; min-height:2.75rem; max-width:100%; padding:.3rem .55rem; }
+  :focus-visible { outline:3px solid #ffcf78; outline-offset:3px; }
+  .comparison { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr)); gap:1rem; }
+</style>
+<main>
+  <a href="/game">ゲームへ戻る</a>
+  <h1>ルールによる分析重みの切替（実験）</h1>
+  <p>保存した種類別の設定を、いま選択中の登録キャラの表示中の装備に適用して比較します。基準と候補は同じ固定の架空12日間で評価します。モデル学習や実相場の評価は行わず、通常プレイの予測にも反映しません。</p>
+  <h2>種類別の分析設定</h2>
+  <p id="equipped"></p>
+  <p id="catalog-note" hidden></p>
+  <div id="settings"></div>
+  <div class="controls">
+    <button id="save" type="button" disabled>分析設定を保存する</button>
+    <button id="compare" type="button" disabled>保存済み設定で比較する</button>
+    <button id="reload" type="button">設定を再読込する</button>
+  </div>
+  <p id="status" role="status">設定を読み込んでいます…</p>
+  <section id="result" aria-labelledby="result-title" hidden>
+    <h2 id="result-title">架空12日間の比較結果</h2>
+    <p id="delta"></p>
+    <p id="rules"></p>
+    <div id="reports" class="comparison"></div>
+  </section>
+</main>
+<script type="module" src="/accessory-analysis-ui.mjs"></script>
+</html>

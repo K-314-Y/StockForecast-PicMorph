@@ -84,7 +84,14 @@ private local Creature Lab Node game. It has no real-trading capability.
    display. The game keeps the original sprite if equipment validation fails.
    Equipment changes leave active selection, XP, coins, forecasts and AI
    models unchanged.
-8. Never expose private images publicly, automate account approvals, modify
+8. On Linux, the appearance studio links to the accessory analysis experiment.
+   Ask the user to choose and explicitly save a focus and intensity per verified
+   catalog kind. Only the explicit comparison applies these rules to the current
+   registered character's visible saved equipment. It uses the usual Python
+   predictor with the same fixed synthetic 12 days for both variants. Report
+   weight, hash, and signal differences accurately. This recipe does not train
+   or activate a model and never changes ordinary forecasts or XP.
+9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 
 Useful requests: “今の私のキャラを確認”, “保存前に12日間の模擬相場で
