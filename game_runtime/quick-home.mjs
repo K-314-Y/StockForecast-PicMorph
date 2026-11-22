@@ -1298,9 +1298,30 @@ const importStatus=element('quickImportStatus');
 const importResults=element('quickImportResults');
 const importDetails=element('quickImportDetails');
 const importCards=element('quickImportCards');
+const importCompareFile=element('quickImportCompareFile');
+const importCompareStatus=element('quickImportCompareStatus');
+const importCompareResults=element('quickImportCompareResults');
+const importCompareChecklist=element('quickImportCompareChecklist');
+const importReferenceCards=element('quickImportReferenceCards');
+const importCompareDescription='quickImportCompareHelp quickImportHelp quickImportWarning';
 let importEpoch=0;
+let importCompareEpoch=0;
+let primaryImportRecord=null;
+function clearImportComparison() {
+  importCompareEpoch++;
+  importCompareResults.hidden=true;
+  importCompareChecklist.replaceChildren();
+  importReferenceCards.replaceChildren();
+  importCompareStatus.textContent='';
+  importCompareFile.removeAttribute('aria-invalid');
+  importCompareFile.setAttribute('aria-describedby',importCompareDescription);
+}
 function clearComparisonImport() {
   importEpoch++;
+  primaryImportRecord=null;
+  importCompareFile.disabled=true;
+  importCompareFile.value='';
+  clearImportComparison();
   importResults.hidden=true;
   importDetails.replaceChildren();
   importCards.replaceChildren();
@@ -1311,54 +1332,128 @@ function showComparisonImportError(message) {
   importFile.setAttribute('aria-invalid','true');
   importStatus.textContent=message;
 }
-function renderComparisonImport(record) {
-  const models=['a','b'].map(key=>{
+function importedModelLines(record) {
+  return ['a','b'].map(key=>{
     const model=record.models[key];
     const line=document.createElement('p');
     const name=document.createElement('bdi');
     const characters=Array.from(model.display_name);
-    name.textContent=characters.length>160 ? characters.slice(0,160).join('')+'…' : model.display_name;
+    name.textContent=characters.length>160 ? characters.slice(0,159).join('')+'…' : model.display_name;
     line.textContent=key.toUpperCase()+' モデル SHA-256（冒頭）：'+model.model_effective_sha256.slice(0,12)+' ／ ';
     line.append(name);
     return line;
   });
+}
+function importedEngineLine(record) {
   const engine=document.createElement('p');
   engine.textContent='エンジン SHA-256（冒頭）：'+record.engine_source_sha256.slice(0,12);
+  return engine;
+}
+function renderComparisonImport(record) {
   const cards=record.trials.map(trial=>{
     const kind=trial.scenario_kind==='replay' ? '再挑戦' : '新規';
     return multiCard('ケース'+trial.case_number+'（'+kind+'）',[trial.a,trial.b],false,String);
   });
   const {a,b}=record.reference_averages;
   cards.push(multiCard('参考平均（ケース2〜4）',[a,b],true,String));
-  importDetails.replaceChildren(...models,engine);
+  importDetails.replaceChildren(...importedModelLines(record),importedEngineLine(record));
   importCards.replaceChildren(...cards);
   importResults.hidden=false;
   importStatus.textContent='JSONの形式と参考平均の計算を確認しました。';
 }
-importFile.addEventListener('change',async()=>{
-  clearComparisonImport();
-  const epoch=importEpoch;
-  const files=importFile.files;
+async function readComparisonImport(files,current,showError) {
   if(!files?.length)return;
   if(files.length!==1 || files[0].size<=0 || files[0].size>MAX_COMPARISON_JSON_BYTES) {
-    showComparisonImportError('空でない64 KiB以下のJSONファイルを1つ選択してください。');
+    showError('空でない64 KiB以下のJSONファイルを1つ選択してください。');
     return;
   }
   let source;
   try {
     source=await files[0].text();
   } catch {
-    if(epoch===importEpoch)showComparisonImportError('ファイルを読み込めませんでした。');
+    if(current())showError('ファイルを読み込めませんでした。');
     return;
   }
-  if(epoch!==importEpoch)return;
+  if(!current())return;
   try {
     const record=JSON.parse(source);
-    if(!validImportedComparison(record))throw Error('Invalid comparison record');
-    renderComparisonImport(record);
+    if(validImportedComparison(record))return record;
   } catch {
-    showComparisonImportError('比較記録のJSON形式または参考平均が正しくありません。');
+    // Invalid JSON gets the same feedback as a record that fails validation.
   }
+  showError('比較記録のJSON形式または参考平均が正しくありません。');
+}
+importFile.addEventListener('change',async()=>{
+  clearComparisonImport();
+  const epoch=importEpoch,current=()=>epoch===importEpoch;
+  const record=await readComparisonImport(importFile.files,current,showComparisonImportError);
+  if(!current() || !record)return;
+  renderComparisonImport(record);
+  primaryImportRecord=record;
+  importCompareFile.disabled=false;
+});
+
+function sameImportedModel(first,second) {
+  return first.model_id===second.model_id && first.model_effective_sha256===second.model_effective_sha256;
+}
+function sameImportedOutcomes(first,second,secondSlots) {
+  return ['a','b'].every((slot,index)=>{
+    const otherSlot=secondSlots[index];
+    const sameMetrics=(a,b)=>a.profit_coins===b.profit_coins && a.max_drawdown_pct===b.max_drawdown_pct;
+    return first.trials.every((trial,caseIndex)=>{
+      const a=trial[slot],b=second.trials[caseIndex][otherSlot];
+      return sameMetrics(a,b) && a.liquidated_at_step===b.liquidated_at_step;
+    }) && sameMetrics(first.reference_averages[slot],second.reference_averages[otherSlot]);
+  });
+}
+function importedReferenceCard(record,title) {
+  const {a,b}=record.reference_averages;
+  const card=multiCard(title,[a,b],true,String);
+  const initial=document.createElement('p');
+  initial.textContent='ケース1の種別：'+(record.trials[0].scenario_kind==='replay' ? '再挑戦' : '新規');
+  card.append(...importedModelLines(record),importedEngineLine(record),initial);
+  return card;
+}
+function renderImportedRecordComparison(first,second) {
+  const secondSlots=sameImportedModel(first.models.a,second.models.a) ? ['a','b'] : ['b','a'];
+  const conditions=[
+    ['エンジンの識別値',first.engine_source_sha256===second.engine_source_sha256],
+    ['試算額',first.settings.amount_coins===second.settings.amount_coins],
+    ['損益倍率',first.settings.leverage===second.settings.leverage],
+    ['4ケースの架空相場トークン',first.trials.every((trial,index)=>
+      trial.scenario_token===second.trials[index].scenario_token)],
+    ['4ケースの架空価格（各13点）',first.trials.every((trial,index)=>
+      trial.daily_synthetic_prices.every((price,day)=>Object.is(price,second.trials[index].daily_synthetic_prices[day])))],
+    ['2モデルのIDと設定の識別値（A/Bの順不同）',['a','b'].every((slot,index)=>
+      sameImportedModel(first.models[slot],second.models[secondSlots[index]]))],
+  ];
+  importCompareChecklist.replaceChildren(...conditions.map(([label,match])=>{
+    const item=document.createElement('li');
+    item.textContent=label+'：'+(match ? 'はい（一致）' : 'いいえ（不一致）');
+    return item;
+  }));
+  importReferenceCards.replaceChildren(importedReferenceCard(first,'1件目の記録'),importedReferenceCard(second,'2件目の記録'));
+  importCompareResults.hidden=false;
+  if(!conditions.every(([,match])=>match)) {
+    importCompareStatus.textContent='条件が異なるため、記録された損益は公平に比較できません。';
+    return;
+  }
+  const inconsistent=sameImportedOutcomes(first,second,secondSlots) ? '' :
+    ' 同じ条件で記録内容に食い違いがあります。どちらが正しいかは確認できません。';
+  importCompareStatus.textContent='一覧の条件は一致しています。記録の真正性を証明するものではありません。'+inconsistent;
+}
+importCompareFile.addEventListener('change',async()=>{
+  clearImportComparison();
+  const first=primaryImportRecord;
+  if(!first || importCompareFile.disabled)return;
+  const epoch=importCompareEpoch;
+  const current=()=>epoch===importCompareEpoch && first===primaryImportRecord;
+  const second=await readComparisonImport(importCompareFile.files,current,message=>{
+    importCompareFile.setAttribute('aria-invalid','true');
+    importCompareFile.setAttribute('aria-describedby',importCompareDescription+' quickImportCompareStatus');
+    importCompareStatus.textContent=message;
+  });
+  if(current() && second)renderImportedRecordComparison(first,second);
 });
 window.addEventListener('pagehide',()=>{
   clearComparisonImport();

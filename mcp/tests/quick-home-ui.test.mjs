@@ -3629,6 +3629,249 @@ test('P9v only renders the latest read and discards pending and displayed import
   assertImportCleared(ui);
 });
 
+function selectSecondComparison(ui,...files) {
+  ui.get('quickImportCompareFile').files=files;
+  return ui.fire('quickImportCompareFile','change');
+}
+
+function comparisonJsonFile(record=importFixture()) {
+  return mockJsonFile(JSON.stringify(record));
+}
+
+function assertSecondComparisonCleared(ui) {
+  assert.equal(ui.get('quickImportCompareResults').hidden,true);
+  assert.deepEqual(ui.get('quickImportCompareChecklist').children,[]);
+  assert.deepEqual(ui.get('quickImportReferenceCards').children,[]);
+}
+
+function importedConditionMatches(ui) {
+  return ui.get('quickImportCompareChecklist').children.map(item=>{
+    assert.match(item.textContent,/：(はい（一致）|いいえ（不一致）)$/);
+    return item.textContent.endsWith('はい（一致）');
+  });
+}
+
+test('P9x only enables a second local file after primary validation and renders both reference averages safely',async()=>{
+  const nodes=htmlNodes(),find=id=>nodes.find(node=>node.id===id);
+  const input=find('quickImportCompareFile');
+  assert.match(html,/<label for="quickImportCompareFile">/);
+  assert.match(input.attributes,/type="file".*\bdisabled\b/);
+  assert.doesNotMatch(input.attributes,/\bmultiple\b/);
+  for(const id of ['quickImportCompareFile','quickImportCompareStatus','quickImportCompareResults','quickImportWarning']) {
+    assert.ok(find(id).parents.includes('quickImport'));
+    assert.ok(!find(id).parents.includes('quickImportResults'));
+    assert.ok(!find(id).parents.includes('quickCompare'));
+  }
+  assert.match(find('quickImportCompareStatus').attributes,/role="status"/);
+  assert.match(html,/JSONは編集や偽造が可能です/);
+  const ui=await mount([compareDemo]),{get,calls,downloads,storageWrites}=ui;
+  await completeSingleCompare(ui);
+  const count=calls.length,practiceCount=practiceCalls(ui).length;
+  const practiceResult=get('quickResult').children,practiceComparison=get('quickCompareResults').children;
+  const secondInput=get('quickImportCompareFile');
+  assert.equal(secondInput.disabled,true);
+  let prematureReads=0;
+  await selectSecondComparison(ui,{size:1,text:async()=>{prematureReads++;return '{}';}});
+  assert.equal(prematureReads,0);
+  assertSecondComparisonCleared(ui);
+  await importComparison(ui,mockJsonFile('{'));
+  assert.equal(secondInput.disabled,true);
+  const valid=comparisonJsonFile();
+  const firstRead=Promise.withResolvers();
+  const pending=importComparison(ui,{size:valid.size,text:()=>firstRead.promise});
+  assert.equal(secondInput.disabled,true);
+  firstRead.resolve(await valid.text());
+  await pending;
+  assert.equal(secondInput.disabled,false);
+  assert.deepEqual(secondInput.files,[]);
+  assertSecondComparisonCleared(ui);
+
+  const second=importFixture('replay');
+  second.models.a.display_name='<img src=x onerror=alert(1)>'+'𠮷'.repeat(200);
+  second.exported_at='2025-01-01T00:00:00.000Z';
+  const json=JSON.stringify(second);
+  await selectSecondComparison(ui,mockJsonFile(json.padEnd(json.length+65536-Buffer.byteLength(json))));
+  assert.equal(get('quickImportCompareResults').hidden,false);
+  assert.deepEqual(importedConditionMatches(ui),Array(6).fill(true));
+  assert.match(get('quickImportCompareStatus').textContent,/条件は一致.*真正性を証明するものではありません/);
+  assert.doesNotMatch(get('quickImportCompareStatus').textContent,/食い違い/);
+  const [firstCard,secondCard]=get('quickImportReferenceCards').children;
+  assert.deepEqual(firstCard.children.slice(0,3).map(node=>node.textContent),[
+    '1件目の記録','A：参考平均損益 +2.041152263 C ／ 最大下落率の平均 2%','B：参考平均損益 -6 C ／ 最大下落率の平均 4%',
+  ]);
+  assert.equal(secondCard.children[0].textContent,'2件目の記録');
+  assert.deepEqual(secondCard.children.slice(1,3).map(node=>node.textContent),firstCard.children.slice(1,3).map(node=>node.textContent));
+  assert.match(secondCard.children[3].textContent,/aaaaaaaaaaaa ／ $/);
+  assert.match(secondCard.children[5].textContent,/cccccccccccc$/);
+  assert.equal(firstCard.children[6].textContent,'ケース1の種別：新規');
+  assert.equal(secondCard.children[6].textContent,'ケース1の種別：再挑戦');
+  const name=secondCard.children[3].children[0];
+  assert.equal(name.tagName,'BDI');
+  assert.equal(Array.from(name.textContent).length,160);
+  assert.match(name.textContent,/^<img src=x onerror=alert\(1\)>𠮷+…$/u);
+  assert.deepEqual(name.children,[]);
+  assert.doesNotMatch(JSON.stringify(secondCard.children.map(node=>node.textContent)),/未検証のファイル内の注意書き|demo_other/);
+  assert.equal(get('quickResult').children,practiceResult);
+  assert.equal(get('quickCompareResults').children,practiceComparison);
+  assert.equal(practiceCalls(ui).length,practiceCount);
+  assert.equal(calls.length,count);
+  assert.deepEqual(storageWrites,[]);
+  assert.deepEqual(downloads,[]);
+});
+
+test('P9x reports each changed condition independently and disallows a fair PnL comparison',async()=>{
+  const ui=await mount();
+  await importComparison(ui,comparisonJsonFile());
+  const differences=[
+    [0,r=>r.engine_source_sha256='c'.repeat(63)+'d'],
+    [1,r=>r.settings.amount_coins=1001],
+    [2,r=>r.settings.leverage=24],
+    [3,r=>r.trials[3].scenario_token='v1_fedcba9876543210'],
+    [4,r=>r.trials[3].daily_synthetic_prices[12]+=1e-12],
+    [5,r=>r.models.b.model_id='demo_replacement'],
+    [5,r=>r.models.b.model_effective_sha256='a'.repeat(63)+'b'],
+  ];
+  for(const [changed,mutate] of differences) {
+    const record=importFixture();
+    mutate(record);
+    await selectSecondComparison(ui,comparisonJsonFile(record));
+    assert.equal(ui.get('quickImportCompareResults').hidden,false);
+    assert.deepEqual(importedConditionMatches(ui),Array.from({length:6},(_,index)=>index!==changed));
+    const status=ui.get('quickImportCompareStatus').textContent;
+    assert.match(status,/損益は公平に比較できません/);
+    assert.doesNotMatch(status,/食い違い/);
+    assert.equal(ui.get('quickImportReferenceCards').children.length,2);
+  }
+  const allDifferent=importFixture();
+  for(const [,mutate] of differences)mutate(allDifferent);
+  await selectSecondComparison(ui,comparisonJsonFile(allDifferent));
+  assert.deepEqual(importedConditionMatches(ui),Array(6).fill(false));
+});
+
+test('P9x matches swapped A/B by ID and configuration and warns neutrally about differing outcomes',async()=>{
+  const ui=await mount();
+  const first=importFixture();
+  first.models.b.model_effective_sha256=otherFingerprint;
+  await importComparison(ui,comparisonJsonFile(first));
+  const swapped=structuredClone(first);
+  for(const pair of [swapped.models,swapped.reference_averages,...swapped.trials]) {
+    [pair.a,pair.b]=[pair.b,pair.a];
+  }
+  await selectSecondComparison(ui,comparisonJsonFile(swapped));
+  assert.deepEqual(importedConditionMatches(ui),Array(6).fill(true));
+  const status=ui.get('quickImportCompareStatus');
+  assert.doesNotMatch(status.textContent,/食い違い/);
+  assert.match(ui.get('quickImportReferenceCards').children[1].children[1].textContent,/^A：参考平均損益 -6 C/);
+  for(const mutate of [
+    r=>r.trials[0].b.profit_coins++,
+    r=>r.trials[0].a.max_drawdown_pct++,
+    r=>r.trials[3].b.liquidated_at_step=5,
+    r=>r.reference_averages.b.profit_coins+=9e-9,
+    r=>r.reference_averages.a.max_drawdown_pct+=9e-9,
+  ]) {
+    const inconsistent=structuredClone(swapped);
+    mutate(inconsistent);
+    await selectSecondComparison(ui,comparisonJsonFile(inconsistent));
+    assert.deepEqual(importedConditionMatches(ui),Array(6).fill(true));
+    assert.match(status.textContent,/条件は一致.*真正性.*食い違い.*どちらが正しいかは確認できません/);
+  }
+});
+
+test('P9x fails closed on invalid second files and preserves the first record',async()=>{
+  const ui=await mount(),{get,calls,storageWrites}=ui,count=calls.length;
+  const valid=comparisonJsonFile(),secondInput=get('quickImportCompareFile');
+  await importComparison(ui,valid);
+  const primaryCards=get('quickImportCards').children,primaryStatus=get('quickImportStatus').textContent;
+  let oversizedReads=0;
+  const unreadable={size:1,text:async()=>{throw Error('read failed');}};
+  const oversized={size:65537,text:async()=>{oversizedReads++;return valid.text();}};
+  const invalid=importFixture();
+  invalid.reference_averages.a.profit_coins++;
+  for(const [files,message] of [
+    [[oversized],/64 KiB以下/],
+    [[{...oversized,size:0}],/64 KiB以下/],
+    [[oversized,valid],/64 KiB以下/],
+    [[unreadable],/読み込めません/],
+    [[mockJsonFile('{')],/JSON形式または参考平均/],
+    [[comparisonJsonFile(invalid)],/JSON形式または参考平均/],
+  ]) {
+    await selectSecondComparison(ui,valid);
+    assert.equal(get('quickImportCompareResults').hidden,false);
+    await selectSecondComparison(ui,...files);
+    assertSecondComparisonCleared(ui);
+    assert.match(get('quickImportCompareStatus').textContent,message);
+    assert.equal(secondInput.getAttribute('aria-invalid'),'true');
+    assert.match(secondInput.getAttribute('aria-describedby'),/\bquickImportCompareStatus\b/);
+    assert.equal(secondInput.disabled,false);
+    assert.equal(get('quickImportResults').hidden,false);
+    assert.equal(get('quickImportCards').children,primaryCards);
+    assert.equal(get('quickImportStatus').textContent,primaryStatus);
+  }
+  await selectSecondComparison(ui);
+  assertSecondComparisonCleared(ui);
+  assert.equal(get('quickImportCompareStatus').textContent,'');
+  assert.equal(secondInput.getAttribute('aria-invalid'),null);
+  assert.doesNotMatch(secondInput.getAttribute('aria-describedby'),/\bquickImportCompareStatus\b/);
+  assert.equal(oversizedReads,0);
+  assert.equal(calls.length,count);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('P9x discards stale second reads on reselection, primary replacement or invalidation, and pagehide',async()=>{
+  const ui=await mount(),{get,pagehide}=ui;
+  const secondInput=get('quickImportCompareFile'),status=get('quickImportCompareStatus');
+  const valid=comparisonJsonFile(),source=await valid.text();
+  const different=importFixture();
+  different.settings.leverage--;
+  const startRead=()=>{
+    const deferred=Promise.withResolvers();
+    const pending=selectSecondComparison(ui,{size:valid.size,text:()=>deferred.promise});
+    assertSecondComparisonCleared(ui);
+    assert.equal(status.textContent,'');
+    return {...deferred,pending};
+  };
+  await importComparison(ui,valid);
+  await selectSecondComparison(ui,valid);
+  const old=startRead();
+  await selectSecondComparison(ui,comparisonJsonFile(different));
+  old.resolve(source);
+  await old.pending;
+  assert.equal(importedConditionMatches(ui)[2],false);
+  const staleError=startRead();
+  await selectSecondComparison(ui,valid);
+  staleError.reject(Error('old file read failed'));
+  await staleError.pending;
+  assert.deepEqual(importedConditionMatches(ui),Array(6).fill(true));
+  assert.equal(secondInput.getAttribute('aria-invalid'),null);
+
+  for(const action of ['replace','invalid','pagehide']) {
+    await importComparison(ui,valid);
+    await selectSecondComparison(ui,valid);
+    const oldRead=startRead();
+    if(action==='pagehide')pagehide();
+    else {
+      const replacement=importComparison(ui,action==='invalid' ? mockJsonFile('{') : comparisonJsonFile(different));
+      assert.equal(secondInput.disabled,true);
+      assert.deepEqual(secondInput.files,[]);
+      await replacement;
+    }
+    assert.deepEqual(secondInput.files,[]);
+    assert.equal(secondInput.disabled,action!=='replace');
+    if(action==='replace')oldRead.resolve(source);
+    else oldRead.reject(Error('old file read failed'));
+    await oldRead.pending;
+    assertSecondComparisonCleared(ui);
+    assert.equal(status.textContent,'');
+  }
+  await importComparison(ui,valid);
+  await selectSecondComparison(ui,valid);
+  pagehide();
+  assertSecondComparisonCleared(ui);
+  assert.equal(status.textContent,'');
+  assert.equal(secondInput.disabled,true);
+  assert.deepEqual(secondInput.files,[]);
+});
+
 test('P9u invalidates a completed record immediately on retries, edits, model changes and departure',async()=>{
   for(const change of ['retry','single retry','amount','leverage','submit','model A','model B','ZIP removed','focus renamed','quickAgain','pagehide']) {
     const zipId='zip_'+'a'.repeat(32);

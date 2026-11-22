@@ -269,6 +269,13 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickImportFile::file-selector-button{min-height:48px;font:inherit}
 #quickImportFile:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
 #quickImportStatus{min-height:1.4em}
+#quickImportCompareFile{display:block;width:100%;min-width:0;min-height:48px;margin-block:4px;font:inherit}
+#quickImportCompareFile::file-selector-button{min-height:48px;font:inherit}
+#quickImportCompareFile:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
+#quickImportCompareStatus{color:#ffdf96;font-weight:750;min-height:1.4em}
+#quickImportCompareResults ul{padding-inline-start:1.4em}
+#quickImportReferenceCards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media(max-width:550px){#quickImportReferenceCards{grid-template-columns:1fr}}
 @media(max-width:550px){#quickImportCards,#quickCompareResults,#quickCompareMultiCards{grid-template-columns:1fr}}
 .quick-status-announcement{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
@@ -527,11 +534,21 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
  <section id="quickImport" class="quick-replay" aria-labelledby="quickImportTitle">
   <h3 id="quickImportTitle">比較記録を端末内で確認</h3>
-  <p id="quickImportWarning" class="simple-hint">確認できるのはJSONの形式と参考平均の計算だけです。作成者、記録の真正性や改変の有無、予測の正確さ、再現計算の手順は確認できません。ダウンロードしたファイルにはキャラ名とモデルIDが含まれ、証明書としては使えません。</p>
+  <p id="quickImportWarning" class="simple-hint">単体で確認できるのはJSONの形式と参考平均の計算だけです。作成者、記録の真正性や改変の有無、予測の正確さ、再現計算の手順は確認できません。JSONは編集や偽造が可能です。ダウンロードしたファイルにはキャラ名とモデルIDが含まれ、証明書としては使えません。</p>
   <label for="quickImportFile">比較記録のJSONファイル</label>
-  <p id="quickImportHelp" class="simple-hint">64 KiB以下のファイルを1つ選択してください。読み込みはこのページ内で行い、送信や保存はしません。</p>
+  <p id="quickImportHelp" class="simple-hint">各欄で64 KiB以下のファイルを1つ選択してください。読み込みはこのページ内で行い、送信や保存はしません。</p>
   <input id="quickImportFile" type="file" accept=".json,application/json" aria-describedby="quickImportHelp quickImportWarning quickImportStatus">
   <p id="quickImportStatus" class="simple-hint" role="status"></p>
+  <label for="quickImportCompareFile">2件目の比較記録のJSONファイル</label>
+  <p id="quickImportCompareHelp" class="simple-hint">1件目の読み込みに成功すると、2件目を選んで記録の条件を照合できます。</p>
+  <input id="quickImportCompareFile" type="file" accept=".json,application/json" aria-describedby="quickImportCompareHelp quickImportHelp quickImportWarning" disabled>
+  <p id="quickImportCompareStatus" role="status"></p>
+  <div id="quickImportCompareResults" hidden>
+   <h4>記録された条件の照合</h4>
+   <ul id="quickImportCompareChecklist"></ul>
+   <h4>各記録の参考平均（ケース2〜4）</h4>
+   <div id="quickImportReferenceCards"></div>
+  </div>
   <div id="quickImportResults" hidden>
    <div id="quickImportDetails"></div>
    <h4>シナリオ別の結果と参考平均</h4>
