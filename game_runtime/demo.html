@@ -265,6 +265,9 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickCompareMulti{margin-block-start:12px}
 #quickCompareMultiRun,#quickCompareExport{max-width:100%;white-space:normal}
 #quickCompareMultiCards{margin-block-start:8px}
+#quickCompareMultiResults a{display:inline-flex;align-items:center;min-height:44px;max-width:100%;color:#b1d9ff}
+#quickCompareMultiResults a:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
+#quickImport>h4{margin-block-start:12px}
 #quickImportFile{display:block;width:100%;min-width:0;min-height:48px;margin-block:4px;font:inherit}
 #quickImportFile::file-selector-button{min-height:48px;font:inherit}
 #quickImportFile:focus-visible{outline:3px solid #ffd886;outline-offset:2px}
@@ -447,8 +450,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <h4>追加の3例（結果を見た後に選んだAIでの練習）</h4>
     <p class="simple-hint">参考平均は3個の独立した試算の算術平均です。累計利益や現実の最大下落率、連続保有した場合の最大下落率ではありません。</p>
     <div id="quickCompareMultiCards"></div>
-    <p id="quickCompareExportNote" class="simple-hint">後から検証するときのメモ（JSON・日時はUTC）です。キャラ名・モデルID・架空相場トークンが含まれます。記録は送信されず、端末にダウンロードしたファイルにだけ残ります。モデルIDを他の利用者と共有しないでください。利用者が編集できるファイルで、公式の監査証明や暗号学的な証明には使えません。将来も同じモデルで実行できる保証はありません。</p>
-    <button id="quickCompareExport" type="button" aria-controls="quickCompareMultiStatus" aria-describedby="quickCompareExportNote" hidden disabled>比較の記録をJSONでダウンロード</button>
+    <p class="simple-hint"><a href="#quickImportTitle">比較記録の保存へ</a></p>
    </div>
    <p id="quickCompareMultiStatus" class="simple-hint"></p>
   </div>
@@ -533,26 +535,33 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  </div>
  <p id="quickStatus" class="simple-hint" role="status" aria-live="polite">解放済みAIを確認しています…</p>
  <section id="quickImport" class="quick-replay" aria-labelledby="quickImportTitle">
-  <h3 id="quickImportTitle">比較記録を端末内で確認</h3>
+  <h3 id="quickImportTitle" class="simple-target" tabindex="-1">比較記録の保存・確認・照合</h3>
+  <h4>① 比較記録を保存</h4>
+  <p id="quickRecordExportHelp" class="simple-hint">最初の2体比較と追加3ケースが完了すると保存できます。</p>
+  <p id="quickCompareExportNote" class="simple-hint">後から検証するときのメモ（JSON・日時はUTC）です。キャラ名・モデルID・架空相場トークンが含まれます。記録は送信されず、端末にダウンロードしたファイルにだけ残ります。モデルIDを他の利用者と共有しないでください。利用者が編集できるファイルで、公式の監査証明や暗号学的な証明には使えません。将来も同じモデルで実行できる保証はありません。</p>
+  <button id="quickCompareExport" type="button" aria-controls="quickCompareMultiStatus quickRecordExportStatus" aria-describedby="quickCompareExportNote" hidden disabled>比較の記録をJSONでダウンロード</button>
+  <p id="quickRecordExportStatus" class="simple-hint"></p>
+  <h4>② 1件のJSONを読み込み確認</h4>
   <p id="quickImportWarning" class="simple-hint">単体で確認できるのはJSONの形式と参考平均の計算だけです。作成者、記録の真正性や改変の有無、予測の正確さ、再現計算の手順は確認できません。JSONは編集や偽造が可能です。ダウンロードしたファイルにはキャラ名とモデルIDが含まれ、証明書としては使えません。</p>
   <label for="quickImportFile">比較記録のJSONファイル</label>
   <p id="quickImportHelp" class="simple-hint">各欄で64 KiB以下のファイルを1つ選択してください。読み込みはこのページ内で行い、送信や保存はしません。</p>
   <input id="quickImportFile" type="file" accept=".json,application/json" aria-describedby="quickImportHelp quickImportWarning quickImportStatus">
   <p id="quickImportStatus" class="simple-hint" role="status"></p>
+  <div id="quickImportResults" hidden>
+   <div id="quickImportDetails"></div>
+   <h5>シナリオ別の結果と参考平均</h5>
+   <div id="quickImportCards"></div>
+  </div>
+  <h4>③ 2件目を選び照合</h4>
   <label for="quickImportCompareFile">2件目の比較記録のJSONファイル</label>
   <p id="quickImportCompareHelp" class="simple-hint">1件目の読み込みに成功すると、2件目を選んで記録の条件を照合できます。</p>
   <input id="quickImportCompareFile" type="file" accept=".json,application/json" aria-describedby="quickImportCompareHelp quickImportHelp quickImportWarning" disabled>
   <p id="quickImportCompareStatus" role="status"></p>
   <div id="quickImportCompareResults" hidden>
-   <h4>記録された条件の照合</h4>
+   <h5>記録された条件の照合</h5>
    <ul id="quickImportCompareChecklist"></ul>
-   <h4>各記録の参考平均（ケース2〜4）</h4>
+   <h5>各記録の参考平均（ケース2〜4）</h5>
    <div id="quickImportReferenceCards"></div>
-  </div>
-  <div id="quickImportResults" hidden>
-   <div id="quickImportDetails"></div>
-   <h4>シナリオ別の結果と参考平均</h4>
-   <div id="quickImportCards"></div>
   </div>
  </section>
 </section>

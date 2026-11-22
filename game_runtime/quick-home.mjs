@@ -902,6 +902,8 @@ const multiStatus = element('quickCompareMultiStatus');
 const multiResults = element('quickCompareMultiResults');
 const multiCards = element('quickCompareMultiCards');
 const compareExport = element('quickCompareExport');
+const recordExportHelp = element('quickRecordExportHelp');
+const recordExportStatus = element('quickRecordExportStatus');
 const MAX_COMPARISON_JSON_BYTES = 64 * 1024;
 const comparisonDownloadUrls = new Map();
 const modelChangedMessage = 'モデル設定が変化した可能性があるため、追加の比較を中断しました。';
@@ -919,6 +921,8 @@ function clearMultiResults() {
   comparisonRecord=null;
   compareExport.hidden=true;
   compareExport.disabled=true;
+  recordExportHelp.hidden=false;
+  recordExportStatus.textContent='';
   multiResults.hidden=true;
   multiCards.replaceChildren();
   multiStatus.textContent='';
@@ -957,6 +961,8 @@ function updateCompareControls() {
   multiRun.disabled=multiPanel.hidden || compareBusy || !!dialogueController || !!sessionController;
   compareExport.disabled=compareExport.hidden=
     !comparisonRecord || multiPanel.hidden || multiResults.hidden || compareBusy;
+  recordExportHelp.hidden=!compareExport.hidden;
+  if(compareExport.hidden)recordExportStatus.textContent='';
   element('quickChatGPTAsk').disabled=multiComparisonRunning() || !!dialogueController;
   element('quickChatGPTStatusCheck').disabled=multiComparisonRunning() || !!sessionController;
 }
@@ -1201,6 +1207,10 @@ multiRun.addEventListener('click',async()=>{
     finish();
   }
 });
+function setRecordExportMessage(message) {
+  recordExportStatus.textContent=message;
+  setCompareMessage(multiStatus,message);
+}
 compareExport.addEventListener('click',event=>{
   if(!event.isTrusted || compareExport.disabled || compareExport.hidden || !comparisonRecord)return;
   let url;
@@ -1211,7 +1221,7 @@ compareExport.addEventListener('click',event=>{
     const blob=namesFit ? new Blob([JSON.stringify({...comparisonRecord,exported_at:exportedAt},null,2)+'\n'],
       {type:'application/json'}) : null;
     if(!blob || blob.size>MAX_COMPARISON_JSON_BYTES) {
-      setCompareMessage(multiStatus,'記録が64 KiBを超えたため、ダウンロードできませんでした。');
+      setRecordExportMessage('記録が64 KiBを超えたため、ダウンロードできませんでした。');
       return;
     }
     const link=document.createElement('a');
@@ -1220,9 +1230,9 @@ compareExport.addEventListener('click',event=>{
     const utcStamp=exportedAt.slice(0,19).replace(/[-:]/g,'').replace('T','-');
     link.download='synthetic-ai-comparison-'+utcStamp+'.json';
     link.click();
-    setCompareMessage(multiStatus,'JSONのダウンロードをリクエストしました。保存先やブロックの有無はブラウザで確認してください。');
+    setRecordExportMessage('JSONのダウンロードをリクエストしました。保存先やブロックの有無はブラウザで確認してください。');
   } catch {
-    setCompareMessage(multiStatus,'JSONのダウンロードを開始できませんでした。もう一度お試しください。');
+    setRecordExportMessage('JSONのダウンロードを開始できませんでした。もう一度お試しください。');
   } finally {
     // Leave the URL available for the browser to start reading the download.
     if(url) comparisonDownloadUrls.set(url,setTimeout(()=>{

@@ -3308,10 +3308,36 @@ async function assertNoComparisonDownload(ui) {
   const downloadCount=downloads.length,requestCount=calls.length;
   assert.equal(get('quickCompareExport').hidden,true);
   assert.equal(get('quickCompareExport').disabled,true);
+  assert.equal(get('quickRecordExportHelp').hidden,false);
+  assert.equal(get('quickRecordExportStatus').textContent,'');
   await fire('quickCompareExport');
   assert.equal(downloads.length,downloadCount);
   assert.equal(calls.length,requestCount);
 }
+
+test('P9y groups the three record actions and links to them from the additional comparison results',()=>{
+  const nodes=htmlNodes(),find=id=>nodes.find(node=>node.id===id);
+  const section=find('quickImport');
+  assert.doesNotMatch([section.attributes,...section.ancestorAttributes].join(' '),/\bhidden\b/);
+  const headings=nodes.filter(node=>node.tag==='h4' && node.parents.at(-1)==='quickImport');
+  const labels=headings.map(({offset})=>html.slice(offset,html.indexOf('</h4>',offset)));
+  assert.deepEqual(labels,['<h4>① 比較記録を保存','<h4>② 1件のJSONを読み込み確認','<h4>③ 2件目を選び照合']);
+  for(const id of ['quickRecordExportHelp','quickCompareExportNote','quickCompareExport','quickRecordExportStatus']) {
+    const node=find(id);
+    assert.equal(node.parents.at(-1),'quickImport');
+    assert.ok(headings[0].offset<node.offset && node.offset<headings[1].offset);
+    assert.doesNotMatch(node.attributes,/aria-live=|role=/);
+  }
+  assert.match(html,/最初の2体比較と追加3ケースが完了すると保存できます/);
+  assert.ok(headings[1].offset<find('quickImportFile').offset && find('quickImportResults').offset<headings[2].offset);
+  assert.ok(headings[2].offset<find('quickImportCompareFile').offset);
+  const link=nodes.find(node=>node.tag==='a' && /href="#quickImportTitle"/.test(node.attributes));
+  assert.ok(link.parents.includes('quickCompareMultiResults'));
+  assert.doesNotMatch(link.attributes,/\btarget=/);
+  assert.match(find('quickCompareMultiResults').attributes,/\bhidden\b/);
+  assert.equal(find('quickImportTitle').parents.at(-1),'quickImport');
+  assert.match(find('quickImportTitle').attributes,/class="simple-target" tabindex="-1"/);
+});
 
 test('P9u downloads only the four validated trials and their metadata after a trusted click',async()=>{
   const zipId='zip_'+'a'.repeat(32);
@@ -3319,9 +3345,9 @@ test('P9u downloads only the four validated trials and their metadata after a tr
   const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:markup,model_version:'v1'}]);
   const {get,fire,state,downloads,revokedUrls,calls,storageWrites,focus}=ui;
   const button=htmlNodes().find(node=>node.id==='quickCompareExport');
-  assert.ok(button.parents.includes('quickCompareMultiResults'));
+  assert.equal(button.parents.at(-1),'quickImport');
   assert.equal(button.tag,'button');
-  assert.match(button.attributes,/type="button".*aria-controls="quickCompareMultiStatus".*aria-describedby="quickCompareExportNote".*hidden disabled/);
+  assert.match(button.attributes,/type="button".*aria-controls="quickCompareMultiStatus quickRecordExportStatus".*aria-describedby="quickCompareExportNote".*hidden disabled/);
   assert.doesNotMatch(button.attributes,/aria-live=|role=/);
   assert.match(html,/キャラ名・モデルID・架空相場トークンが含まれます/);
   await assertNoComparisonDownload(ui);
@@ -3352,6 +3378,7 @@ test('P9u downloads only the four validated trials and their metadata after a tr
   assert.equal(get('quickCompareMultiCards').children.length,4);
   assert.equal(get('quickCompareExport').hidden,false);
   assert.equal(get('quickCompareExport').disabled,false);
+  assert.equal(get('quickRecordExportHelp').hidden,true);
   const cards=get('quickCompareMultiCards').children,single=get('quickCompareResults').children;
   focus();
   await tick();
@@ -3394,7 +3421,12 @@ test('P9u downloads only the four validated trials and their metadata after a tr
     reference_averages:{a:{profit_coins:13,max_drawdown_pct:2},b:{profit_coins:3,max_drawdown_pct:4}},
   });
   assert.doesNotMatch(source,/PRIVATE-|OTHER-ACCOUNT|user:secret/);
+  const savedStatus=get('quickRecordExportStatus').textContent;
   await importComparison(ui,{size:blob.size,text:()=>blob.text()});
+  await selectSecondComparison(ui,{size:blob.size,text:()=>blob.text()});
+  assert.equal(get('quickImportCompareResults').hidden,false);
+  assert.equal(get('quickCompareExport').disabled,false);
+  assert.equal(get('quickRecordExportStatus').textContent,savedStatus);
   assert.equal(get('quickImportResults').hidden,false);
   assert.equal(get('quickImportCards').children.length,5);
   assert.equal(get('quickImportCards').children[0].children[0].textContent,'ケース1（再挑戦）');
@@ -3405,10 +3437,12 @@ test('P9u downloads only the four validated trials and their metadata after a tr
     undefined,firstToken,firstToken,undefined,multiTokens[0],undefined,multiTokens[1],undefined,multiTokens[2],
   ]);
   assert.match(get('quickCompareMultiStatus').textContent,/リクエストしました.*ブラウザで確認/);
+  assert.equal(get('quickRecordExportStatus').textContent,get('quickCompareMultiStatus').textContent);
   state.downloadError=Error('blocked');
   await fire('quickCompareExport');
   assert.equal(downloads.length,1);
   assert.match(get('quickCompareMultiStatus').textContent,/開始できませんでした/);
+  assert.equal(get('quickRecordExportStatus').textContent,get('quickCompareMultiStatus').textContent);
   assert.equal(get('quickCompareResults').children,single);
   assert.equal(get('quickCompareMultiCards').children,cards);
   assert.equal(get('quickCompareExport').disabled,false);
@@ -3434,6 +3468,7 @@ test('P9u rejects oversized JSON without affecting the displayed comparison',asy
   assert.equal(revokedUrls.length,0);
   assert.equal(get('quickCompareMultiResults').hidden,false);
   assert.match(get('quickCompareMultiStatus').textContent,/64 KiBを超えた/);
+  assert.equal(get('quickRecordExportStatus').textContent,get('quickCompareMultiStatus').textContent);
 });
 
 function importFixture(scenarioKind='new') {
@@ -3872,8 +3907,26 @@ test('P9x discards stale second reads on reselection, primary replacement or inv
   assert.deepEqual(secondInput.files,[]);
 });
 
+test('P9y reads and checks two local records before any practice or comparison',async()=>{
+  const ui=await mount(),{get,calls,downloads,storageWrites,scrolls}=ui;
+  const requestCount=calls.length;
+  assert.equal(get('quickCompare').hidden,true);
+  await assertNoComparisonDownload(ui);
+  await importComparison(ui,comparisonJsonFile());
+  assert.equal(get('quickImportResults').hidden,false);
+  assert.equal(get('quickImportCompareFile').disabled,false);
+  await selectSecondComparison(ui,comparisonJsonFile());
+  assert.equal(get('quickImportCompareResults').hidden,false);
+  assert.deepEqual(importedConditionMatches(ui),Array(6).fill(true));
+  await assertNoComparisonDownload(ui);
+  assert.equal(calls.length,requestCount);
+  assert.deepEqual(downloads,[]);
+  assert.deepEqual(storageWrites,[]);
+  assert.deepEqual(scrolls,[]);
+});
+
 test('P9u invalidates a completed record immediately on retries, edits, model changes and departure',async()=>{
-  for(const change of ['retry','single retry','amount','leverage','submit','model A','model B','ZIP removed','focus renamed','quickAgain','pagehide']) {
+  for(const change of ['retry','single retry','amount','leverage','submit','failed practice','model A','model B','ZIP removed','focus renamed','quickAgain','pagehide']) {
     const zipId='zip_'+'a'.repeat(32);
     const ui=await mount([compareDemo],false,[{id:zipId,ai_id:zipId,name:'実験用AI',model_version:'v1'}]);
     const {get,fire,state,focus,pagehide}=ui,practice=state.practice;
@@ -3881,6 +3934,9 @@ test('P9u invalidates a completed record immediately on retries, edits, model ch
     state.practice=multiPracticeFixture(practice);
     await fire('quickCompareMultiRun');
     assert.equal(get('quickCompareExport').disabled,false,change);
+    if(change!=='pagehide')state.downloadError=Error('blocked');
+    await fire('quickCompareExport');
+    assert.ok(get('quickRecordExportStatus').textContent,change);
     if(change.endsWith('retry')) {
       const gate=Promise.withResolvers();
       state.practice=async()=>{await gate.promise;return null;};
@@ -3891,11 +3947,15 @@ test('P9u invalidates a completed record immediately on retries, edits, model ch
     } else if(change==='amount') await fire('quickAmount','input');
     else if(change==='leverage') await fire('quickLeverage','change');
     else if(change==='submit') await fire('quickForm','submit');
+    else if(change==='failed practice') {
+      state.practice=async()=>null;
+      await fire('quickForm','submit');
+      await fire('quickRun');
+    }
     else if(change==='model A') await fire('quickModel','change');
     else if(change==='model B') await chooseCompareModel(ui);
     else if(change==='quickAgain') await fire('quickAgain');
     else if(change==='pagehide') {
-      await fire('quickCompareExport');
       const [{blob,url}]=ui.downloads;
       const {trials}=JSON.parse(await blob.text());
       assert.deepEqual(trials.map(trial=>trial.scenario_kind),['new','new','new','new']);
