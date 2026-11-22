@@ -558,6 +558,22 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const saveEdit=()=>page.locator('#saveVisualEdit').click();
       const closeEdit=()=>page.locator('#cancelVisualEdit').click();
       const waitEditReady=()=>page.waitForFunction(()=>!document.getElementById('saveVisualEdit').disabled);
+      const editPath='/api/imported-characters/visual-edit/'+created.id;
+      const legacyPath='/api/imported-characters/visual-edit/'+legacy.id;
+      const postResponse=path=>page.waitForResponse(response=>
+        response.url()===origin+path && response.request().method()==='POST');
+      const replacePortrait=()=>page.locator('#confirmPortraitSave').click();
+      const restoreButton=page.locator('#restoreVisualEdit');
+      const restoreDialog=page.locator('#confirmVisualRestore');
+      const restore=async(path,message)=>{
+        const response=postResponse(path+'/restore');
+        await restoreButton.click();
+        await page.locator('#confirmPortraitRestore').click();
+        const result=await response;
+        assert.equal(result.status(),200,await result.text());
+        await page.waitForFunction(text=>document.getElementById('editStatus').textContent.includes(text),message);
+        await waitEditReady();
+      };
       await page.evaluate(()=>{window.holdRestoredOverlay=true;});
       await chooser.selectOption(created.id);
       await page.locator('#openVisualEdit').click();
@@ -572,6 +588,9 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.equal(await page.locator('#visualEdit').isVisible(),false);
       assert.equal(await page.locator('#zipEquipped li').count(),0);
       await openEdit(legacy.id);
+      assert.equal(await restoreButton.isVisible(),false);
+      assert.equal(await restoreButton.isDisabled(),true);
+      const legacyModel=await importedCharacterStore.model(legacy.id);
       assert.match(await page.locator('#legacyVisualWarning').textContent(),/復元できません/);
       assert.equal(await page.locator('#legacyVisualWarning').isVisible(),true);
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 1.*400 × 400/);
@@ -591,11 +610,28 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.locator('#confirmVisualEdit').waitFor();
       await page.keyboard.press('Escape');
       await page.locator('#confirmVisualEdit').waitFor({state:'hidden'});
+      assert.equal(writes.length,2);
+      const legacySave=postResponse(legacyPath);
+      await saveEdit();
+      await replacePortrait();
+      assert.equal((await legacySave).status(),200);
+      await waitEditReady();
+      assert.equal(await page.locator('#legacyVisualWarning').isVisible(),false);
+      await restore(legacyPath,'1つ前の保存画像に戻しました');
+      assert.equal(await page.locator('#legacyVisualWarning').isVisible(),true);
+      await partPicker.selectOption('base');
+      assert.deepEqual(await partPosition(),[0,0]);
+      assert.equal(await row(0).locator('input[type=file]').inputValue(),'');
+      assert.deepEqual((await importedCharacterStore.image(legacy.id)).bytes,legacyBytes);
+      assert.deepEqual(await importedCharacterStore.model(legacy.id),legacyModel);
+      await closeEdit();
+      await openEdit(legacy.id);
+      assert.equal(await page.locator('#legacyVisualWarning').isVisible(),true);
       await closeEdit();
       assert.equal(await partPicker.isDisabled(),true);
       assert.deepEqual(await partPosition(),[0,0]);
       assert.deepEqual((await importedCharacterStore.image(legacy.id)).bytes,legacyBytes);
-      assert.equal(writes.length,2);
+      assert.equal(writes.length,4);
 
       const getModel=()=>importedCharacterStore.model(created.id);
       const originalModel=await getModel();
@@ -607,11 +643,9 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         return response.json();
       };
       const baseline=await predictSameScenario();
-      const editPath='/api/imported-characters/visual-edit/'+created.id;
-      const portraitResponse=()=>page.waitForResponse(response=>
-        response.url()===origin+editPath && response.request().method()==='POST');
-      const replacePortrait=()=>page.locator('#confirmPortraitSave').click();
+      const portraitResponse=()=>postResponse(editPath);
       await openEdit(created.id);
+      assert.equal(await restoreButton.isVisible(),false);
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 6.*64 × 64/);
       assert.match(await page.locator('#editModel').textContent(),new RegExp(created.model_version));
       assert.match(await page.locator('#editTraits').textContent(),/慎重/);
@@ -642,7 +676,7 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await saveEdit();
       assert.match(await page.locator('#confirmOverlayCount').textContent(),/3 \/ 3/);
       await page.locator('#abortPortraitSave').click();
-      assert.equal(writes.length,2);
+      assert.equal(writes.length,4);
       await preview.scrollIntoViewIfNeeded();
       await down(6,58);
       await page.mouse.move(...await point(50,22),{steps:4});
@@ -665,7 +699,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.equal(savedVersion.id,created.id);
       await page.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('更新しました'));
       assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),editedPortrait);
-      const editedRecord=JSON.parse(await readFile(portraitFile,'utf8'));
+      const {previous_visual,...editedRecord}=JSON.parse(await readFile(portraitFile,'utf8'));
+      assert.deepEqual(previous_visual,{portrait:stored.images.portrait,visual:stored.visual});
       assert.deepEqual({...editedRecord,visual:stored.visual,
         images:{...editedRecord.images,portrait:stored.images.portrait}},stored);
       assert.equal(editedRecord.visual.mood,'ready');
@@ -677,9 +712,37 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await openEdit(created.id);
       assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),editedPortrait);
       assert.deepEqual(await getModel(),originalModel);
+      await restoreButton.click();
+      await restoreDialog.waitFor();
+      assert.equal(await page.locator('#abortPortraitRestore').evaluate(node=>node===document.activeElement),true);
+      await page.locator('#abortPortraitRestore').click();
+      await restoreDialog.waitFor({state:'hidden'});
+      await restoreButton.click();
+      await page.keyboard.press('Escape');
+      await restoreDialog.waitFor({state:'hidden'});
+      assert.equal(writes.length,5);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),editedPortrait);
+      await restore(editPath,'1つ前の見た目に戻しました');
+      assert.deepEqual(await pixels('#editSavedPortrait',0,0,64,64),expectedPortrait);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),expectedPortrait);
+      await closeEdit();
+      await openEdit(created.id);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),expectedPortrait);
+      assert.equal(await page.locator('#mood').inputValue(),'happy');
+      assert.deepEqual(await partPosition('face'),[8,4]);
+      assert.deepEqual(await position(0),[100,-100]);
+      assert.deepEqual(await position(1),[0,0]);
+      assert.deepEqual(await position(2),[-100,100]);
+      assert.equal(await row(0).locator('[data-action=unequip]').isVisible(),false);
+      assert.deepEqual(await getModel(),originalModel);
       const after=await predictSameScenario();
       assert.deepEqual(after.daily_ai_signals,baseline.daily_ai_signals);
       assert.deepEqual(after.daily_synthetic_prices,baseline.daily_synthetic_prices);
+      assert.equal(after.model_effective_sha256,baseline.model_effective_sha256);
+      assert.equal(after.engine_source_sha256,baseline.engine_source_sha256);
+      assert.deepEqual(after.daily_balances,baseline.daily_balances);
+      await restore(editPath,'1つ前の見た目に戻しました');
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),editedPortrait);
 
       // Open another editor before the next write, so it holds the older SHA.
       const stale=await browser.newPage({reducedMotion:'reduce'});
@@ -712,6 +775,13 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.equal((await conflictResponse).status(),409);
       await stale.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('未保存の編集'));
       assert.deepEqual(await stalePixels(),staleDraft);
+      const conflictRestore=stale.waitForResponse(res=>res.url()===origin+editPath+'/restore' &&
+        res.request().method()==='POST');
+      await stale.locator('#restoreVisualEdit').click();
+      await stale.locator('#confirmPortraitRestore').click();
+      assert.equal((await conflictRestore).status(),409);
+      await stale.waitForFunction(()=>document.getElementById('editStatus').textContent.includes('未保存の編集'));
+      assert.deepEqual(await stalePixels(),staleDraft);
       await stale.locator('#cancelVisualEdit').click();
       assert.deepEqual(await readFile(portraitFile),committed);
       await stale.close();
@@ -732,7 +802,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       assert.deepEqual(await pixels('#quickMiniPortrait',0,0,64,64),secondPortrait);
       assert.deepEqual(writes,[
         '/api/imported-characters/register','/api/imported-characters/register',
-        editPath,editPath,'/api/quick-practice',
+        legacyPath,legacyPath+'/restore',editPath,editPath+'/restore',editPath+'/restore',
+        editPath,'/api/quick-practice',
       ]);
       assert.deepEqual(external,[]);
       assert.deepEqual(pageErrors,[]);

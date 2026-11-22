@@ -36,7 +36,9 @@ const visualImageLimits=kind=>({staticOnly:kind==='portrait',maxHeight:FRAME_SID
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const exact=(x,keys)=>object(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
-const visualKeys=(item,keys)=>Object.hasOwn(item??{},'visual')?[...keys,'visual']:keys;
+const optionalKey=(item,keys,key)=>Object.hasOwn(item??{},key)?[...keys,key]:keys;
+const visualKeys=(item,keys)=>optionalKey(item,keys,'visual');
+const isHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 function decodeImage(value,part,details,limits) {
   if(!exact(value,['mime','base64'])||!['image/png','image/webp'].includes(value.mime))
     throw fail('キャラ画像はPNGまたはWebPにしてください');
@@ -64,6 +66,13 @@ function storedImage(item,part,details,limits) {
   }catch{throw fail('画像の保存内容が不正です',503);}
 }
 const imageHash=bytes=>createHash('sha256').update(bytes).digest('hex');
+const visualSnapshot=(record,portrait)=>({portrait,...(record.visual?{visual:record.visual}:{})});
+function editState(record,image_sha256) {
+  // Include the rollback target so a change to either side invalidates an open editor.
+  return {edit_token:createHash('sha256').update(JSON.stringify([record.id,image_sha256,record.visual??null]))
+      .update(JSON.stringify(record.previous_visual??null)).digest('hex'),
+    can_restore_previous:Object.hasOwn(record,'previous_visual')};
+}
 function readImages(input,{stored=false,withVisual=false}={}) {
   if(!object(input)||!Object.keys(input).every(k=>IMAGE_KEYS.includes(k))||
      !['body','ready','portrait'].every(k=>Object.hasOwn(input,k)))
@@ -95,11 +104,12 @@ function validateVisual(visual,sizes,{appearance,equipped}) {
     throw fail('見た目の編集情報が不正です');
   const {width,height}=sizes.portrait;
   const offsets={};
+  // JSON stores both signs of zero as 0. Normalize positions before comparing drafts.
   for(const layer of LAYERS) {
     const offset=visual.offsets[layer],limit=layerOffsetLimit(layer,width,height);
     if(!exact(offset,['x','y'])||![offset.x,offset.y].every(value=>inRange(value,-limit,limit)))
       throw fail('パーツの位置が範囲外です');
-    offsets[layer]={x:offset.x,y:offset.y};
+    offsets[layer]={x:offset.x||0,y:offset.y||0};
   }
   const ids=new Set(equipped?equipped.map(item=>item.id):
     BUILTIN_ACCESSORIES.filter(item=>item.id===appearance?.look?.accessory).map(item=>item.id));
@@ -115,7 +125,7 @@ function validateVisual(visual,sizes,{appearance,equipped}) {
       {staticOnly:true,maxWidth:OVERLAY_MAX_SIDE,maxHeight:OVERLAY_MAX_SIDE});
     total+=size;
     if(total>MAX_OVERLAYS)throw fail('重ね絵の合計サイズが大きすぎます',413);
-    overlays.push({id,image:{mime,base64},x,y,scale});
+    overlays.push({id,image:{mime,base64},x:x||0,y:y||0,scale});
   }
   return {schema:1,mood:visual.mood,offsets,overlays};
 }
@@ -257,8 +267,9 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
            fromLook.modelHash!==validated.modelHash)throw Error('appearance/model mismatch');
       }
       if(item.schema===2) {
-        if(!exact(item,visualKeys(item,['schema','id','ai_id','name','model_revision','generation',
-          'appearance','equipped','equipment_hash','images'])) || !exact(item.appearance,['look','colors']))
+        const keys=visualKeys(item,['schema','id','ai_id','name','model_revision','generation',
+          'appearance','equipped','equipment_hash','images']);
+        if(!exact(item,optionalKey(item,keys,'previous_visual')) || !exact(item.appearance,['look','colors']))
           throw Error('invalid equipment record');
         if(item.appearance?.look.accessory!=='none')throw Error('equipment requires appearance');
         const equipped=validateEquippedAccessories(item.equipped);
@@ -273,7 +284,60 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
         details.sizes=sizes;
       }catch{throw fail('保存済みの見た目の編集情報を検証できません',503);}
     }
+    if(Object.hasOwn(item,'previous_visual')) {
+      try {
+        const previous=item.previous_visual;
+        if(!exact(previous,visualKeys(previous,['portrait']))||
+           !exact(previous.portrait,['mime','base64','size']))
+          throw Error('invalid visual history');
+        const hasVisual=Object.hasOwn(previous,'visual');
+        const previousSizes=hasVisual&&!details.sizes?
+          readImages({...item.images,portrait:previous.portrait},{stored:true,withVisual:true}).sizes:undefined;
+        const size=previousSizes?.portrait??{};
+        if(!previousSizes)storedImage(previous.portrait,'portrait',size,
+          hasVisual?visualImageLimits('portrait'):undefined);
+        const current=details.sizes?.portrait??{};
+        if(!details.sizes)storedImage(item.images.portrait,'portrait',current);
+        if(size.width>FRAME_SIDE||size.height>FRAME_SIDE||
+           size.width!==current.width||size.height!==current.height)
+          throw Error('invalid previous portrait dimensions');
+        if(hasVisual)validateVisual(previous.visual,previousSizes??details.sizes,item);
+      }catch{throw fail('1つ前の見た目を検証できません',503);}
+    }
     return item;
+  }
+  function checkCharacterId(id) {
+    if(typeof id!=='string'||!IMPORTED_CHARACTER_ID.test(id))throw fail('キャラIDが不正です',404);
+  }
+  async function changePortrait(id,payload,change) {
+    await ensureRoot();
+    const lock=join(root,'.portrait-'+id+'.lock');
+    try {await mkdir(lock,{mode:0o700});}
+    catch(error){
+      if(error.code!=='EEXIST')throw error;
+      throw fail('このキャラの画像は保存処理中です',409);
+    }
+    try {
+      const details={};
+      const record=await load(id,details);
+      const current={};
+      const portrait=storedImage(record.images.portrait,'portrait',current);
+      const hash=imageHash(current.bytes);
+      const state={id,image_sha256:hash,...editState(record,hash)};
+      if(payload.expected_image_sha256!==hash||
+         (Object.hasOwn(payload,'expected_edit_token')&&payload.expected_edit_token!==state.edit_token))
+        throw fail('保存済みの見た目が別の画面で更新されました',409);
+      const next=change(record,current,details);
+      if(!next)return state;
+      record.previous_visual=visualSnapshot(record,portrait);
+      record.images.portrait=next.portrait;
+      if(next.visual)record.visual=next.visual;
+      else delete record.visual;
+      const image_sha256=imageHash(Buffer.from(next.portrait.base64,'base64'));
+      const result={id,image_sha256,...editState(record,image_sha256)};
+      await writeRecord(join(root,id+'.json'),record);
+      return result;
+    }finally{await rmdir(lock);}
   }
   return {
     async listAccessories() {
@@ -345,54 +409,48 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
       return {
         character:summary(record,image_sha256),sources,
         portrait:{width:portrait.width,height:portrait.height,image_sha256},
+        ...editState(record,image_sha256),
         ...(record.visual?{visual:record.visual}:{}),
       };
     },
     async updatePortrait(id,payload) {
-      if(typeof id!=='string'||!IMPORTED_CHARACTER_ID.test(id))throw fail('キャラIDが不正です',404);
-      if(!exact(payload,visualKeys(payload,['expected_image_sha256','portrait']))||
-         typeof payload.expected_image_sha256!=='string'||!/^[a-f0-9]{64}$/.test(payload.expected_image_sha256))
+      checkCharacterId(id);
+      const withVisual=Object.hasOwn(payload??{},'visual');
+      const withToken=Object.hasOwn(payload??{},'expected_edit_token');
+      const keys=visualKeys(payload,['expected_image_sha256','portrait']);
+      if(!exact(payload,optionalKey(payload,keys,'expected_edit_token'))||
+         !isHash(payload.expected_image_sha256)||((withVisual||withToken)&&!isHash(payload.expected_edit_token)))
         throw fail('保存済み画像の確認情報が不正です');
       const next={};
-      const withVisual=Object.hasOwn(payload,'visual');
       const portrait=decodeImage(payload.portrait,'portrait',next,
         withVisual?visualImageLimits('portrait'):undefined);
-      if(next.width>1024||next.height>1024)throw fail('合成画像の縦横は1024px以下にしてください');
-      await ensureRoot();
-      const lock=join(root,'.portrait-'+id+'.lock');
-      try {await mkdir(lock,{mode:0o700});}
-      catch(error){
-        if(error.code!=='EEXIST')throw error;
-        throw fail('このキャラの画像は保存処理中です',409);
-      }
-      try {
-        // Verify the current portrait under the same lock held through replacement.
-        const details={};
-        const record=await load(id,details);
-        const previous={};
-        storedImage(record.images.portrait,'portrait',previous);
-        if(imageHash(previous.bytes)!==payload.expected_image_sha256)
-          throw fail('保存済みの画像が別の画面で更新されました',409);
-        if(previous.width!==next.width||previous.height!==next.height)
+      if(next.width>FRAME_SIDE||next.height>FRAME_SIDE)
+        throw fail('合成画像の縦横は1024px以下にしてください');
+      const state=await changePortrait(id,payload,(record,current,details)=>{
+        if(current.width!==next.width||current.height!==next.height)
           throw fail('合成画像は保存済み画像と同じ寸法にしてください');
-        const image_sha256=imageHash(next.bytes);
-        const imageChanged=image_sha256!==payload.expected_image_sha256;
-        let visualChanged=false;
+        const imageChanged=imageHash(next.bytes)!==payload.expected_image_sha256;
+        let visual=record.visual;
         if(withVisual) {
           const sizes=details.sizes??readImages({...record.images,portrait},{stored:true,withVisual:true}).sizes;
-          const visual=validateVisual(payload.visual,sizes,record);
-          visualChanged=!isDeepStrictEqual(visual,record.visual);
-          record.visual=visual;
+          visual=validateVisual(payload.visual,sizes,record);
         }else if(record.visual&&imageChanged) {
           // Keep the last editable draft when a legacy client replaces only the portrait.
           decodeImage(payload.portrait,'portrait',undefined,visualImageLimits('portrait'));
         }
-        if(imageChanged||visualChanged) {
-          record.images.portrait=portrait;
-          await writeRecord(join(root,id+'.json'),record);
-        }
-        return {id,image_sha256};
-      }finally{await rmdir(lock);}
+        if(imageChanged||!isDeepStrictEqual(visual,record.visual))return {portrait,visual};
+      });
+      return withToken?state:{id,image_sha256:state.image_sha256};
+    },
+    async restorePortrait(id,payload) {
+      checkCharacterId(id);
+      if(!exact(payload,['expected_image_sha256','expected_edit_token'])||
+         !isHash(payload.expected_image_sha256)||!isHash(payload.expected_edit_token))
+        throw fail('保存済み画像の確認情報が不正です');
+      return changePortrait(id,payload,record=>{
+        if(!record.previous_visual)throw fail('1つ前の見た目がありません',409);
+        return record.previous_visual;
+      });
     },
   };
 }

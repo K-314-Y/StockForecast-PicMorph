@@ -84,13 +84,14 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <p><strong id="editName"></strong></p>
 <p class="metadata" id="editModel"></p>
 <p class="hint" id="editTraits"></p>
-<p id="legacyVisualWarning" class="caution" hidden>このキャラは以前の形式で登録されています。保存済みの画像から以前の表情やパーツ位置、重ね絵の元ファイルは復元できません。残したい重ね絵は再アップロードしてください。</p>
+<p id="legacyVisualWarning" class="caution" hidden>この見た目には編集情報がありません。保存済みの画像から表情やパーツ位置、重ね絵の元ファイルは復元できません。残したい重ね絵は再アップロードしてください。</p>
 <p class="hint">ZIPから読み込める素材は体と表情です。予測用の装備を変えるには、キャラを新規登録してください。</p>
 <p>保存済みの画像</p>
 <img id="editSavedPortrait" alt="現在保存されているキャラの画像">
 <div id="editEquipmentMount"></div>
 <div class="actions">
 <button id="saveVisualEdit" class="primary" type="button" disabled>見た目の変更を保存</button>
+<button id="restoreVisualEdit" type="button" hidden disabled>1つ前の見た目に戻す</button>
 <button id="cancelVisualEdit" type="button">編集を終了</button>
 </div>
 </div>
@@ -267,6 +268,14 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <div class="actions">
 <button id="abortPortraitSave" type="button" autofocus>編集に戻る</button>
 <button id="confirmPortraitSave" type="button" class="primary">画像を差し替える</button>
+</div>
+</dialog>
+<dialog id="confirmVisualRestore" aria-labelledby="restoreVisualTitle" aria-describedby="restoreVisualWarning">
+<h2 id="restoreVisualTitle">1つ前の見た目に戻しますか？</h2>
+<p id="restoreVisualWarning">保存済みの画像と編集情報を1つ前に戻します。編集中の変更は破棄されます。</p>
+<div class="actions">
+<button id="abortPortraitRestore" type="button" autofocus>編集に戻る</button>
+<button id="confirmPortraitRestore" type="button" class="primary">1つ前に戻す</button>
 </div>
 </dialog>
 </main>

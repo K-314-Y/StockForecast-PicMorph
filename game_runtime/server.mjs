@@ -456,15 +456,24 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       const editPrefix='/api/imported-characters/visual-edit/';
       if(rawPath.startsWith(editPrefix)) {
-        const id=rawPath.slice(editPrefix.length);
-        if(!IMPORTED_CHARACTER_ID.test(id)||!['GET','POST'].includes(req.method))
+        const target=rawPath.slice(editPrefix.length);
+        const restore=target.endsWith('/restore');
+        const id=restore?target.slice(0,-'/restore'.length):target;
+        if(!IMPORTED_CHARACTER_ID.test(id)||(restore&&req.url!==rawPath))
           return json(res,404,{error:'キャラが見つかりません'});
         if(req.headers.origin && req.headers.origin!==`http://${req.headers.host}`)
           return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+        if(restore&&req.method!=='POST') {
+          res.setHeader('Allow','POST');
+          return json(res,405,{error:'POSTで送信してください'});
+        }
+        if(!['GET','POST'].includes(req.method))
+          return json(res,404,{error:'キャラが見つかりません'});
         if(inFlight>=2)return json(res,429,{error:'処理が混雑しています'});
         inFlight++;
         try {
           const result=req.method==='GET'?await importedCharacterStore.visualEdit(id):
+            restore?await importedCharacterStore.restorePortrait(id,await getBody(req,1024)):
             await importedCharacterStore.updatePortrait(id,await getBody(req,MAX_IMPORTED_VISUAL_EDIT_REQUEST));
           return json(res,200,result);
         }catch(error){

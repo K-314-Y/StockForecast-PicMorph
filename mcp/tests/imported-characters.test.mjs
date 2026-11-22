@@ -16,6 +16,9 @@ const red={...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQV
 const green={...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGNkaGBgYGBgYmBgYGBgAAAGKgCE5tEtPAAAAABJRU5ErkJggg=='};
 const pngBytes=({base64})=>Buffer.from(base64,'base64');
 const checksum=image=>createHash('sha256').update(pngBytes(image)).digest('hex');
+const editCheck=edit=>({
+  expected_image_sha256:edit.portrait.image_sha256,expected_edit_token:edit.edit_token,
+});
 const payload=(name,approach='trend',risk_percent=50)=>({
   name,approach,risk_percent,images:{body:png,ready:png,happy:png,portrait:png},
 });
@@ -317,7 +320,7 @@ test('local APIs create, list and serve character art linked to the model',async
   });
 });
 
-test('visual edit updates the same saved ID and preserves every other field in both schemas',async()=>{
+test('visual edit and rollback preserve every other field and restore legacy portraits in both schemas',async()=>{
   await tempStore(async(store,root)=>{
     const legacy={...equipmentPayload([])};
     delete legacy.accessories;
@@ -337,16 +340,19 @@ test('visual edit updates the same saved ID and preserves every other field in b
       const expected_image_sha256=checksum(png);
       const edit=await store.visualEdit(id);
       assert.deepEqual(edit.character,character);
+      assert.equal(edit.can_restore_previous,false);
+      await assert.rejects(store.restorePortrait(id,editCheck(edit)),{status:409});
       assert.equal(Object.hasOwn(edit,'visual'),false);
       assert.deepEqual(edit.portrait,{width:2,height:2,image_sha256:expected_image_sha256});
       const {portrait:oldImage,...oldSources}=JSON.parse(before).images;
       assert.deepEqual(edit.sources,oldSources);
       const {image_sha256}=await store.updatePortrait(id,{expected_image_sha256,portrait:red});
       assert.equal(image_sha256,checksum(red));
-      const oldPortrait=JSON.stringify(oldImage);
-      const newPortrait=JSON.stringify({...red,size:pngBytes(red).length});
       const committed=await readFile(file,'utf8');
-      assert.equal(committed,before.replace('"portrait":'+oldPortrait,'"portrait":'+newPortrait));
+      const {previous_visual,...updated}=JSON.parse(committed);
+      assert.deepEqual(previous_visual,{portrait:oldImage});
+      assert.deepEqual(updated,{...JSON.parse(before),
+        images:{...oldSources,portrait:{...red,size:pngBytes(red).length}}});
       assert.equal((await stat(file)).mode & 0o777,0o600);
       const reopened=createImportedCharacterStore({root});
       assert.deepEqual(await reopened.model(id),model);
@@ -358,27 +364,59 @@ test('visual edit updates the same saved ID and preserves every other field in b
       const equippedId=character.accessory_analysis?.equipped?.[0].id ??
         (character.accessory_analysis?.accessory==='star'?'star':null);
       const visual=visualDraft('happy',equippedId?[overlay(equippedId)]:[]);
-      await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:red,visual});
-      assert.deepEqual((await store.visualEdit(id)).visual,visual);
+      const oldEdit=await reopened.visualEdit(id);
+      const saved=await reopened.updatePortrait(id,{...editCheck(oldEdit),portrait:red,visual});
+      const changed=await store.visualEdit(id);
+      assert.equal(saved.can_restore_previous,true);
+      assert.equal(saved.edit_token,changed.edit_token);
+      assert.equal(changed.portrait.image_sha256,oldEdit.portrait.image_sha256);
+      assert.notEqual(changed.edit_token,oldEdit.edit_token);
+      assert.deepEqual(changed.visual,visual);
       const withVisual=await readFile(file,'utf8');
-      await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:red,visual});
+      const noop=await reopened.updatePortrait(id,{...editCheck(changed),portrait:red,visual});
+      assert.deepEqual(noop,saved);
+      const signedZero=structuredClone(visual);
+      signedZero.offsets.hair.x=-0;
+      assert.deepEqual(await reopened.updatePortrait(id,{...editCheck(changed),portrait:red,visual:signedZero}),saved);
       assert.equal(await readFile(file,'utf8'),withVisual);
+      await assert.rejects(reopened.updatePortrait(id,{...editCheck(oldEdit),portrait:red,visual}),{status:409});
+      await assert.rejects(reopened.restorePortrait(id,editCheck(oldEdit)),{status:409});
+      assert.equal(await readFile(file,'utf8'),withVisual);
+      const restored=await reopened.restorePortrait(id,editCheck(changed));
+      const restoredEdit=await store.visualEdit(id);
+      assert.equal(restoredEdit.can_restore_previous,true);
+      assert.equal(restoredEdit.edit_token,restored.edit_token);
+      assert.equal(restored.image_sha256,checksum(red));
+      assert.equal(Object.hasOwn(restoredEdit,'visual'),false);
+      assert.deepEqual(restoredEdit.sources,oldSources);
+      const {previous_visual:redo,...rolledBack}=JSON.parse(await readFile(file,'utf8'));
+      assert.deepEqual(rolledBack,updated);
+      assert.deepEqual(redo,{portrait:updated.images.portrait,visual});
+      assert.deepEqual(await reopened.model(id),model);
+      await store.restorePortrait(id,editCheck(restoredEdit));
+      assert.deepEqual((await reopened.visualEdit(id)).visual,visual);
       await reopened.updatePortrait(id,{expected_image_sha256:image_sha256,portrait:green});
       assert.deepEqual((await store.visualEdit(id)).visual,visual);
+      await store.restorePortrait(id,editCheck(await store.visualEdit(id)));
+      assert.deepEqual((await reopened.image(id)).bytes,pngBytes(red));
       assert.deepEqual(await reopened.model(id),model);
     }
     assert.equal((await store.list()).characters.length,4);
   });
 });
 
-test('only one competing portrait replacement commits across store instances',async()=>{
+test('same-image competing layout saves and a save racing restore share one lock',async()=>{
   await tempStore(async(store,root)=>{
-    const {id}=await store.register(payload('競合'));
-    const expected_image_sha256=checksum(png);
+    const {id}=await store.register({...payload('競合'),visual:visualDraft('ready')});
+    const reopened=createImportedCharacterStore({root});
+    const check=editCheck(await store.visualEdit(id));
+    const first=visualDraft('ready');
+    const second=visualDraft('ready');
+    first.offsets.face.x=10;
+    second.offsets.face.x=20;
     const results=await Promise.allSettled([
-      store.updatePortrait(id,{expected_image_sha256,portrait:red,visual:visualDraft('ready')}),
-      createImportedCharacterStore({root}).updatePortrait(id,
-        {expected_image_sha256,portrait:green,visual:visualDraft('happy')}),
+      store.updatePortrait(id,{...check,portrait:png,visual:first}),
+      reopened.updatePortrait(id,{...check,portrait:png,visual:second}),
     ]);
     const winner=results.filter(result=>result.status==='fulfilled');
     const loser=results.filter(result=>result.status==='rejected');
@@ -386,8 +424,20 @@ test('only one competing portrait replacement commits across store instances',as
     assert.equal(loser.length,1);
     assert.equal(loser[0].reason.status,409);
     const edit=await store.visualEdit(id);
-    assert.equal(edit.portrait.image_sha256,winner[0].value.image_sha256);
-    assert.deepEqual(edit.visual,visualDraft(edit.portrait.image_sha256===checksum(red)?'ready':'happy'));
+    assert.equal(edit.portrait.image_sha256,checksum(png));
+    assert.equal(edit.edit_token,winner[0].value.edit_token);
+    assert.deepEqual(edit.visual,results[0].status==='fulfilled'?first:second);
+    const racing=await Promise.allSettled([
+      store.updatePortrait(id,{...editCheck(edit),portrait:red,visual:first}),
+      reopened.restorePortrait(id,editCheck(edit)),
+    ]);
+    assert.equal(racing.filter(result=>result.status==='fulfilled').length,1);
+    assert.equal(racing.find(result=>result.status==='rejected').reason.status,409);
+    const final=await store.visualEdit(id);
+    assert.equal(final.edit_token,racing.find(result=>result.status==='fulfilled').value.edit_token);
+    assert.deepEqual(final.visual,racing[0].status==='fulfilled'?first:visualDraft());
+    await store.restorePortrait(id,editCheck(final));
+    assert.deepEqual((await store.visualEdit(id)).visual,edit.visual);
     assert.deepEqual(await readdir(root),[id+'.json']);
   });
 });
@@ -405,8 +455,9 @@ test('registered visuals require exact fields, matching strip geometry and canon
     assert.equal(Object.hasOwn(registered,'visual'),false);
     const changed={...visual,overlays:[{...visual.overlays[0],x:50}]};
     await reopened.updatePortrait(registered.id,
-      {expected_image_sha256:checksum(png),portrait:png,visual:changed});
+      {...editCheck(await reopened.visualEdit(registered.id)),portrait:png,visual:changed});
     assert.deepEqual((await store.visualEdit(registered.id)).visual,changed);
+    const check=editCheck(await reopened.visualEdit(registered.id));
     const malformed=[
       [{...visual,schema:2},400],
       [{...visual,mood:'cautious'},400],
@@ -430,7 +481,7 @@ test('registered visuals require exact fields, matching strip geometry and canon
     for(const [bad,status] of malformed) {
       await assert.rejects(store.register({...input,visual:bad}),{status});
       await assert.rejects(reopened.updatePortrait(registered.id,
-        {expected_image_sha256:checksum(png),portrait:red,visual:bad}),{status});
+        {...check,portrait:red,visual:bad}),{status});
       assert.equal(await readFile(file,'utf8'),original);
     }
     for(const images of [
@@ -439,11 +490,21 @@ test('registered visuals require exact fields, matching strip geometry and canon
     ])await assert.rejects(store.register({...input,images,visual}),
       error=>error.status===400||error.status===415);
     const record=JSON.parse(original);
+    const wrongSize=fixturePng(3,2);
     for(const corrupted of [
       {...record,visual:{...changed,extra:true}},
       {...record,visual:{...changed,overlays:[overlay('glasses')]}},
       {...record,visual:{...changed,overlays:[overlay('star',{...png,base64:'AAAA'})]}},
       {...record,images:{...record.images,happy:record.images.portrait}},
+      {...record,previous_visual:null},
+      {...record,previous_visual:{...record.previous_visual,extra:true}},
+      {...record,previous_visual:{...record.previous_visual,visual:{...visual,overlays:[overlay('glasses')]}}},
+      {...record,previous_visual:{...record.previous_visual,visual:{...visual,mood:'cautious'}}},
+      {...record,previous_visual:{portrait:{...record.images.portrait,size:1}}},
+      {...record,previous_visual:{portrait:{...record.images.portrait,extra:true}}},
+      {...record,previous_visual:{portrait:{...wrongSize,size:pngBytes(wrongSize).length}}},
+      {...record,previous_visual:{...record.previous_visual,visual:null}},
+      {...record,previous_visual:{portrait:{...red,size:pngBytes(red).length,base64:'AAAA'}}},
       {...record,extra:true},
     ]) {
       const disk=JSON.stringify(corrupted);
@@ -452,12 +513,13 @@ test('registered visuals require exact fields, matching strip geometry and canon
       await assert.rejects(reopened.model(registered.id),{status:503});
       await assert.rejects(reopened.updatePortrait(registered.id,
         {expected_image_sha256:checksum(png),portrait:red}),{status:503});
+      await assert.rejects(reopened.restorePortrait(registered.id,check),{status:503});
       assert.equal(await readFile(file,'utf8'),disk);
     }
   });
 });
 
-test('maximum-sized ZIP images and overlays fit the saved-record limit and reload',async()=>{
+test('maximum-sized ZIP images and overlays reload and history obeys the same record limit',async()=>{
   await tempStore(async(store,root)=>{
     const maxImage=fixturePng(2,2,{size:5*1024*1024});
     const portrait=fixturePng(2,2,{size:1024*1024});
@@ -465,16 +527,30 @@ test('maximum-sized ZIP images and overlays fit the saved-record limit and reloa
     input.images={body:maxImage,ready:maxImage,happy:maxImage,cautious:maxImage,portrait};
     input.visual=visualDraft('cautious',input.accessories.map(id=>overlay(id,maxImage)));
     const {id}=await store.register(input);
-    const size=(await stat(join(root,id+'.json'))).size;
+    const file=join(root,id+'.json');
+    const size=(await stat(file)).size;
     assert.ok(size>48*1024*1024 && size<MAX_IMPORTED_REQUEST);
     const reopened=createImportedCharacterStore({root});
     const edit=await reopened.visualEdit(id);
     assert.deepEqual(edit.visual,input.visual);
     assert.equal(edit.sources.cautious.base64,maxImage.base64);
-    const update={expected_image_sha256:edit.portrait.image_sha256,portrait,visual:input.visual};
+    const update={...editCheck(edit),portrait,visual:input.visual};
     assert.ok(Buffer.byteLength(JSON.stringify(update))<MAX_IMPORTED_VISUAL_EDIT_REQUEST);
     assert.deepEqual(await reopened.updatePortrait(id,update),
-      {id,image_sha256:edit.portrait.image_sha256});
+      {id,image_sha256:edit.portrait.image_sha256,edit_token:edit.edit_token,can_restore_previous:false});
+    const before=await readFile(file);
+    await assert.rejects(reopened.updatePortrait(id,{...update,visual:{...update.visual,mood:'happy'}}),
+      {status:413});
+    assert.deepEqual(await readFile(file),before);
+    assert.equal((await reopened.visualEdit(id)).can_restore_previous,false);
+    const saved=await reopened.updatePortrait(id,{...update,visual:{...update.visual,overlays:[]}});
+    assert.equal(saved.can_restore_previous,true);
+    assert.ok((await stat(file)).size<MAX_IMPORTED_REQUEST);
+    await reopened.restorePortrait(id,editCheck(await reopened.visualEdit(id)));
+    const restored=await store.visualEdit(id);
+    assert.deepEqual(restored.visual,input.visual);
+    assert.equal(restored.portrait.image_sha256,edit.portrait.image_sha256);
+    assert.deepEqual(await readdir(root),[id+'.json']);
   });
 });
 
@@ -496,7 +572,23 @@ test('visual edit API rejects invalid requests and symlinks without modifying th
       const current=await fetch(path+id);
       assert.equal(current.status,200);
       assert.equal(current.headers.get('cache-control'),'no-store');
-      assert.deepEqual(await current.json(),await store.visualEdit(id));
+      const currentEdit=await current.json();
+      assert.deepEqual(currentEdit,await store.visualEdit(id));
+      const restorePath=id+'/restore';
+      const restoreCheck=editCheck(currentEdit);
+      assert.equal((await post(restorePath,restoreCheck)).status,409);
+      assert.equal((await post(restorePath,{...restoreCheck,portrait:red})).status,400);
+      assert.equal((await post(restorePath,{...restoreCheck,expected_edit_token:null})).status,400);
+      assert.equal((await post(restorePath,{expected_image_sha256:checksum(png)})).status,400);
+      assert.equal((await post(restorePath,restoreCheck,{'Content-Type':'text/plain'})).status,415);
+      assert.equal(await statusWithContentLength(path+restorePath,1025),413);
+      assert.equal((await fetch(path+restorePath,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:'{'})).status,400);
+      for(const method of ['GET','PUT']) {
+        const response=await fetch(path+restorePath,{method});
+        assert.equal(response.status,405);
+        assert.equal(response.headers.get('allow'),'POST');
+      }
       for(const [body,status] of [
         [{...good,appearance:{look:'changed'}},400],
         [{...good,expected_image_sha256:'broken'},400],
@@ -506,8 +598,9 @@ test('visual edit API rejects invalid requests and symlinks without modifying th
         [{...good,portrait:{...png,base64:'AAAA'}},415],
         [{...good,portrait:{...png,base64:'A'.repeat(4*Math.ceil((1024*1024+2)/3))}},413],
         [{...good,portrait:{...png,base64:'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP8zwAFTDAGAwATKQED8NgHhAAAAABJRU5ErkJggg=='}},400],
-        [{...good,visual:null},400],
-        [{...good,visual:visualDraft('ready',[overlay('../star')])},400],
+        [{...good,visual:visualDraft()},400],
+        [{...good,...restoreCheck,visual:null},400],
+        [{...good,...restoreCheck,visual:visualDraft('ready',[overlay('../star')])},400],
       ]) assert.equal((await post(id,body)).status,status);
       assert.equal(await statusWithContentLength(path+id,MAX_IMPORTED_VISUAL_EDIT_REQUEST+1),413);
       assert.equal(await statusWithContentLength(origin+'/api/imported-characters/register',
@@ -516,19 +609,32 @@ test('visual edit API rejects invalid requests and symlinks without modifying th
       for(const headers of [{Origin:'http://localhost:'+port},{'Sec-Fetch-Site':'cross-site'}]) {
         assert.equal((await fetch(path+id,{headers})).status,403);
         assert.equal((await post(id,good,headers)).status,403);
+        assert.equal((await post(restorePath,restoreCheck,headers)).status,403);
       }
       const missing='zip_'+'f'.repeat(32);
       for(const target of [missing,'','%2e%2e%2fother',id+'/extra']) {
         assert.equal((await fetch(path+target)).status,404);
         assert.equal((await post(target,good)).status,404);
       }
+      for(const target of [missing+'/restore',id+'/%72estore',restorePath+'/',restorePath+'?extra=1',
+        id+'/nested/restore'])assert.equal((await post(target,restoreCheck)).status,404);
       await symlink(file,join(root,missing+'.json'));
       assert.equal((await fetch(path+missing)).status,503);
       assert.equal((await post(missing,good)).status,503);
+      assert.equal((await post(missing+'/restore',restoreCheck)).status,503);
       assert.deepEqual(await readFile(file),before);
       const saved=await post(id,good,{Origin:origin});
       assert.equal(saved.status,200,await saved.clone().text());
       assert.deepEqual(await saved.json(),{id,image_sha256:checksum(red)});
+      const savedBytes=await readFile(file);
+      assert.equal((await post(restorePath,restoreCheck)).status,409);
+      assert.deepEqual(await readFile(file),savedBytes);
+      const restored=await post(restorePath,editCheck(await store.visualEdit(id)),{Origin:origin});
+      assert.equal(restored.status,200,await restored.clone().text());
+      const result=await restored.json();
+      const edit=await store.visualEdit(id);
+      assert.deepEqual(result,{id,image_sha256:checksum(png),edit_token:edit.edit_token,can_restore_previous:true});
+      assert.deepEqual((await store.image(id)).bytes,pngBytes(png));
     }finally{await new Promise(resolve=>server.close(resolve));}
   });
 });

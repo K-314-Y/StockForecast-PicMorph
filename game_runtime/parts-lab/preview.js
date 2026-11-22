@@ -743,6 +743,8 @@ void loadAccessoryCatalog();
 function refreshZipTraitStatus() {
   const pending=[...accessoryOverlays.values()].some(overlay=>overlay.pending);
   $('saveVisualEdit').disabled=busy || !visualEdit || pending;
+  $('restoreVisualEdit').hidden=!visualEdit?.can_restore_previous;
+  $('restoreVisualEdit').disabled=busy || pending || $('restoreVisualEdit').hidden;
   const missing=zipLookFields.filter(id=>!$(id).value)
     .map(id=>({zipHairStyle:'髪型',zipExpression:'性格・表情'}[id]));
   $('registerZip').disabled=busy || !currentZipFiles || missing.length>0 || pending;
@@ -942,23 +944,12 @@ function showSavedSettings(character) {
       ' ／ 髪色 '+appearance.colors.hair_color+' ／ 服色 '+appearance.colors.clothing_color;
   }else $('editTraits').textContent='登録時に指定した予測設定を使用します。';
 }
-$('editCharacter').addEventListener('change',refreshEditPicker);
-$('openVisualEdit').addEventListener('click',async()=>{
-  if($('openVisualEdit').disabled)return;
-  const id=$('editCharacter').value;
-  const myEpoch=++epoch;
+async function loadSavedEdit(id,myEpoch,signal) {
   const images={};
   const overlays=new Map();
-  resetPack();
-  currentZipFiles=null;
-  clearZipEquipment();
-  const controller=new AbortController();
-  editLoad=controller;
-  setBusy(true);
-  $('editStatus').textContent='保存済みの素材を読み込んでいます…';
   try {
-    const {character,sources,portrait,visual}=await editRequest(characterEndpoint+'/visual-edit/'+id,
-      {signal:controller.signal});
+    const {character,sources,portrait,visual,edit_token,can_restore_previous}=
+      await editRequest(characterEndpoint+'/visual-edit/'+id,{signal});
     if(myEpoch!==epoch)return;
     for(const [part,source] of Object.entries(sources)) {
       images[part==='body'?'base':part]=await decodeFile(savedImageBlob(source),part);
@@ -975,7 +966,9 @@ $('openVisualEdit').addEventListener('click',async()=>{
       overlays.set(id,{file,bitmap,x,y,scale});
       if(myEpoch!==epoch)return;
     }
-    visualEdit={character,portrait};
+    // Keep the current draft until the replacement can be displayed.
+    clearZipEquipment();
+    visualEdit={character,portrait,edit_token,can_restore_previous};
     $('mood').value=Object.hasOwn(next.images,visual?.mood)?visual.mood:'ready';
     $('legacyVisualWarning').hidden=Boolean(visual);
     showVisualEdit(true);
@@ -990,14 +983,32 @@ $('openVisualEdit').addEventListener('click',async()=>{
     showSavedPortrait();
     displayLoaded(next,frames,visual?.offsets);
     for(const part of Object.keys(images))delete images[part];
-    $('editStatus').textContent=visual?'保存済みの表情・位置・重ね絵を復元しました。':
-      '元の素材を初期位置で読み込みました。確認して保存するまで、保存画像は保持されます。';
     status('見た目編集のプレビューを表示しています。');
-  }catch(error){
-    if(myEpoch===epoch)$('editStatus').textContent=error.message;
+    return {hasVisual:Boolean(visual)};
   }finally{
     release({images});
     for(const {bitmap} of overlays.values())bitmap.close();
+  }
+}
+$('editCharacter').addEventListener('change',refreshEditPicker);
+$('openVisualEdit').addEventListener('click',async()=>{
+  if($('openVisualEdit').disabled)return;
+  const id=$('editCharacter').value;
+  const myEpoch=++epoch;
+  resetPack();
+  currentZipFiles=null;
+  clearZipEquipment();
+  const controller=new AbortController();
+  editLoad=controller;
+  setBusy(true);
+  $('editStatus').textContent='保存済みの素材を読み込んでいます…';
+  try {
+    const loaded=await loadSavedEdit(id,myEpoch,controller.signal);
+    if(loaded)$('editStatus').textContent=loaded.hasVisual?'保存済みの表情・位置・重ね絵を復元しました。':
+      '元の素材を初期位置で読み込みました。確認して保存するまで、保存画像は保持されます。';
+  }catch(error){
+    if(myEpoch===epoch)$('editStatus').textContent=error.message;
+  }finally{
     if(editLoad===controller)editLoad=null;
     if(myEpoch===epoch)setBusy(false);
   }
@@ -1016,6 +1027,13 @@ $('cancelVisualEdit').addEventListener('click',()=>{
   $('openVisualEdit').focus();
 });
 const confirmVisualEdit=$('confirmVisualEdit');
+const editCheck=edit=>({
+  expected_image_sha256:edit.portrait.image_sha256,expected_edit_token:edit.edit_token,
+});
+function editError(error) {
+  return error.message+(error.status===409?
+    '。未保存の編集は表示中です。編集を開き直すと最新の見た目を確認できます。':'');
+}
 $('saveVisualEdit').addEventListener('click',()=>{
   if($('saveVisualEdit').disabled)return;
   endDrag();
@@ -1038,16 +1056,50 @@ $('confirmPortraitSave').addEventListener('click',async()=>{
     if(myEpoch!==epoch)return;
     const result=await editRequest(characterEndpoint+'/visual-edit/'+edit.character.id,{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({expected_image_sha256:edit.portrait.image_sha256,portrait,visual}),
+      body:JSON.stringify({...editCheck(edit),portrait,visual}),
     });
     if(myEpoch!==epoch)return;
     edit.portrait.image_sha256=result.image_sha256;
+    edit.edit_token=result.edit_token;
+    edit.can_restore_previous=result.can_restore_previous;
     showSavedPortrait();
     $('legacyVisualWarning').hidden=true;
     $('editStatus').textContent='同じキャラIDで保存画像を更新しました。表情・位置・重ね絵も保存しました。';
   }catch(error){
-    if(myEpoch===epoch)$('editStatus').textContent=error.message+(error.status===409?
-      '。未保存の編集は表示中です。別の画面で更新された場合は、編集を開き直すと最新の画像を確認できます。':'');
+    if(myEpoch===epoch)$('editStatus').textContent=editError(error);
+  }finally{
+    if(myEpoch===epoch)setBusy(false);
+  }
+});
+const confirmVisualRestore=$('confirmVisualRestore');
+$('restoreVisualEdit').addEventListener('click',()=>{
+  if($('restoreVisualEdit').disabled)return;
+  endDrag();
+  confirmVisualRestore.showModal();
+});
+$('abortPortraitRestore').addEventListener('click',()=>confirmVisualRestore.close());
+$('confirmPortraitRestore').addEventListener('click',async()=>{
+  confirmVisualRestore.close();
+  if($('restoreVisualEdit').disabled)return;
+  const edit=visualEdit,myEpoch=epoch;
+  const id=edit.character.id;
+  setBusy(true);
+  $('editStatus').textContent='1つ前の見た目に戻しています…';
+  let restored=false;
+  try {
+    await editRequest(characterEndpoint+'/visual-edit/'+id+'/restore',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(editCheck(edit)),
+    });
+    restored=true;
+    if(myEpoch!==epoch)return;
+    const loaded=await loadSavedEdit(id,myEpoch);
+    if(loaded)$('editStatus').textContent=loaded.hasVisual?'1つ前の見た目に戻しました。':
+      '1つ前の保存画像に戻しました。プレビューには元の素材を初期位置で表示しています。';
+  }catch(error){
+    if(myEpoch===epoch)$('editStatus').textContent=restored?
+      '見た目は戻りましたが、プレビューを更新できませんでした。最新の見た目は編集を開き直すと確認できます。':
+      editError(error);
   }finally{
     if(myEpoch===epoch)setBusy(false);
   }
