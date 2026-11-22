@@ -2963,6 +2963,11 @@ async function chooseCompareModel(ui,id=compareDemo.id) {
   ui.get('quickCompareModel').value=id;
   await ui.fire('quickCompareModel','change');
 }
+function assertCompareDecisionsHidden(get) {
+  assert.equal(get('quickCompareDecisionDiff').hidden,true);
+  assert.equal(get('quickCompareDecisionSummary').textContent,'');
+  assert.equal(get('quickCompareDecisionRows').children.length,0);
+}
 
 test('same-scenario comparison is separate from the original result and uses labelled native controls',()=>{
   const nodes=htmlNodes();
@@ -2975,6 +2980,14 @@ test('same-scenario comparison is separate from the original result and uses lab
   assert.match(html,/<button id="quickCompareRun" type="button"/);
   assert.match(html,/同じ架空相場の1例.*初見の予測勝負ではなく.*実際の運用成績とは無関係/);
   assert.doesNotMatch(nodes.find(node=>node.id==='quickCompareStatus').attributes,/role=|aria-live=/);
+  const decisions=nodes.find(node=>node.id==='quickCompareDecisionDiff');
+  assert.ok(decisions.parents.includes('quickCompare'));
+  assert.ok(!decisions.parents.includes('quickCompareResults'));
+  assert.ok(decisions.offset>nodes.find(node=>node.id==='quickCompareResults').offset);
+  assert.match(decisions.attributes,/aria-labelledby="quickCompareDecisionTitle" hidden/);
+  assert.equal(nodes.find(node=>node.id==='quickCompareDecisionRows').tag,'tbody');
+  assert.equal(nodes.filter(node=>node.tag==='th' && node.parents.includes(decisions.id) &&
+    node.attributes.includes('scope="col"')).length,4);
 });
 
 test('A then ZIP B shares the exact scenario, amount and leverage without changing the original practice',async()=>{
@@ -2988,12 +3001,15 @@ test('A then ZIP B shares the exact scenario, amount and leverage without changi
     return body.model_id==='self' ? {...value,companion_name:'相棒<&>'} : {
       ...value,profit_coins:-1250,max_drawdown_pct:100,liquidated_at_step:3,final_balance:8750,
       daily_balances:[10000,9980,9900,...Array(10).fill(8750)],companion_name:'応答内の別名',
+      daily_ai_signals:[...Array(4).fill('LONG'),...Array(8).fill('CASH')],
     };
   };
   get('quickAmount').value='1250';
   get('quickLeverage').value='7';
   assertFinalHidden(get);
+  assertCompareDecisionsHidden(get);
   await runQuickPractice(ui);
+  assertCompareDecisionsHidden(get);
   assert.equal(get('quickCompare').hidden,false);
   assert.equal(get('quickCompareRun').disabled,true);
   assert.deepEqual(get('quickCompareModel').children.map(option=>option.value),['',zipId,compareDemo.id]);
@@ -3005,12 +3021,37 @@ test('A then ZIP B shares the exact scenario, amount and leverage without changi
   const originalMood=get('scene').dataset.mood;
   await chooseCompareModel(ui,zipId);
   assert.equal(get('quickCompareRun').disabled,false);
+  assertCompareDecisionsHidden(get);
   await fire('quickCompareRun');
   assert.equal(get('quickCompareResults').hidden,false);
   assert.deepEqual(get('quickCompareResults').children.map(card=>card.children.map(row=>row.textContent)),[
     ['A：自分のAI（相棒：相棒<&>）','架空の損益：+25 C','最大下落率：1%','強制終了：なし'],
     ['B：'+zipName+'（ZIP専用AI・未学習）','架空の損益：-1,250 C','最大下落率：100%','強制終了：第3日'],
   ]);
+  assert.equal(get('quickCompareDecisionDiff').hidden,false);
+  assert.equal(get('quickCompareDecisionSummary').textContent,'判断が違う日：6/12日 ／ シグナル上で株を持つ日：A 6日・B 4日');
+  const rows=get('quickCompareDecisionRows').children;
+  assert.deepEqual(rows.map(row=>row.children.map(cell=>cell.textContent)),[
+    ['第1日','株を持つ','株を持つ','同じ'],
+    ['第2日','現金で待つ','株を持つ','違う'],
+    ['第3日','株を持つ','株を持つ','同じ'],
+    ['第4日','現金で待つ','株を持つ','違う'],
+    ['第5日','株を持つ','現金で待つ','違う'],
+    ['第6日','現金で待つ','現金で待つ','同じ'],
+    ['第7日','株を持つ','現金で待つ','違う'],
+    ['第8日','現金で待つ','現金で待つ','同じ'],
+    ['第9日','株を持つ','現金で待つ','違う'],
+    ['第10日','現金で待つ','現金で待つ','同じ'],
+    ['第11日','株を持つ','現金で待つ','違う'],
+    ['第12日','現金で待つ','現金で待つ','同じ'],
+  ]);
+  rows.forEach((row,index)=>{
+    assert.equal(row.children[0].tagName,'TH');
+    assert.equal(row.children[0].getAttribute('scope'),'row');
+    assert.equal(row.children[1].children.length,0);
+    assert.deepEqual(row.children[2].children.map(note=>note.textContent),
+      index>=3 ? ['強制終了後・未適用'] : []);
+  });
   assert.match(get('quickCompareStatus').textContent,/架空価格13点共通／投入額・倍率共通（1,250 C・×7）/);
   assert.equal(get('quickResult').children,originalResult);
   assert.equal(get('quickReplayDay').textContent,originalDay);
@@ -3024,6 +3065,51 @@ test('A then ZIP B shares the exact scenario, amount and leverage without changi
     {path:'/api/quick-practice',body:{model_id:zipId,amount:1250,leverage:7,scenario_token:'v1_0123456789abcdef'}},
   ]);
   assert.deepEqual(storageWrites,[]);
+});
+
+test('identical decisions show 0/12 and retain independent liquidation notes',async()=>{
+  const ui=await mount([compareDemo]);
+  const {get,fire,state}=ui;
+  const practice=state.practice;
+  state.practice=async body=>({...await practice(body),liquidated_at_step:body.model_id==='self'?11:null});
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui);
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareDecisionDiff').hidden,false);
+  assert.equal(get('quickCompareDecisionSummary').textContent,'判断が違う日：0/12日 ／ シグナル上で株を持つ日：A 6日・B 6日');
+  const rows=get('quickCompareDecisionRows').children;
+  assert.equal(rows.length,12);
+  assert.ok(rows.every(row=>row.children[3].textContent==='同じ'));
+  assert.equal(rows[10].children[1].children.length,0);
+  assert.equal(rows[11].children[1].children[0].textContent,'強制終了後・未適用');
+  assert.equal(rows[11].children[2].children.length,0);
+});
+
+test('completed decisions clear on retry, model changes, amount changes, list changes and pagehide',async()=>{
+  for(const reason of ['retry','model','compare model','amount','refresh','pagehide']) {
+    const ui=await mount([compareDemo]);
+    const {get,fire,state,pagehide}=ui;
+    await runQuickPractice(ui);
+    await chooseCompareModel(ui);
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareDecisionDiff').hidden,false,reason);
+    if(reason==='retry')await fire('quickAgain');
+    if(reason==='model') {
+      get('quickModel').value=compareDemo.id;
+      await fire('quickModel','change');
+    }
+    if(reason==='compare model')await chooseCompareModel(ui,'');
+    if(reason==='amount') {
+      get('quickAmount').value='1234';
+      await fire('quickAmount','input');
+    }
+    if(reason==='refresh') {
+      state.models=[{...compareDemo,name:'改名したAI'}];
+      await fire('shopReturn');
+    }
+    if(reason==='pagehide')pagehide();
+    assertCompareDecisionsHidden(get);
+  }
 });
 
 test('comparison rejects the same model, unowned demo IDs and unregistered ZIP IDs',async()=>{
@@ -3074,6 +3160,8 @@ test('B only renders a plain synthetic result with matching inputs and all 13 ex
   const practice=state.practice;
   const base=get('quickResult').children;
   const valid=await practice({model_id:compareDemo.id,amount:1000,leverage:1,scenario_token:'v1_0123456789abcdef'});
+  await fire('quickCompareRun');
+  assert.equal(get('quickCompareDecisionDiff').hidden,false);
   const patches=[
     {scenario_token:'v1_ffffffffffffffff'},{scenario_kind:'new'},{model_id:'self'},
     {invested_coins:'1000'},{leverage:2},{initial_balance:9999},{cash_held:0},
@@ -3083,6 +3171,7 @@ test('B only renders a plain synthetic result with matching inputs and all 13 ex
     {daily_synthetic_prices:valid.daily_synthetic_prices.map((price,i)=>i===12?price+1e-12:price)},
     // JSON represents a hole as null, which must also be rejected as a price.
     {daily_synthetic_prices:[null,...valid.daily_synthetic_prices.slice(1)]},
+    {daily_ai_signals:Array(12).fill('<img src=x onerror=alert(1)>')},
     {daily_ai_signals:Array(12).fill('SHORT')},{daily_ai_signals:Array(11).fill('CASH')},
     {daily_balances:Array(13).fill(Infinity)},{daily_balances:[]},
     {profit_coins:-1001},{profit_coins:Infinity},{max_drawdown_pct:Infinity},{max_drawdown_pct:101},
@@ -3094,6 +3183,7 @@ test('B only renders a plain synthetic result with matching inputs and all 13 ex
     await fire('quickCompareRun');
     assert.equal(get('quickCompareResults').hidden,true,JSON.stringify(patch));
     assert.equal(get('quickCompareResults').children.length,0);
+    assertCompareDecisionsHidden(get);
     assert.match(get('quickCompareStatus').textContent,/比較できませんでした。もう一度/);
     assert.equal(get('quickResult').children,base);
     assert.equal(get('quickReplay').hidden,false);
@@ -3118,6 +3208,7 @@ test('B HTTP errors and invalid JSON clear a prior B while preserving A and allo
     await fire('quickCompareRun');
     assert.equal(get('quickCompareResults').hidden,true);
     assert.equal(get('quickCompareResults').children.length,0);
+    assertCompareDecisionsHidden(get);
     assert.match(get('quickCompareStatus').textContent,/比較できませんでした/);
     assert.equal(get('quickResult').children,base);
     assert.equal(get('quickResult').hidden,false);
@@ -3157,6 +3248,7 @@ test('comparison aborts on pagehide, retry, model changes and updates to the com
       return new Promise(resolve=>{complete=async()=>resolve(await practice(body));});
     };
     const running=fire('quickCompareRun');
+    assertCompareDecisionsHidden(get);
     assert.equal(get('quickCompareRun').disabled,true);
     await fire('quickCompareRun');
     await fire('quickRun');
@@ -3172,6 +3264,7 @@ test('comparison aborts on pagehide, retry, model changes and updates to the com
     } else await fire(event);
     assert.equal(signal.aborted,true,event);
     await complete();await running;
+    assertCompareDecisionsHidden(get);
     assert.equal(get('quickCompareResults').hidden,true,event);
     assert.equal(get('quickCompareResults').children.length,0,event);
     if(event==='rename')assert.equal(get('quickCompareRun').disabled,false);

@@ -906,6 +906,9 @@ const compareModel = element('quickCompareModel');
 const compareRun = element('quickCompareRun');
 const compareStatus = element('quickCompareStatus');
 const compareResults = element('quickCompareResults');
+const compareDecisionDiff = element('quickCompareDecisionDiff');
+const compareDecisionSummary = element('quickCompareDecisionSummary');
+const compareDecisionRows = element('quickCompareDecisionRows');
 const multiPanel = element('quickCompareMulti');
 const multiRun = element('quickCompareMultiRun');
 const multiStatus = element('quickCompareMultiStatus');
@@ -946,6 +949,9 @@ function resetCompareResult() {
   clearMultiResults();
   compareResults.hidden=true;
   compareResults.replaceChildren();
+  compareDecisionDiff.hidden=true;
+  compareDecisionSummary.textContent='';
+  compareDecisionRows.replaceChildren();
   compareStatus.textContent='';
   compareAnnouncement.textContent='';
 }
@@ -1025,6 +1031,7 @@ function showCompare(value,ordered,modelName) {
     choice_label:compareChoices.get(ordered.model_id),
     amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,scenario_kind:value.scenario_kind,
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
+    daily_ai_signals:Object.freeze([...value.daily_ai_signals]),
     max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
     model_effective_sha256:value.model_effective_sha256,
     engine_source_sha256:value.engine_source_sha256,
@@ -1051,6 +1058,38 @@ function compareCard(label,name,value) {
 function comparisonOutcome(value) {
   return {profit_coins:value.profit_coins,max_drawdown_pct:value.max_drawdown_pct,
     liquidated_at_step:value.liquidated_at_step};
+}
+function compareDecisionCell(value,day) {
+  const cell=document.createElement('td');
+  cell.textContent=value.daily_ai_signals[day-1]==='LONG' ? '株を持つ' : '現金で待つ';
+  if(value.liquidated_at_step!==null && day>value.liquidated_at_step) {
+    const note=document.createElement('small');
+    note.textContent='強制終了後・未適用';
+    cell.append(note);
+  }
+  return cell;
+}
+function renderCompareDecisions(a,b) {
+  const signals=a.daily_ai_signals;
+  let different=0;
+  const rows=signals.map((signal,index)=>{
+    const day=index+1, differs=signal!==b.daily_ai_signals[index];
+    if(differs)different++;
+    const row=document.createElement('tr');
+    const dayHeader=document.createElement('th');
+    const comparison=document.createElement('td');
+    dayHeader.setAttribute('scope','row');
+    dayHeader.textContent='第'+day+'日';
+    comparison.textContent=differs ? '違う' : '同じ';
+    row.dataset.different=String(differs);
+    row.append(dayHeader,compareDecisionCell(a,day),compareDecisionCell(b,day),comparison);
+    return row;
+  });
+  const aLong=signals.filter(signal=>signal==='LONG').length;
+  const bLong=b.daily_ai_signals.filter(signal=>signal==='LONG').length;
+  compareDecisionSummary.textContent='判断が違う日：'+different+'/12日 ／ シグナル上で株を持つ日：A '+aLong+'日・B '+bLong+'日';
+  compareDecisionRows.replaceChildren(...rows);
+  compareDecisionDiff.hidden=false;
 }
 function comparisonTrial(caseNumber,kind,a,b) {
   return {case_number:caseNumber,kind,scenario_kind:a.scenario_kind,scenario_token:a.scenario_token,
@@ -1119,6 +1158,7 @@ compareRun.addEventListener('click',async()=>{
     setCompareMessage(compareStatus,'架空価格13点共通／投入額・倍率共通（'+money(base.amount)+' C・×'+base.leverage+'）'+
       (fingerprintsAvailable ? '' : '。現在のAPIではモデル同一性を確認できないため追加比較はできません。')+
       (engineMatches ? '' : ' '+engineChangedMessage));
+    renderCompareDecisions(base,value);
   } catch {
     if(current())setCompareMessage(compareStatus,'比較できませんでした。もう一度お試しください。');
   } finally {

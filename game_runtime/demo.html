@@ -262,6 +262,13 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickCompareResults,#quickCompareMultiCards,#quickImportCards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 #quickCompare article,#quickImport article{min-width:0;padding:8px;border:1px solid var(--line);border-radius:10px;background:#101d31}
 #quickCompare article p,#quickImport article p{margin:4px 0}
+#quickCompareDecisionDiff{margin-block-start:16px}
+#quickCompareDecisionSummary{margin:0 0 6px;font-weight:750}
+#quickCompareDecisionDiff table{width:100%;table-layout:fixed;border-collapse:collapse;margin-block-start:8px;font-size:13px}
+#quickCompareDecisionDiff :is(th,td){padding:6px 4px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line)}
+#quickCompareDecisionDiff thead th:is(:first-child,:last-child){width:18%}
+#quickCompareDecisionDiff tr[data-different="true"]{background:#243653}
+#quickCompareDecisionDiff small{display:block;color:var(--soft);font-size:inherit}
 #quickCompareMulti{margin-block-start:12px}
 #quickCompareMultiRun,#quickCompareExport{max-width:100%;white-space:normal}
 #quickCompareMultiCards{margin-block-start:8px}
@@ -444,9 +451,20 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   <p class="simple-hint">同じ架空相場の1例を、結果を見た後で振り返ります。初見の予測勝負ではなく、実際の運用成績とは無関係です。</p>
   <label for="quickCompareModel">比較するAI</label>
   <select id="quickCompareModel" disabled></select>
-  <button id="quickCompareRun" type="button" aria-controls="quickCompareResults" disabled>比較する</button>
+  <button id="quickCompareRun" type="button" aria-controls="quickCompareResults quickCompareDecisionDiff" disabled>比較する</button>
   <p id="quickCompareStatus" class="simple-hint"></p>
   <div id="quickCompareResults" hidden></div>
+  <section id="quickCompareDecisionDiff" aria-labelledby="quickCompareDecisionTitle" hidden>
+   <h4 id="quickCompareDecisionTitle">12日間のAI判断の違い</h4>
+   <p id="quickCompareDecisionSummary"></p>
+   <p class="simple-hint">同じ架空価格・試算額・倍率でのシミュレーション判断です。実際の注文や、予測精度・AIの順位を示すものではありません。</p>
+   <p class="simple-hint">判断の違いは、装備のほかにモデル設定などでも生じます。この比較だけでは装備の影響を特定できません。12日間すべて同じ判断でも、同じアルゴリズムとは限りません。画像の重なりや位置の編集は予測設定に反映されません。</p>
+   <p class="simple-hint">日数には強制終了後の判断も含みます。強制終了後の判断は損益に反映されません。</p>
+   <table aria-labelledby="quickCompareDecisionTitle">
+    <thead><tr><th scope="col">日</th><th scope="col">Aの判断</th><th scope="col">Bの判断</th><th scope="col">比較</th></tr></thead>
+    <tbody id="quickCompareDecisionRows"></tbody>
+   </table>
+  </section>
   <div id="quickCompareMulti" hidden>
    <button id="quickCompareMultiRun" type="button" aria-controls="quickCompareMultiResults" aria-describedby="quickCompareMultiNote" disabled>別の3つの架空相場でも比較</button>
    <p id="quickCompareMultiNote" class="simple-hint">各AIの予測設定・装備分析の識別値、および指定の計算コードの識別値が最初の比較時と一致した場合にのみ3例を表示します。プログラムの全依存関係や実行環境、外部からの変更までは保証しません。架空相場での練習結果であり、実際の投資成績やAIの性能ランキングには使えません。</p>
