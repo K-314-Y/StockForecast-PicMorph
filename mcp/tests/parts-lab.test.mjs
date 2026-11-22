@@ -120,13 +120,15 @@ test('one ZIP file auto-loads body and mood images without uploads',()=>{
   assert.doesNotMatch(zipImporter,/localStorage|indexedDB|sendBeacon/);
 });
 
-test('the only game entrypoint is an opt-in link inside the appearance studio',async()=>{
+test('the game links to Parts Lab from the appearance studio and registered avatar equipment notice',async()=>{
   const game=await readFile(new URL('../../game_runtime/demo.html',import.meta.url),'utf8');
   const studio=game.split('id="appearanceStudio"')[1].split('id="predictionStudio"')[0];
   assert.match(studio,/href="\/parts-lab\/preview.html"/);
   assert.match(studio,/rel="noopener noreferrer"/);
   assert.match(studio,/SAVEもアップロードも行いません/);
-  assert.doesNotMatch(game.split('id="frontCharacter"')[1].split('id="simpleHome"')[0],/parts-lab\/preview/);
+  const front=game.split('id="frontCharacter"')[1].split('id="simpleHome"')[0];
+  assert.match(front,/id="generatedAvatarEquipment"[^>]*hidden[^\n]+href="\/parts-lab\/preview\.html"[^>]*rel="noopener noreferrer"/);
+  assert.equal(front.match(/href="\/parts-lab\/preview\.html"/g)?.length,1);
 });
 
 function previewRuntime(extra={}) {

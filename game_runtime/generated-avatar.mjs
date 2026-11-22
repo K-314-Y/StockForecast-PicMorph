@@ -3,6 +3,12 @@ import {mountPngDropRegistration} from './png-drop-registration.mjs';
 const STATE='/api/active-character';
 const CATALOG='/api/character-demos';
 const PARTS=['body','ready','happy','cautious'];
+const MOODS=PARTS.slice(1);
+const WIDTH=192, HEIGHT=208, FRAMES=6, ATLAS_WIDTH=WIDTH*FRAMES;
+const EQUIPMENT='/api/character-equipment/v1';
+const ACCESSORIES='/api/independent-parts';
+const MAX_ACCESSORY_BYTES=1024*1024;
+const ANCHORS=['base','outfit','face','hair'];
 const validId=id=>typeof id==='string' && id.length===35 && /^cp_[a-f0-9]{32}$/.test(id);
 const sameOrigin={mode:'same-origin',cache:'no-store',redirect:'error'};
 
@@ -41,6 +47,151 @@ async function loadParts(id,signal) {
   return parts;
 }
 
+function checkedEquipment(record,id) {
+  if(record?.schema!==1 || record.character_id!==id || !Number.isSafeInteger(record.revision) || record.revision<0 ||
+     !Array.isArray(record.parts) || record.parts.length>8 || (!record.revision && record.parts.length)) {
+    throw Error('Invalid equipment record');
+  }
+  const seen=new Set();
+  for(const entry of record.parts) {
+    if(typeof entry?.part_id!=='string' || entry.part_id.length!==35 || !/^pt_[0-9a-f]{32}$/.test(entry.part_id) ||
+       seen.has(entry.part_id) || !ANCHORS.includes(entry.layer_anchor) || typeof entry.visible!=='boolean' ||
+       ![entry.x,entry.y].every(value=>Number.isInteger(value) && Math.abs(value)<=24) ||
+       typeof entry.image_sha256!=='string' || entry.image_sha256.length!==64 || !/^[0-9a-f]{64}$/.test(entry.image_sha256)) {
+      throw Error('Invalid equipment entry');
+    }
+    seen.add(entry.part_id);
+  }
+  return record.parts;
+}
+
+async function boundedGet(path,mime,limit,signal,sha256) {
+  const response=await fetch(path,{...sameOrigin,method:'GET',signal,
+    ...(sha256?{headers:{'X-Creature-Part-Preview':'1'}}:{})});
+  const size=response.headers.get('content-length')??'';
+  const contentType=response.headers.get('content-type');
+  if(!response.ok || (mime==='image/png'?contentType:contentType?.split(';')[0])!==mime ||
+     !/^\d+$/.test(size) || Number(size)<=0 || Number(size)>limit || !response.body ||
+     (sha256 && response.headers.get('x-creature-part-sha256')!==sha256)) {
+    await response.body?.cancel();
+    throw Error('Invalid equipment response');
+  }
+  const bytes=new Uint8Array(Number(size));
+  const reader=response.body.getReader();
+  let offset=0;
+  try {
+    while(true) {
+      const {done,value}=await reader.read();
+      if(done)break;
+      if(offset+value.length>bytes.length)throw Error('Oversized equipment response');
+      bytes.set(value,offset);
+      offset+=value.length;
+    }
+    if(offset!==bytes.length)throw Error('Incomplete equipment response');
+    signal.throwIfAborted();
+    return bytes;
+  } finally {await reader.cancel().catch(()=>{});}
+}
+
+async function accessoryBlob(entry,signal) {
+  const bytes=await boundedGet(`${ACCESSORIES}/${entry.part_id}/part.png`,'image/png',
+    MAX_ACCESSORY_BYTES,signal,entry.image_sha256);
+  const header=new DataView(bytes.buffer);
+  if(bytes.length<33 || header.getUint32(0)!==0x89504e47 || header.getUint32(4)!==0x0d0a1a0a ||
+     header.getUint32(8)!==13 || header.getUint32(12)!==0x49484452 ||
+     header.getUint32(16)!==ATLAS_WIDTH || header.getUint32(20)!==HEIGHT || bytes[24]!==8 || bytes[25]!==6) {
+    throw Error('Invalid accessory PNG');
+  }
+  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+  const hash=Array.from(digest,byte=>byte.toString(16).padStart(2,'0')).join('');
+  if(hash!==entry.image_sha256)throw Error('Accessory PNG digest mismatch');
+  signal.throwIfAborted();
+  return new Blob([bytes],{type:'image/png'});
+}
+
+function checkAccessoryAlpha(ctx,bitmap) {
+  let visible=false;
+  for(let frame=0;frame<FRAMES;frame++) {
+    ctx.clearRect(0,0,WIDTH,HEIGHT);
+    ctx.drawImage(bitmap,frame*WIDTH,0,WIDTH,HEIGHT,0,0,WIDTH,HEIGHT);
+    const rgba=ctx.getImageData(0,0,WIDTH,HEIGHT).data;
+    let transparent=false;
+    for(let i=3;i<rgba.length;i+=4) {
+      transparent ||= rgba[i]===0;
+      visible ||= rgba[i]>0;
+      if(transparent && visible)break;
+    }
+    if(!transparent)throw Error('Accessory frame has no transparent background');
+  }
+  if(!visible)throw Error('Empty accessory atlas');
+}
+
+export function composeAvatarAtlas(ctx,body,face,equipment) {
+  const layers=[{bitmap:body,x:0,y:0}];
+  for(const anchor of ANCHORS) {
+    if(anchor==='face')layers.push({bitmap:face,x:0,y:0});
+    layers.push(...equipment.filter(entry=>entry.visible && entry.layer_anchor===anchor));
+  }
+  ctx.clearRect(0,0,ATLAS_WIDTH,HEIGHT);
+  for(let frame=0;frame<FRAMES;frame++) {
+    const left=frame*WIDTH;
+    ctx.save();
+    try {
+      ctx.beginPath();
+      ctx.rect(left,0,WIDTH,HEIGHT);
+      ctx.clip();
+      for(const {bitmap,x,y} of layers) {
+        ctx.drawImage(bitmap,left,0,WIDTH,HEIGHT,left+x,y,WIDTH,HEIGHT);
+      }
+    } finally {ctx.restore();}
+  }
+}
+
+export async function loadAvatarEquipment(id,parts,signal) {
+  if(!validId(id))throw Error('Invalid registered character ID');
+  const bytes=await boundedGet(`${EQUIPMENT}/${id}`,'application/json',4096,signal);
+  const record=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  // The equipment GET has already validated all entries, including hidden ones.
+  const entries=checkedEquipment(record,id).filter(entry=>entry.visible);
+  if(!entries.length)return {strips:null,count:0};
+  const open=[];
+  const decode=async blob=>{
+    const bitmap=await createImageBitmap(blob);
+    open.push(bitmap);
+    signal.throwIfAborted();
+    if(bitmap.width!==ATLAS_WIDTH || bitmap.height!==HEIGHT)throw Error('Invalid atlas dimensions');
+    return bitmap;
+  };
+  const sample=document.createElement('canvas');
+  sample.width=WIDTH;sample.height=HEIGHT;
+  const ctx=sample.getContext('2d',{willReadFrequently:true});
+  const canvas=document.createElement('canvas');
+  canvas.width=ATLAS_WIDTH;canvas.height=HEIGHT;
+  const output=canvas.getContext('2d');
+  try {
+    const overlays=[];
+    for(const entry of entries) {
+      const bitmap=await decode(await accessoryBlob(entry,signal));
+      checkAccessoryAlpha(ctx,bitmap);
+      overlays.push({...entry,bitmap});
+    }
+    const body=await decode(parts.get('body'));
+    const strips=new Map();
+    for(const mood of MOODS) {
+      const face=await decode(parts.get(mood));
+      composeAvatarAtlas(output,body,face,overlays);
+      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+      signal.throwIfAborted();
+      if(blob?.type!=='image/png' || !blob.size || blob.size>MAX_ACCESSORY_BYTES)throw Error('Unable to build composite atlas');
+      strips.set(mood,blob);
+    }
+    return {strips,count:overlays.length};
+  } finally {
+    for(const bitmap of open)bitmap.close();
+    sample.width=canvas.width=0;
+  }
+}
+
 export function mountGeneratedAvatar() {
   const element=id=>document.getElementById(id);
   const scene=element('scene');
@@ -50,6 +201,8 @@ export function mountGeneratedAvatar() {
   const reset=element('resetGeneratedAvatar');
   const pause=element('generatedAvatarPause');
   const caption=element('generatedAvatarCaption');
+  const equipmentNote=element('generatedAvatarEquipment');
+  const equipmentStatus=element('generatedAvatarEquipmentStatus');
   const currentName=element('avatarCurrentName');
   const currentDescription=element('avatarCurrentDescription');
   const ownCard=element('avatarOwnChoice');
@@ -66,6 +219,7 @@ export function mountGeneratedAvatar() {
   let urls=[];
   let record;
   let work;
+  let equipmentWork;
   let epoch=0;
   let registrationSupported=false;
   let registrationBusy=false;
@@ -122,27 +276,66 @@ export function mountGeneratedAvatar() {
     controls();
   }
 
-  function display(id,parts) {
+  function replaceSources(parts) {
     const old=urls;
-    urls=[];
+    const next=new Map();
+    try {
+      for(const [part,blob] of parts??[])next.set(part,URL.createObjectURL(blob));
+    } catch(error) {
+      for(const url of next.values())URL.revokeObjectURL(url);
+      throw error;
+    }
+    for(const part of PARTS) {
+      if(next.has(part))sprite.style.setProperty('--avatar-'+part,`url("${next.get(part)}")`);
+      else sprite.style.removeProperty('--avatar-'+part);
+    }
+    urls=[...next.values()];
+    for(const url of old)URL.revokeObjectURL(url);
+  }
+
+  async function showEquipment(id,parts) {
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),18000);
+    const request={controller,timer};
+    equipmentWork=request;
+    equipmentStatus.textContent='装備を確認中…';
+    equipmentNote.hidden=false;
+    try {
+      const {strips,count}=await loadAvatarEquipment(id,parts,controller.signal);
+      controller.signal.throwIfAborted();
+      if(equipmentWork!==request)return;
+      if(strips)replaceSources(strips);
+      equipmentStatus.textContent='装備: '+count+'個';
+    } catch {
+      if(equipmentWork!==request)return;
+      equipmentStatus.textContent='装備を表示できません。Parts Labで保存済み装備を確認してください。';
+    } finally {
+      clearTimeout(timer);
+      if(equipmentWork===request)equipmentWork=undefined;
+    }
+  }
+
+  function display(id,parts) {
+    if(equipmentWork) {
+      clearTimeout(equipmentWork.timer);
+      equipmentWork.controller.abort();
+      equipmentWork=undefined;
+    }
+    equipmentStatus.textContent='';
+    equipmentNote.hidden=true;
+    replaceSources(parts);
     if(parts) {
-      for(const [part,blob] of parts) {
-        const url=URL.createObjectURL(blob);
-        urls.push(url);
-        sprite.style.setProperty('--avatar-'+part,`url("${url}")`);
-      }
       const name=catalog.get(id) || '登録キャラ';
       caption.textContent='外見：'+name+'（登録キャラ）';
       sprite.setAttribute('aria-label',caption.textContent);
       scene.dataset.generatedAvatar='true';
     } else {
-      for(const part of PARTS) sprite.style.removeProperty('--avatar-'+part);
       delete scene.dataset.generatedAvatar;
       delete sprite.dataset.paused;
       pause.setAttribute('aria-pressed','false');
     }
     sprite.hidden=caption.hidden=pause.hidden=!parts;
-    for(const url of old) URL.revokeObjectURL(url);
+    if(parts)void showEquipment(id,parts);
   }
 
   function setCatalog(entries) {

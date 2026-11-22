@@ -174,7 +174,7 @@ main{max-width:1024px;margin:auto;padding:28px 18px 55px}h1{font-size:clamp(26px
 #generatedAvatar{position:relative;z-index:1;width:min(192px,100%);aspect-ratio:192/208;overflow:hidden;flex:none;margin-bottom:7px}
 #generatedAvatar::before{
  content:"";position:absolute;inset:0 auto 0 0;width:600%;
- background-image:var(--avatar-face,var(--avatar-ready)),var(--avatar-body);
+ background-image:var(--avatar-face,var(--avatar-ready)),var(--avatar-body,none);
  background-size:100% 100%;background-repeat:no-repeat;
 }
 .scene[data-mood="thinking"] #generatedAvatar{--avatar-face:var(--avatar-ready)}
@@ -390,6 +390,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </div>
   <div id="generatedAvatar" role="img" aria-label="登録キャラの外見" hidden></div>
   <div id="generatedAvatarCaption" class="scene-note" hidden></div>
+  <div id="generatedAvatarEquipment" class="scene-note" hidden><span id="generatedAvatarEquipmentStatus" role="status"></span> <a href="/parts-lab/preview.html" target="_blank" rel="noopener noreferrer">Parts Labで装備を確認</a></div>
   <div id="skinCaption" class="scene-note">外見：デモ用2D相棒</div>
   <div class="scene-mood">
    <span data-for="ready">準備中</span><span data-for="thinking">考え中</span>
@@ -715,7 +716,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    </details>
    <div class="artwork-slot">
     <p><strong>自分のPNGをパーツとして動かす（実験）</strong></p>
-    <p class="creator-note">体・表情・髪・服の透明PNG/WebPを重ねて動きを確認します。すべてブラウザ内で表示し、SAVEもアップロードも行いません。従来の保存済みイラストには影響しません。</p>
+    <p class="creator-note">体・表情・髪・服の透明PNG/WebPを重ねて動きを確認します。画像はブラウザ内で表示し、画像のSAVEもアップロードも行いません。装備設定だけを保存できます。</p>
     <a href="/parts-lab/preview.html" target="_blank" rel="noopener noreferrer">PNGパーツ実験室を開く（別タブ）</a>
    </div>
    <details id="artworkWorkshop" class="crop-controls">

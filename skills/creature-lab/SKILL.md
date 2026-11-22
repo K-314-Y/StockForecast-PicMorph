@@ -79,8 +79,11 @@ private local Creature Lab Node game. It has no real-trading capability.
    Layer and position changes stay in the preview until the user confirms
    the explicit equipment save for the loaded registered character. Remove
    transient file parts before saving. After reloading, select the character
-   and use the explicit restore button. The equipment configuration has no
-   link to the active character, XP, coins, forecasts or AI models.
+   and use the explicit restore button in Parts Lab. On the Linux game page,
+   equipment saved for the displayed registered character is applied for
+   display. The game keeps the original sprite if equipment validation fails.
+   Equipment changes leave active selection, XP, coins, forecasts and AI
+   models unchanged.
 8. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 
