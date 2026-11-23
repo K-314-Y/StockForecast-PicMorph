@@ -186,6 +186,15 @@ test('experimental benchmark uses disjoint reproducible offline scenario cohorts
     assert.equal(p.strengthBetter+p.equalBetter+p.tied,8);
     assert.equal(p.changedCases,p.strengthBetter+p.equalBetter);
     assert.equal(p.byBlock.length,4);
+    assert.equal(record.uncertaintyMethod,'normal-approximation-95-percent');
+    for(const [interval,average,supported,criterion] of [
+      [p.meanProfitDelta95Approx,p.meanProfitDelta,p.profitImprovementSupported,'profit'],
+      [p.meanDrawdownDelta95Approx,p.meanDrawdownDelta,p.drawdownImprovementSupported,'drawdown'],
+    ]) {
+      assert.ok(Number.isFinite(interval.lower)&&Number.isFinite(interval.upper));
+      assert.ok(interval.lower<=average && average<=interval.upper);
+      assert.equal(supported,criterion==='profit'?interval.lower>0:interval.upper<0);
+    }
   }
   assert.notDeepEqual(development.strategies,validation.strategies,
     'validation token cohort must be different from development');

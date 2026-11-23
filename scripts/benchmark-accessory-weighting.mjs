@@ -103,6 +103,13 @@ const mean=v=>sum(v)/v.length;
 const sorted=v=>[...v].sort((a,b)=>a-b);
 const median=v=>{const s=sorted(v);return(s[(s.length-1)>>1]+s[s.length>>1])/2};
 const round=(v,d=3)=>Number(v.toFixed(d));
+// Approximate sampling uncertainty; not a claim of real-market performance.
+const approximate95Interval=values=>{
+  const avg=mean(values);
+  const variance=sum(values.map(value=>(value-avg)**2))/(values.length-1);
+  const margin=1.96*Math.sqrt(variance/values.length);
+  return {lower:round(avg-margin),upper:round(avg+margin)};
+};
 const stats={};
 for (const mode of ['equal','strength']){
   const rows=pairs.map(p=>p[mode]);
@@ -123,6 +130,9 @@ const block=Array.from({length:4},(_,idx)=>{
   const s=pairs.slice(idx*count/4,(idx+1)*count/4);
   return {block:idx+1,meanDelta:round(mean(s.map(p=>p.strength.profit-p.equal.profit)))};
 });
+const drawdownDelta=pairs.map(p=>p.strength.maxDrawdown-p.equal.maxDrawdown);
+const profitDelta95Approx=approximate95Interval(delta);
+const drawdownDelta95Approx=approximate95Interval(drawdownDelta);
 const changed=pairs.filter(p=>p.equal.decisions.join()!=p.strength.decisions.join()).length;
 const changedDays=sum(pairs.map(p=>p.equal.decisions.filter((v,i)=>v!==p.strength.decisions[i]).length));
 const firstIndependentOfFuture=['equal','strength'].every(m=>
@@ -131,10 +141,16 @@ console.log(JSON.stringify({
   mode:'UNTRAINED_SYNTHETIC_ACCESSORY_EXPERIMENT',
   version:'accessory-strength-experiment-v1',set:cohort,scenarios:count,plans:received,
   samePrices:true,sameBaseModel:true,initialCoins:1000,feeRate:0.001,
+  uncertaintyMethod:'normal-approximation-95-percent',
   firstDecisionsIndependentOfFuture:firstIndependentOfFuture,
   strategies:stats,
   paired:{
     meanProfitDelta:round(mean(delta)),medianProfitDelta:round(median(delta)),
+    meanProfitDelta95Approx:profitDelta95Approx,
+    profitImprovementSupported:profitDelta95Approx.lower>0,
+    meanDrawdownDelta:round(mean(drawdownDelta)),
+    meanDrawdownDelta95Approx:drawdownDelta95Approx,
+    drawdownImprovementSupported:drawdownDelta95Approx.upper<0,
     strengthBetter:delta.filter(v=>v>0).length,
     equalBetter:delta.filter(v=>v<0).length,
     tied:delta.filter(v=>v===0).length,
