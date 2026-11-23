@@ -19,7 +19,7 @@ import {runSyntheticGame, validateAllocations} from './practice.mjs';
 import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
-import {compareHistoricalMarket} from './historical-market.mjs';
+import {compareHistoricalMarket,compareLocalAccessoryHistory} from './historical-market.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
@@ -162,11 +162,17 @@ export async function pythonPredict(models) {
   });
 }
 
-export async function pythonHistoricalPredict(input) {
+export async function pythonHistoricalPredict(input,{source}={}) {
+  if(source!==undefined && source!=='local')throw failure('過去株価の取得元が不正です');
+  const local=source==='local';
+  // Local replay does not inherit API keys, proxy credentials or Python overrides.
+  const env=local ? {PATH:process.env.PATH ?? '/usr/bin:/bin',LANG:'C.UTF-8',CREATURE_MARKET_SOURCE:'local',
+    ...(process.env.CREATURE_MARKET_HISTORY_PATH!==undefined ?
+      {CREATURE_MARKET_HISTORY_PATH:process.env.CREATURE_MARKET_HISTORY_PATH} : {})} : undefined;
   const {spawn}=await import('node:child_process');
   return new Promise((resolveResult,rejectResult)=>{
-    const child=spawn('python3',['-B',MARKET_BRIDGE],
-      {cwd:ROOT,stdio:['pipe','pipe','pipe']});
+    const child=spawn('python3',local?['-B','-E',MARKET_BRIDGE]:['-B',MARKET_BRIDGE],
+      {cwd:ROOT,stdio:['pipe','pipe','pipe'],env});
     const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
     let output='',failed=false,settled=false;
     const finish=(err,result)=>{
@@ -181,8 +187,10 @@ export async function pythonHistoricalPredict(input) {
     });
     child.stderr.resume();
     child.on('error',()=>finish(failure('過去株価の予測処理を開始できません')));
+    child.stdin.on('error',()=>child.kill('SIGKILL'));
     child.on('close',code=>{
-      if(failed||code!==0)return finish(failure('過去株価データを読み込めません。取得元・APIキー・レート制限を確認してください'));
+      if(failed||code!==0)return finish(failure(local?'ローカルの2024年株価データを読み込めないか、対象の期間がありません。':
+        '過去株価データを読み込めません。取得元・APIキー・レート制限を確認してください'));
       try{finish(null,JSON.parse(output));}
       catch{finish(failure('過去株価の予測結果が不正です'));}
     });
@@ -353,12 +361,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     return {character_id:id,active_revision,equipment_revision:record.revision,parts:record.parts,
       visible_kinds:equippedAnalysisKinds(record.parts,catalog)};
   }
-  async function readPracticeAnalysis(expected,baseline) {
-    const [listing,saved]=await Promise.all([independentPartReader.list(),accessoryAnalysisStore.read()]);
+  async function readPracticeAnalysis(expected,baseline,signal) {
+    const [listing,saved]=await Promise.all([independentPartReader.list(signal),accessoryAnalysisStore.read(signal)]);
     const record=analysisRecord(saved);
     if(record.revision!==expected.expected_revision)throw analysisChanged();
     const catalog=analysisCatalog(listing.parts);
-    const equipped=await readAnalysisEquipment(catalog,undefined,expected);
+    const equipped=await readAnalysisEquipment(catalog,signal,expected);
     checkAnalysisContext(expected,equipped,record);
     const derived=deriveAccessoryAnalysis(baseline,record.policies,equipped.parts,catalog);
     if(!derived.applied.length)throw failure('表示中の装備に使える保存済み分析設定がありません。装備と分析設定を確認してください',422);
@@ -418,9 +426,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
       }
       const compare=write && path===ACCESSORY_ANALYSIS_API+'/compare';
+      const historical=write && path===ACCESSORY_ANALYSIS_API+'/historical';
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !save && !info) || req.url!==path || process.platform!=='linux' ||
+      if ((!compare && !historical && !save && !info) || req.url!==path || process.platform!=='linux' ||
           !accessoryAnalysisStore || !independentPartReader || !equipmentStore) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
@@ -439,6 +448,48 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
+        if(historical) {
+          if(!input || typeof input!=='object' || Array.isArray(input))throw failure('比較する登録キャラと版数を指定してください',400);
+          const {replay_id,exclude_id,...context}=input;
+          validateAnalysisContext(context);
+          const selection={};
+          for(const key of ['replay_id','exclude_id']) {
+            if(!Object.hasOwn(input,key))continue;
+            if(typeof input[key]!=='string' || input[key].length!==28 || !MARKET_ID.test(input[key]))
+              throw failure('相場期間IDが不正です',400);
+            selection[key]=input[key];
+          }
+          if(replay_id && exclude_id)throw failure('同じ期間の指定と除外は同時にできません',400);
+
+          const [snapshot,companion]=await Promise.all([loadSnapshot(),companionStore.read()]);
+          const original=modelPlanFromSnapshot(snapshot,null);
+          const baseline=validateLabModel(applyCompanion(original,companion).models.mine);
+          const {candidate,applied,visibleKinds}=await readPracticeAnalysis(context,baseline,signal);
+          if(res.destroyed)return;
+          let result;
+          try {
+            result=await historicalPredict({base_model:original.base_model,
+              models:{mine:candidate,owl:baseline,turtle:baseline},selection},{source:'local'});
+          } catch {
+            if(!res.destroyed)json(res,503,{error:'ローカルの2024年株価データを読み込めないか、対象の期間がありません。'});
+            return;
+          }
+          if(res.destroyed)return;
+          const [current,after,currentCompanion]=await Promise.all([
+            readPracticeAnalysis(context,baseline,signal),loadSnapshot(),companionStore.read(),
+          ]);
+          if(!sameLabRevisions(labRevisions(snapshot,companion),labRevisions(after,currentCompanion)))
+            throw failure('比較中に基準モデルが更新されました。設定を再読込してください',409);
+          if(JSON.stringify(current.applied)!==JSON.stringify(applied))throw analysisChanged();
+          const report=compareLocalAccessoryHistory(result,baseline,candidate,selection);
+          if(!res.destroyed)json(res,200,{...report,
+            provenance:{character_id:context.character_id,active_revision:context.active_revision,
+              equipment_revision:context.equipment_revision,policy_revision:context.expected_revision,
+              visible_kinds:visibleKinds,applied_rules:applied},
+            weights_changed:Object.keys(baseline.plugin_weights).some(key=>baseline.plugin_weights[key]!==candidate.plugin_weights[key]),
+            effective_hash_changed:report.baseline.effective_sha256!==report.candidate.effective_sha256});
+          return;
+        }
         const catalog=analysisCatalog((await independentPartReader.list(signal)).parts);
         if(save) {
           if(stalePolicyKinds(changes.policies,catalog).length)throw failure('カタログに存在しない種類は保存できません',422);

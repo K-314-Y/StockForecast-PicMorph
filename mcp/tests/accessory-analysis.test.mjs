@@ -418,3 +418,201 @@ test('valid rules with identical effective weights report the unchanged model ho
   assert.deepEqual(calls[0].base_model,calls[0].models.mine,'hash baseline must include the saved companion');
   assert.deepEqual(body.accessory_analysis.applied_rules,[pin]);
 });
+
+const HISTORY=API+'/historical';
+const windowA='mkt_'+'a'.repeat(24);
+const windowB='mkt_'+'b'.repeat(24);
+
+async function historicalFixture({selection,...models}) {
+  const plan=await pythonPredict(models);
+  return {
+    mode:'HISTORICAL_MARKET_REPLAY_ONLY',source_origin:'LOCAL_JPX_REPORT_CACHE_2024',
+    source:'Fixture JPX 2024',source_warning:'Fixture unadjusted data',
+    adjusted:false,market_id:selection.replay_id ?? (selection.exclude_id===windowA?windowB:windowA),code:'40050',
+    start_date:'2024-01-04',history_end_date:'2024-02-08',end_date:'2024-02-26',
+    lookback_days:24,future_days:12,eligible_windows:694,price_index_base:100,flat_threshold_pct:.3,
+    brier:{mine:.63,owl:.71,turtle:.71},plan,
+  };
+}
+
+test('accessory history uses only the explicit local source, returns aggregates, and does not persist results',async t=>{
+  const {start,cp,part,local,snapshot,baselineSnapshot,calls}=await fixture(t);
+  const history=[];
+  const api=await start({historicalPredict:async (input,options)=>{
+    history.push({input,options});
+    return historicalFixture(input);
+  }});
+  const context=await practiceContext(api);
+  const paths=[join(local,'accessory_analysis','analysis.json'),
+    join(local,'character_equipment',cp+'.json'),join(local,'independent_parts',part.part_id,'part.png')];
+  const before=await Promise.all(paths.map(path=>readFile(path)));
+  for(const [selection,id] of [[{},windowA],[{replay_id:windowB},windowB],[{exclude_id:windowA},windowB]]) {
+    const response=await api.post({...context,...selection},HISTORY);
+    const result=await response.json();
+    assert.equal(response.status,200,JSON.stringify(result));
+    assert.equal(response.headers.get('cache-control'),'no-store');
+    assert.equal(response.headers.get('access-control-allow-origin'),null);
+    assert.equal(response.headers.get('cross-origin-resource-policy'),'same-origin');
+    assert.equal(result.scope,'ACCESSORY_RULES_HISTORICAL_LOCAL_12');
+    assert.equal(result.mode,'HISTORICAL_MARKET_REPLAY_ONLY');
+    assert.deepEqual(result.market,{id,code:'40050',period_start:'2024-01-04',history_end:'2024-02-08',
+      period_end:'2024-02-26',source_origin:'LOCAL_JPX_REPORT_CACHE_2024',source:'Fixture JPX 2024',
+      warning:'Fixture unadjusted data',adjusted:false,eligible_windows:694,lookback_days:24,
+      simulation_days:12,flat_threshold_pct:.3});
+    assert.deepEqual(result.provenance,{character_id:cp,active_revision:context.active_revision,
+      equipment_revision:context.equipment_revision,policy_revision:context.expected_revision,
+      visible_kinds:[pin.kind_id],applied_rules:[pin]});
+    assert.equal(result.read_only,true);
+    assert.equal(result.real_market_history,true);
+    assert.equal(result.weights_changed,true);
+    assert.equal(result.effective_hash_changed,true);
+    assert.equal(result.difference.different_signals,1);
+    assert.match(result.notice,/互いに重なる/);
+    for(const flag of ['trained','live_market','holdout_evaluated','persisted','save_performed','xp_awarded','coins_changed','order_placed'])
+      assert.equal(result[flag],false);
+    assert.equal(result.baseline.brier,.71);
+    assert.equal(result.candidate.brier,.63);
+    assert.deepEqual(result.candidate.parameters.plugin_weights,target);
+    for(const summary of [result.baseline,result.candidate]) {
+      assert.ok(Number.isFinite(summary.profit_coins));
+      assert.ok(Number.isFinite(summary.max_drawdown_pct));
+      for(const field of ['signals','equity_path'])assert.equal(Object.hasOwn(summary,field),false);
+    }
+    for(const field of ['training_ticket','plan','future_prices','history','part_png'])
+      assert.equal(Object.hasOwn(result,field),false);
+    assert.deepEqual(history.at(-1),{input:{base_model:base,
+      models:{mine:{...base,plugin_weights:target},owl:base,turtle:base},selection},options:{source:'local'}});
+  }
+  assert.equal(calls.length,0,'never uses the synthetic comparison route');
+  assert.deepEqual(await Promise.all(paths.map(path=>readFile(path))),before);
+  assert.equal(JSON.stringify(snapshot),baselineSnapshot);
+  assert.deepEqual((await readdir(local)).sort(),['accessory_analysis','character_equipment','character_parts','independent_parts']);
+});
+
+test('accessory history rejects malformed and forged requests before reading model or invoking history',async t=>{
+  const {start,snapshot,cp,part,equipment,local}=await fixture(t);
+  let modelReads=0,historyCalls=0;
+  const api=await start({
+    loadSnapshot:async()=>{modelReads++;return snapshot;},
+    historicalPredict:async()=>{historyCalls++;assert.fail('Must never access history');},
+  });
+  const initial=compareInput(await api.get().then(response=>response.json()));
+  const send=(input=initial,headers={})=>api.post(input,HISTORY,headers);
+  for(const headers of [{Origin:'https://outside.invalid'},{Origin:api.origin.replace('127.0.0.1','localhost')},{'Sec-Fetch-Site':'cross-site'}])
+    assert.equal((await send(initial,headers)).status,403);
+  const noOrigin=await fetch(api.origin+HISTORY,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(initial)});
+  assert.equal(noOrigin.status,403);
+  const wrongHost=await new Promise((resolve,reject)=>{
+    const outbound=request(api.origin+HISTORY,{method:'POST',headers:{Host:'outside.invalid',Origin:api.origin}},res=>{
+      res.resume();resolve(res.statusCode);
+    });
+    outbound.once('error',reject);
+    outbound.end();
+  });
+  assert.equal(wrongHost,403);
+  assert.equal((await api.get(HISTORY)).status,404);
+  assert.equal((await api.post(initial,HISTORY+'?source=local')).status,404);
+  assert.equal((await send(initial,{'Content-Type':'text/plain'})).status,415);
+  for(const bad of [null,[initial],{}, {...initial,expected_revision:true},{...initial,character_id:'bad'},
+    {...initial,source:'jquants'},{...initial,candidate:{...base}}, {...initial,history_path:'/tmp/data'},
+    {...initial,replay_id:windowA,exclude_id:windowB},{...initial,replay_id:windowA+'\n'},
+    {...initial,exclude_id:'mkt_'+'A'.repeat(24)},{...initial,replay_id:null},{...initial,exclude_id:42}]) {
+    assert.equal((await send(bad)).status,400);
+  }
+  assert.equal(modelReads,0);
+  assert.equal((await send()).status,422);
+  const prepared=await practiceContext(api);
+  for(const mismatch of [{active_revision:0},{equipment_revision:0},{expected_revision:0},{character_id:'cp_'+'b'.repeat(32)}])
+    assert.equal((await send({...prepared,...mismatch})).status,409);
+  await equipment.save(cp,{expected_revision:1,parts:[{...part,visible:false}]});
+  assert.equal((await send({...prepared,equipment_revision:2})).status,422);
+  await equipment.save(cp,{expected_revision:2,parts:[{...part,image_sha256:'0'.repeat(64)}]});
+  assert.equal((await send({...prepared,equipment_revision:3})).status,422);
+  await equipment.save(cp,{expected_revision:3,parts:[]});
+  await rm(join(local,'independent_parts',part.part_id),{recursive:true});
+  assert.equal((await send({...prepared,equipment_revision:4})).status,422);
+  assert.equal(historyCalls,0);
+});
+
+test('historical route discards a result when character, equipment, policy, model or companion changes during computation',async t=>{
+  const {start,cp,part,active,companion,equipment,snapshot}=await fixture(t);
+  const setup=await start();
+  const expected=await practiceContext(setup);
+  let mutate;
+  const api=await start({
+    loadSnapshot:async()=>({...snapshot}),
+    historicalPredict:async input=>{
+      const result=await historicalFixture(input);
+      await mutate();
+      return result;
+    },
+  });
+  for(const change of [
+    ()=>{active.active_demo_id='cp_'+'b'.repeat(32);active.revision++;},
+    ()=>equipment.save(cp,{expected_revision:1,parts:[{...part,x:1}]}),
+    async()=>assert.equal((await setup.post({expected_revision:1,policies:[{...pin,intensity:2}]})).status,200),
+    ()=>{snapshot.source_revision++;},
+    ()=>{companion.revision++;},
+  ]) {
+    mutate=change;
+    const response=await api.post(expected,HISTORY);
+    assert.equal(response.status,409,await response.text());
+    active.active_demo_id=cp;
+    Object.assign(expected,compareInput(await setup.get().then(response=>response.json())));
+  }
+});
+
+test('historical route fails closed if local data is unavailable, provenance is wrong or selection differs',async t=>{
+  const {start}=await fixture(t);
+  let change;
+  const api=await start({historicalPredict:async input=>change(await historicalFixture(input))});
+  const context=await practiceContext(api);
+  change=()=>{throw Error('fixture: secret internal path');};
+  const unavailable=await api.post(context,HISTORY);
+  assert.equal(unavailable.status,503);
+  assert.match((await unavailable.json()).error,/ローカルの2024年株価データを読み込めない/);
+  for(const update of [{source_origin:'JQUANTS_API_V2_CACHE'},{adjusted:true},{start_date:'2023-12-29'},{market_id:windowB}]) {
+    change=value=>({...value,...update});
+    const malformed=await api.post({...context,replay_id:windowA},HISTORY);
+    assert.equal(malformed.status,503);
+    assert.ok(!Object.hasOwn(await malformed.json(),'market'));
+  }
+  change=value=>({...value,market_id:windowA});
+  assert.equal((await api.post({...context,exclude_id:windowA},HISTORY)).status,503);
+});
+
+test('historical child process forces local mode and drops inherited credentials before using Python',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'creature-history-child-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const prices=join(root,'prehistory.json');
+  await writeFile(prices,JSON.stringify({source:'SoftHompo JPX daily reports CSV',series:{
+    40050:Array.from({length:42},(_,i)=>({Code:'40050',Date:new Date(Date.UTC(2024,0,i+4)).toISOString().slice(0,10),
+      C:100+i*.3+Math.sin(i*.7)*2})),
+  }}));
+  const before=await readFile(prices);
+  const {stdout:interpreter}=await run('python3',['-B','-E','-c','import sys; print(sys.executable)']);
+  const python="'"+interpreter.trim().replaceAll("'","'\"'\"'")+"'";
+  // The guard refuses to launch Python if any regression could access the network.
+  await writeFile(join(root,'python3'),`#!/bin/sh
+[ "$CREATURE_MARKET_SOURCE" = "local" ] || exit 71
+[ -z "${'${CREATURE_JQUANTS_API_KEY+x}'}" ] && [ -z "${'${HTTPS_PROXY+x}'}" ] && [ -z "${'${PYTHONPATH+x}'}" ] || exit 72
+exec ${python} "$@"
+`,{mode:0o700});
+  const input={base_model:base,models:{mine:{...base,plugin_weights:target},owl:base,turtle:base},selection:{}};
+  const entry=new URL('../../game_runtime/server.mjs',import.meta.url);
+  const {stdout}=await run(process.execPath,['--input-type=module','-e',`
+import {pythonHistoricalPredict} from ${JSON.stringify(entry.href)};
+console.log(JSON.stringify(await pythonHistoricalPredict(JSON.parse(process.argv[1]),{source:'local'})));
+`,JSON.stringify(input)],{env:{PATH:root+':'+process.env.PATH,CREATURE_MARKET_HISTORY_PATH:prices,
+    CREATURE_MARKET_SOURCE:'jquants',CREATURE_JQUANTS_API_KEY:'fixture-key',HTTPS_PROXY:'fixture-proxy',PYTHONPATH:'fixture-python-path'},
+    timeout:18000,maxBuffer:65536});
+  const result=JSON.parse(stdout);
+  assert.equal(result.source_origin,'LOCAL_JPX_REPORT_CACHE_2024');
+  assert.equal(result.adjusted,false);
+  assert.equal(result.eligible_windows,7);
+  assert.ok(Number.isFinite(result.brier.mine) && Number.isFinite(result.brier.owl));
+  assert.notEqual(result.plan.models.mine.effective_sha256,result.plan.models.owl.effective_sha256);
+  assert.deepEqual(await readFile(prices),before);
+  assert.deepEqual((await readdir(root)).sort(),['prehistory.json','python3']);
+});

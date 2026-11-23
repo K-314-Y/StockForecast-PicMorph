@@ -91,9 +91,13 @@ private local Creature Lab Node game. It has no real-trading capability.
    practice when the user checks the accessory option on the confirmation panel.
    The option starts unchecked on every run and is available only for 自分のAI.
    If the character, equipment or rules change, confirm the settings again.
-   The usual Python predictor uses synthetic data in both flows. Report weight,
+   The synthetic comparison and easy mode use synthetic data. Report weight,
    hash and signal differences accurately. Rules adjust weights without model
    training and never change ordinary forecasts or XP.
+   過去株価の比較は、本人が分析画面で明示的に実行したときだけ利用する。
+   ローカルの未調整の2024年終値から12営業日を1期間だけ再現する。候補期間は
+   重なっており、独立した検証用データの評価や実運用成績の検証には使えない。
+   比較結果は保存せず、ローカルデータがないときは利用できない旨を伝える。
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

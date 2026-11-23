@@ -17,7 +17,7 @@
 <main>
   <a href="/game">ゲームへ戻る</a>
   <h1>ルールによる分析重みの切替（実験）</h1>
-  <p>保存した種類別の設定を、いま選択中の登録キャラの表示中の装備に適用して比較します。基準と候補は同じ固定の架空12日間で評価します。モデル学習や実相場の評価は行わず、通常プレイの予測にも反映しません。</p>
+  <p>選択中の登録キャラの表示中の装備に、保存済みの分析ルールを適用して比較します。基準と候補は同じ期間を使います。比較結果は保存せず、モデル学習や通常プレイの予測には使いません。</p>
   <h2>種類別の分析設定</h2>
   <p id="equipped"></p>
   <p id="catalog-note" hidden></p>
@@ -33,6 +33,20 @@
     <p id="delta"></p>
     <p id="rules"></p>
     <div id="reports" class="comparison"></div>
+  </section>
+  <section aria-labelledby="historical-title">
+    <h2 id="historical-title">過去の株価で再現</h2>
+    <p id="historical-help">ローカルにある2024年の終値から1期間を選び、直前の24営業日を使って続く12営業日を再現します。未調整のため、分割や配当の影響が残る場合があります。</p>
+    <button id="historical-compare" type="button" aria-describedby="historical-help historical-status" disabled>過去の株価（2024年）で比較する</button>
+    <p id="historical-status" role="status"></p>
+    <section id="historical-result" aria-labelledby="historical-result-title" hidden>
+      <h3 id="historical-result-title">過去12営業日の比較結果</h3>
+      <p id="historical-period"></p>
+      <p id="historical-warning"></p>
+      <p id="historical-delta"></p>
+      <p id="historical-rules"></p>
+      <div id="historical-reports" class="comparison"></div>
+    </section>
   </section>
 </main>
 <script type="module" src="/accessory-analysis-ui.mjs"></script>

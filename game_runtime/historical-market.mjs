@@ -72,3 +72,17 @@ export function compareHistoricalMarket(payload,baseline,candidate){
     notice:'同じ株価履歴と日程で、確率評価と仮想損益を分離。過去データの再現実験であり、未来・実運用の性能証明ではありません。元の予測モデルとXPは変更しません。',
   };
 }
+
+export function compareLocalAccessoryHistory(payload,baseline,candidate,selection){
+  if(payload?.source_origin!=='LOCAL_JPX_REPORT_CACHE_2024' || payload.adjusted!==false ||
+     (selection.replay_id && payload.market_id!==selection.replay_id) ||
+     payload.market_id===selection.exclude_id)throw fail();
+  const {baseline:control,candidate:adjusted,...report}=compareHistoricalMarket(payload,baseline,candidate);
+  const {period_start,history_end,period_end}=report.market;
+  if(![period_start,history_end,period_end].every(day=>day.startsWith('2024-')))throw fail();
+  // Return model metadata and aggregates only. The ordered data stays in the bridge.
+  const metrics=({signals,equity_path,...aggregate})=>aggregate;
+  return {...report,baseline:metrics(control),candidate:metrics(adjusted),
+    scope:'ACCESSORY_RULES_HISTORICAL_LOCAL_12',read_only:true,persisted:false,coins_changed:false,order_placed:false,
+    notice:'未調整の2024年終値から選んだ1期間の再現です。候補期間は互いに重なるため、独立した検証回数ではありません。分割や配当の影響が残ることがあります。独立した検証用データでの評価は行っていません。'};
+}

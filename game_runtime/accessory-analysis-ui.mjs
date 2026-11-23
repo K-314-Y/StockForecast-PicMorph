@@ -7,6 +7,9 @@ const compare=$('compare');
 const reload=$('reload');
 const status=$('status');
 const result=$('result');
+const historical=$('historical-compare');
+const historicalStatus=$('historical-status');
+const historicalResult=$('historical-result');
 let state;
 let controls=[];
 let busy=false;
@@ -14,7 +17,7 @@ let refreshRequired=false;
 
 async function request(path='',input) {
   const response=await fetch(API+path,{mode:'same-origin',credentials:'same-origin',cache:'no-store',redirect:'error',
-    signal:AbortSignal.timeout(20000),...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
+    signal:AbortSignal.timeout(path==='/historical'?40000:20000),...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
   const body=await response.json();
   if(!response.ok)throw Object.assign(new Error(body.error || '分析実験を実行できませんでした'),{status:response.status});
   return body;
@@ -28,6 +31,7 @@ function updateControls() {
   const changed=state && (state.stale_kinds.length || JSON.stringify(editedPolicies())!==JSON.stringify(state.policies));
   save.disabled=busy || refreshRequired || !changed;
   compare.disabled=busy || refreshRequired || !state?.equipped.character_id || Boolean(changed);
+  historical.disabled=compare.disabled || !state.policies.some(rule=>state.equipped.visible_kinds.includes(rule.kind_id));
   reload.disabled=busy;
   for(const {focus,intensity} of controls) {
     focus.disabled=busy || refreshRequired;
@@ -70,40 +74,78 @@ function renderSettings() {
   if(state.stale_kinds.length)notes.push(`カタログにない種類　${state.stale_kinds.join('、')}。保存し直すと該当する設定が削除されます。`);
   $('catalog-note').textContent=notes.join(' ');
   $('catalog-note').hidden=!notes.length;
+  historicalStatus.textContent=state.policies.some(rule=>visible_kinds.includes(rule.kind_id)) ? '' :
+    '過去の株価で比較するには、表示中の登録キャラの装備に使える分析ルールを保存してください。';
 }
 
-function renderComparison(report) {
-  $('delta').textContent=`異なる日次シグナルは12日中${report.difference.different_signals}日。架空収支の差は${report.difference.profit_coins}コイン。分析重みは${report.weights_changed?'変更あり':'変更なし'}、モデルハッシュは${report.effective_hash_changed?'変更あり':'変更なし'}。`;
+function appliedRules(report) {
   const applied=report.provenance.applied_rules.map(policy=>`${policy.kind_id}（${FOCUS[policy.focus]}・強度${policy.intensity}）`);
-  $('rules').textContent=`適用した設定　${applied.join('、') || 'なし'}`;
-  $('reports').replaceChildren();
+  return `適用した設定　${applied.join('、') || 'なし'}`;
+}
+
+function renderReports(report,container,isHistorical=false) {
+  container.replaceChildren();
   for(const [title,data] of [['基準',report.baseline],['候補',report.candidate]]) {
     const article=document.createElement('article');
-    const heading=document.createElement('h3');
+    const heading=document.createElement(isHistorical?'h4':'h3');
     heading.textContent=title;
     article.append(heading);
     for(const line of [Object.entries(FOCUS).map(([id,name])=>`${name} ${data.parameters.plugin_weights[id]}%`).join('、'),
-      `モデルハッシュ　${data.effective_sha256}`,`架空収支　${data.profit_coins}コイン`,
+      ...(isHistorical?[`Brierスコア　${data.brier}（小さいほど確率予測の誤差が小さい）`]:[]),
+      `モデルハッシュ　${data.effective_sha256}`,`${isHistorical?'仮想損益':'架空収支'}　${data.profit_coins}コイン`,
       `収益率　${data.return_pct}%`,`最大下落率　${data.max_drawdown_pct}%`,
-      `日次シグナル　${data.signals.join(' / ')}`]) {
+      ...(isHistorical?[]:[`日次シグナル　${data.signals.join(' / ')}`])]) {
       const p=document.createElement('p');
       p.textContent=line;
       article.append(p);
     }
-    $('reports').append(article);
+    container.append(article);
   }
+}
+
+function renderComparison(report) {
+  $('delta').textContent=`異なる日次シグナルは12日中${report.difference.different_signals}日。架空収支の差は${report.difference.profit_coins}コイン。分析重みは${report.weights_changed?'変更あり':'変更なし'}、モデルハッシュは${report.effective_hash_changed?'変更あり':'変更なし'}。`;
+  $('rules').textContent=appliedRules(report);
+  renderReports(report,$('reports'));
   result.hidden=false;
 }
 
-async function run(message,action) {
-  busy=true;
+function renderHistoricalComparison(report) {
+  const market=report.market;
+  if(report.scope!=='ACCESSORY_RULES_HISTORICAL_LOCAL_12' || report.holdout_evaluated!==false ||
+     report.read_only!==true || market?.source_origin!=='LOCAL_JPX_REPORT_CACHE_2024' || market.adjusted!==false) {
+    throw Object.assign(new Error('ローカルの過去株価の比較結果を確認できませんでした。'),{status:503});
+  }
+  $('historical-period').textContent=`出典　${market.source}（未調整） ／ 銘柄コード ${market.code} ／ 履歴開始 ${market.period_start}、予測前の最終日 ${market.history_end}、再現終了 ${market.period_end}`;
+  $('historical-warning').textContent=`候補期間は${market.eligible_windows}件で互いに重なります。再現したのは1期間です。独立した検証用データでの評価は行っていません。 ${market.warning}`;
+  $('historical-delta').textContent=`異なる日次シグナルは12日中${report.difference.different_signals}日。仮想損益の差は${report.difference.profit_coins}コイン。`;
+  $('historical-rules').textContent=appliedRules(report);
+  renderReports(report,$('historical-reports'),true);
+  historicalResult.hidden=false;
+}
+
+function clearResults() {
   result.hidden=true;
-  status.textContent=message;
+  historicalResult.hidden=true;
+  historicalStatus.textContent='';
+}
+
+function comparisonContext() {
+  const {character_id,active_revision,equipment_revision}=state.equipped;
+  return {character_id,active_revision,equipment_revision,expected_revision:state.revision};
+}
+
+async function run(message,action,output=status) {
+  busy=true;
+  output.textContent=message;
   updateControls();
   try { await action(); }
   catch(error) {
-    if(error.status===409)refreshRequired=true;
-    status.textContent=error.status?error.message:'接続に失敗しました。設定を再読込してください。';
+    if(error.status===409) {
+      refreshRequired=true;
+      clearResults();
+    }
+    output.textContent=error.status?error.message:'接続に失敗しました。設定を再読込してください。';
   } finally {
     busy=false;
     updateControls();
@@ -112,6 +154,7 @@ async function run(message,action) {
 
 function load() {
   refreshRequired=true;
+  clearResults();
   return run('設定を読み込んでいます…',async()=>{
     state=await request();
     renderSettings();
@@ -120,10 +163,11 @@ function load() {
   });
 }
 
-settings.addEventListener('change',()=>{result.hidden=true;updateControls();});
+settings.addEventListener('change',()=>{clearResults();updateControls();});
 reload.addEventListener('click',load);
 save.addEventListener('click',()=>{
   if(!window.confirm('種類別の分析設定を保存しますか？ 装備や予測モデルは変更しません。'))return;
+  clearResults();
   void run('分析設定を保存しています…',async()=>{
     const saved=await request('',{expected_revision:state.revision,policies:editedPolicies()});
     state={...state,...saved,stale_kinds:[]};
@@ -132,10 +176,18 @@ save.addEventListener('click',()=>{
   });
 });
 compare.addEventListener('click',()=>{
+  result.hidden=true;
   void run('同じ架空12日間で比較しています…',async()=>{
-    const {character_id,active_revision,equipment_revision}=state.equipped;
-    renderComparison(await request('/compare',{character_id,active_revision,equipment_revision,expected_revision:state.revision}));
+    renderComparison(await request('/compare',comparisonContext()));
     status.textContent='比較が完了しました。';
   });
+});
+historical.addEventListener('click',()=>{
+  if(historical.disabled)return;
+  historicalResult.hidden=true;
+  void run('ローカルの過去株価で比較しています…',async()=>{
+    renderHistoricalComparison(await request('/historical',comparisonContext()));
+    historicalStatus.textContent='過去株価の比較が完了しました。';
+  },historicalStatus);
 });
 void load();
