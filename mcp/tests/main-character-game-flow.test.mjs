@@ -187,7 +187,12 @@ async function checkFlow(t,{liveMain=false}={}) {
   assert.deepEqual(await readdir(state),[]);
   assert.deepEqual(posts,[]);
 
-  await page.goto(origin+'/parts-lab/preview.html');
+  // A first-time player can find ZIP registration without browsing advanced settings.
+  await page.goto(origin+'/game');
+  const createLink=page.locator('#quickZipCreateLink');
+  assert.equal(await createLink.getAttribute('href'),'/parts-lab/preview.html');
+  await createLink.click();
+  await page.waitForURL(origin+'/parts-lab/preview.html');
   const gameLink=page.locator('#zipGameLink a');
   assert.equal(await gameLink.getAttribute('href'),null);
   const picker=page.getByLabel('通常ゲームのキャラ',{exact:true});

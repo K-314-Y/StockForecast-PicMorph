@@ -309,7 +309,9 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 @media(max-width:550px){#quickImportReferenceCards{grid-template-columns:1fr}}
 @media(max-width:550px){#quickImportCards,#quickCompareResults,#quickCompareMultiCards{grid-template-columns:1fr}}
 .quick-status-announcement{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
+.simple-model-actions{margin:0;gap:8px}.simple-model-actions button{font-size:14px}
+.simple-zip-entry a{display:inline-flex;align-items:center;min-height:44px;max-width:100%;color:#b1d9ff;font-weight:750;overflow-wrap:anywhere}
+.simple-zip-entry a:focus-visible{outline:3px solid #ffd886;outline-offset:2px}.simple-target{scroll-margin-block:20px}.simple-target:focus-visible{outline:3px solid #ffdf96;outline-offset:3px}.simple-home h3,.simple-home p{overflow-wrap:anywhere}
 #quickZipEditLink{color:var(--mint)}
 #quickChatGPT button,#quickChatGPTConnection button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 #quickHumanNote{box-sizing:border-box;max-width:100%;min-width:0}
@@ -418,6 +420,10 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
    </label>
    <div class="actions simple-model-actions"><button id="quickShop" type="button" aria-controls="advancedEntry">デモAIをショップで探す</button></div>
    <p id="quickModelHelp" class="simple-hint">自分のAIとZIP登録した専用AIは無料です。デモAIはショップ専用のコインで解放できます。</p>
+   <p id="quickZipOnboarding" class="simple-hint simple-zip-entry">画像ZIPから専用AIを作る場合は、先に
+    <a href="/parts-lab/preview.html" id="quickZipCreateLink">キャラをZIP登録する</a>。
+    登録後は「このキャラでゲームへ」から、このAIを選んだ状態で戻れます。架空練習専用で、実株価の予測とは別です。
+   </p>
    <div id="quickZipLinked" hidden style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid #557c8c;border-radius:12px">
     <img id="quickZipPortrait" alt="選択したZIPキャラの合成画像" width="96" height="110" style="object-fit:contain">
     <div>

@@ -20,7 +20,7 @@ function accessoryReply(body,index=0){
     a:arm(body.accessory_a,selfFingerprint,'LONG'),b:arm(body.accessory_b,otherFingerprint,'CASH')};
 }
 
-async function mount(models=[],chatgpt=false,imported=[]) {
+async function mount(models=[],chatgpt=false,imported=[],search='') {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
   const downloads=[],objectUrls=new Map(),revokedUrls=[];
   let nextObjectUrl=0;
@@ -152,7 +152,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   state.copy=async text=>{copies.push(text);};
   state.navigator={clipboard:{writeText:text=>state.copy(text)}};
   const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
-    Blob,location:{origin:'http://localhost'},URL:class extends URL {
+    Blob,URLSearchParams,location:{origin:'http://localhost',search},URL:class extends URL {
       static createObjectURL(blob){
         assert.ok(blob instanceof Blob);
         const url='blob:comparison-'+ ++nextObjectUrl;
@@ -1808,6 +1808,30 @@ test('owner caption follows self art, other AI and reset without extra network',
   await fire('quickAgain');
   assert.equal(get('quickReplayOwner').textContent,'');
   assert.deepEqual(storageWrites,[]);
+});
+
+test('ZIP onboarding stays in the local character lab and deep-links only exact registered IDs',async()=>{
+  const onboarding=htmlNodes().find(node=>node.id==='quickZipCreateLink');
+  assert.equal(onboarding?.tag,'a');
+  assert.ok(onboarding.parents.includes('simpleHome'));
+  assert.match(onboarding.attributes,/href="\/parts-lab\/preview\.html"/);
+  const id='zip_'+'a'.repeat(32);
+  const imported={id,ai_id:id,name:'初心者の相棒',image_url:'/api/imported-characters/image/'+id,
+    model_version:'appearance-v1_45_25_20_10_50'};
+  const direct=await mount([],false,[imported],'?model='+id);
+  assert.equal(direct.get('quickModel').value,id);
+  assert.equal(direct.get('quickZipLinked').hidden,false);
+  assert.match(direct.get('quickStatus').textContent,/ZIPキャラのAIを選びました/);
+  direct.get('quickModel').value='self';
+  await direct.fire('quickModel','change');
+  direct.focus();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(direct.get('quickModel').value,'self');
+  const duplicate=await mount([],false,[imported],'?model='+id+'&model='+id);
+  assert.equal(duplicate.get('quickModel').value,'self');
+  const missing=await mount([],false,[imported],'?model=zip_'+'b'.repeat(32));
+  assert.equal(missing.get('quickModel').value,'self');
+  assert.match(missing.get('quickStatus').textContent,/ZIPキャラが見つかりません/);
 });
 
 test('a registered ZIP character selects its own AI and owns its result image and caption',async()=>{
