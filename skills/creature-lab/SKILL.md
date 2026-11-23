@@ -99,6 +99,10 @@ private local Creature Lab Node game. It has no real-trading capability.
    重ならない複数期間を再現する。異なる銘柄は同じ市場・日程を共有する。
    再現する12日間も含む急変の除外による選択の偏りに注意する。集計は独立した
    検証用データでの評価や実運用の成績を示さない。
+   調整済みの比較は、指定された非公開データの整合性を確認してから2025-08-01で
+   分け、同じ保存済みルールで前半・後半を遡及比較する。権利・ライセンス、当時の
+   入手可能性、企業行動の処理は未確認。取得時点の調整値を用いるため、後半を未見
+   データでの検証と呼ばない。株価や日別結果を共有しない。
    比較結果は保存せず、ローカルデータがないときは利用できない旨を伝える。
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.

@@ -67,6 +67,21 @@
       </details>
     </section>
   </section>
+  <section aria-labelledby="adjusted-split-title">
+    <h2 id="adjusted-split-title">調整済み株価の時系列比較</h2>
+    <p id="adjusted-split-help">ローカルの調整済み終値を2025-08-01で区切り、両期間に同じ保存済みルールを適用します。権利、当時の入手可能性、企業行動の処理は未確認です。</p>
+    <button id="adjusted-split-compare" type="button" aria-describedby="adjusted-split-help adjusted-split-status" disabled>調整済み株価で前半・後半を比較（研究用）</button>
+    <p id="adjusted-split-status" role="status"></p>
+    <section id="adjusted-split-result" aria-labelledby="adjusted-split-result-title" hidden>
+      <h3 id="adjusted-split-result-title">調整済み株価の前半・後半の結果</h3>
+      <p id="adjusted-split-coverage"></p>
+      <p id="adjusted-split-caveats"></p>
+      <p id="adjusted-split-rules"></p>
+      <div id="adjusted-split-phases" class="comparison"></div>
+      <h4>前半と後半の差の方向</h4>
+      <ul id="adjusted-split-directions"></ul>
+    </section>
+  </section>
 </main>
 <script type="module" src="/accessory-analysis-ui.mjs"></script>
 </html>

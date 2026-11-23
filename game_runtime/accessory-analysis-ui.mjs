@@ -13,6 +13,9 @@ const historicalResult=$('historical-result');
 const batch=$('batch-compare');
 const batchStatus=$('batch-status');
 const batchResult=$('batch-result');
+const adjustedSplit=$('adjusted-split-compare');
+const adjustedSplitStatus=$('adjusted-split-status');
+const adjustedSplitResult=$('adjusted-split-result');
 const formatMetric=new Intl.NumberFormat('ja-JP',{maximumFractionDigits:6});
 let state;
 let controls=[];
@@ -24,7 +27,7 @@ let batchNeedsReload=false;
 
 async function request(path='',input) {
   const response=await fetch(API+path,{mode:'same-origin',credentials:'same-origin',cache:'no-store',redirect:'error',
-    signal:AbortSignal.timeout(['/historical','/batch-history'].includes(path)?40000:20000),
+    signal:AbortSignal.timeout(['/historical','/batch-history','/adjusted-split'].includes(path)?40000:20000),
     ...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
   const body=await response.json();
   if(!response.ok)throw Object.assign(new Error(body.error || '分析実験を実行できませんでした'),{status:response.status});
@@ -41,6 +44,7 @@ function updateControls() {
   compare.disabled=busy || refreshRequired || !state?.equipped.character_id || Boolean(changed);
   historical.disabled=compare.disabled || !state.policies.some(rule=>state.equipped.visible_kinds.includes(rule.kind_id));
   batch.disabled=historical.disabled || batchNeedsReload;
+  adjustedSplit.disabled=batch.disabled;
   reload.disabled=busy;
   for(const {focus,intensity} of controls) {
     focus.disabled=busy || refreshRequired;
@@ -137,6 +141,36 @@ function renderHistoricalComparison(report) {
 const batchMetrics=[['brier','Brierスコア（低いほど誤差が小さい）',''],
   ['profit_coins','仮想損益','コイン'],['max_drawdown_pct','最大下落率','%']];
 
+function renderMetricCards(metrics,cards,includeDelta=false) {
+  cards.replaceChildren();
+  for(const [key,label,unit] of batchMetrics) {
+    const metric=metrics[key];
+    const article=document.createElement('article');
+    const title=document.createElement(includeDelta?'h5':'h4');
+    title.textContent=label;
+    const means=document.createElement('p');
+    means.textContent=`平均（各期間を同じ重みで集計） 基準 ${formatMetric.format(metric.baseline_mean)}${unit} ／ 候補 ${formatMetric.format(metric.candidate_mean)}${unit}`;
+    if(includeDelta)means.textContent+=` ／ 差（候補−基準） ${formatMetric.format(metric.delta)}${unit==='%'?'ポイント':unit}`;
+    const counts=document.createElement('p');
+    counts.textContent=`候補が良い ${metric.wins} ／ 同じ ${metric.ties} ／ 悪い ${metric.losses}`;
+    article.append(title,means,counts);
+    cards.append(article);
+  }
+}
+
+function downsideText(downside) {
+  return `全期間で最も大きな下落率は基準 ${downside.baseline.max_drawdown_pct}% ／ 候補 ${downside.candidate.max_drawdown_pct}%。最も低い仮想損益は基準 ${downside.baseline.worst_profit_coins}コイン ／ 候補 ${downside.candidate.worst_profit_coins}コイン。`;
+}
+
+function renderCodeMeans(container,byCode) {
+  container.replaceChildren(...byCode.map(({code,windows,metrics})=>{
+    const item=document.createElement('li');
+    const means=batchMetrics.map(([key,label,unit])=>`${label} ${formatMetric.format(metrics[key].baseline_mean)}${unit} → ${formatMetric.format(metrics[key].candidate_mean)}${unit}`);
+    item.textContent=`${code}（${windows}期間、基準 → 候補） ${means.join(' ／ ')}`;
+    return item;
+  }));
+}
+
 function renderBatchComparison(report) {
   const {coverage,market,downside}=report;
   if(report.scope!=='ACCESSORY_RULES_HISTORICAL_LOCAL_NONOVERLAP_V1' || report.holdout_evaluated!==false ||
@@ -148,28 +182,55 @@ function renderBatchComparison(report) {
   $('batch-warning').textContent=report.notice+' '+market.warning;
   $('batch-signals').textContent=`シグナルが異なった日数は、各期間を合計して${report.signal_comparisons}日のうち${report.different_signals}日です。`;
   $('batch-rules').textContent=appliedRules(report);
-  const cards=$('batch-metrics');
-  cards.replaceChildren();
-  for(const [key,label,unit] of batchMetrics) {
-    const metric=report.metrics[key];
-    const article=document.createElement('article');
-    const title=document.createElement('h4');
-    title.textContent=label;
-    const means=document.createElement('p');
-    means.textContent=`平均（各期間を同じ重みで集計） 基準 ${formatMetric.format(metric.baseline_mean)}${unit} ／ 候補 ${formatMetric.format(metric.candidate_mean)}${unit}`;
-    const counts=document.createElement('p');
-    counts.textContent=`候補が良い ${metric.wins} ／ 同じ ${metric.ties} ／ 悪い ${metric.losses}`;
-    article.append(title,means,counts);
-    cards.append(article);
+  renderMetricCards(report.metrics,$('batch-metrics'));
+  $('batch-downside').textContent=downsideText(downside);
+  renderCodeMeans($('batch-codes'),report.by_code);
+  batchResult.hidden=false;
+}
+
+function renderAdjustedSplit(report) {
+  const {market,phases}=report;
+  if(report.scope!=='ACCESSORY_RULES_ADJUSTED_CHRONOLOGY_RESEARCH_V1' || report.holdout_evaluated!==false ||
+     report.read_only!==true || report.research_only!==true || report.weighting!=='equal_per_window' ||
+     report.rights_verified!==false || report.point_in_time_verified!==false || report.corporate_actions_verified!==false ||
+     market?.source_origin!=='LOCAL_PRIVATE_JQUANTS_ADJUSTED_RESEARCH' || market.adjusted!==true || market.manifests_verified!==true) {
+    throw Object.assign(new Error('調整済み研究データの比較結果を確認できませんでした。'),{status:503});
   }
-  $('batch-downside').textContent=`全期間で最も大きな下落率は基準 ${downside.baseline.max_drawdown_pct}% ／ 候補 ${downside.candidate.max_drawdown_pct}%。最も低い仮想損益は基準 ${downside.baseline.worst_profit_coins}コイン ／ 候補 ${downside.candidate.worst_profit_coins}コイン。`;
-  $('batch-codes').replaceChildren(...report.by_code.map(({code,windows,metrics})=>{
+  $('adjusted-split-coverage').textContent=`出典はローカル保管のJ-Quants V2調整済み終値。${market.codes}銘柄、各${market.sessions_per_code}営業日。欠損日は${market.missing_sessions.join('、')}。分割日は${report.split_date}です。`;
+  $('adjusted-split-caveats').textContent=report.notice+' 24営業日の履歴と12営業日の再現がそろう期間を選び、10日を超える日付の空きはまたぎません。価格変動による選別はしません。';
+  $('adjusted-split-rules').textContent=appliedRules(report);
+  const container=$('adjusted-split-phases');
+  container.replaceChildren();
+  for(const [key,label] of [['early','前半（遡及比較）'],['later','後半（遡及比較）']]) {
+    const phase=phases[key];
+    const section=document.createElement('section');
+    const heading=document.createElement('h4');
+    heading.textContent=label;
+    const coverage=document.createElement('p');
+    coverage.textContent=`${phase.calendar_start}〜${phase.calendar_end}（各銘柄${phase.sessions_per_code}営業日）。${phase.periods}期間を比較。採用範囲 ${phase.window_start}〜${phase.window_end}。`;
+    const signals=document.createElement('p');
+    signals.textContent=`異なるシグナルは合計${phase.signal_comparisons}日のうち${phase.different_signals}日。`;
+    const metrics=document.createElement('div');
+    renderMetricCards(phase.metrics,metrics,true);
+    const downside=document.createElement('p');
+    downside.textContent=downsideText(phase.downside);
+    const details=document.createElement('details');
+    const summary=document.createElement('summary');
+    summary.textContent=`${label.slice(0,2)}の銘柄ごとの平均`;
+    const codes=document.createElement('ul');
+    renderCodeMeans(codes,phase.by_code);
+    details.append(summary,codes);
+    section.append(heading,coverage,signals,metrics,downside,details);
+    container.append(section);
+  }
+  const direction={better:'候補が良い',worse:'候補が悪い',tie:'同じ'};
+  $('adjusted-split-directions').replaceChildren(...batchMetrics.map(([key,label])=>{
     const item=document.createElement('li');
-    const means=batchMetrics.map(([key,label,unit])=>`${label} ${formatMetric.format(metrics[key].baseline_mean)}${unit} → ${formatMetric.format(metrics[key].candidate_mean)}${unit}`);
-    item.textContent=`${code}（${windows}期間、基準 → 候補） ${means.join(' ／ ')}`;
+    const pair=report.direction_by_metric[key];
+    item.textContent=`${label}　前半 ${direction[pair.early]} ／ 後半 ${direction[pair.later]}`;
     return item;
   }));
-  batchResult.hidden=false;
+  adjustedSplitResult.hidden=false;
 }
 
 function clearResults() {
@@ -178,6 +239,8 @@ function clearResults() {
   historicalStatus.textContent='';
   batchResult.hidden=true;
   batchStatus.textContent='';
+  adjustedSplitResult.hidden=true;
+  adjustedSplitStatus.textContent='';
 }
 
 function comparisonContext() {
@@ -240,29 +303,36 @@ historical.addEventListener('click',()=>{
     historicalStatus.textContent='過去株価の比較が完了しました。';
   },historicalStatus);
 });
-batch.addEventListener('click',()=>{
-  if(batch.disabled)return;
-  batchResult.hidden=true;
+function runMultipleWindows({button,section,output,path,render,message,done}) {
+  if(button.disabled)return;
+  section.hidden=true;
   batchPending=true;
   const epoch=++batchEpoch;
-  void run('ローカルの過去株価で一括比較しています…',async()=>{
+  void run(message,async()=>{
     try {
-      const report=await request('/batch-history',comparisonContext());
+      const report=await request(path,comparisonContext());
       if(epoch!==batchEpoch)return;
-      renderBatchComparison(report);
-      batchStatus.textContent='過去株価の一括比較が完了しました。';
+      render(report);
+      output.textContent=done;
     } catch(error) {
       if(epoch===batchEpoch)throw error;
     } finally {batchPending=false;}
-  },batchStatus);
-});
+  },output);
+}
+
+batch.addEventListener('click',()=>runMultipleWindows({button:batch,section:batchResult,output:batchStatus,
+  path:'/batch-history',render:renderBatchComparison,message:'ローカルの過去株価で一括比較しています…',done:'過去株価の一括比較が完了しました。'}));
+adjustedSplit.addEventListener('click',()=>runMultipleWindows({button:adjustedSplit,section:adjustedSplitResult,output:adjustedSplitStatus,
+  path:'/adjusted-split',render:renderAdjustedSplit,message:'ローカルの調整済み研究データで前半・後半を比較しています…',done:'調整済み株価の前半・後半の比較が完了しました。'}));
 
 function clearBatchOnDeparture() {
-  if(!batchPending && batchResult.hidden)return;
+  if(!batchPending && batchResult.hidden && adjustedSplitResult.hidden)return;
   batchEpoch++;
   batchNeedsReload=true;
   batchResult.hidden=true;
+  adjustedSplitResult.hidden=true;
   batchStatus.textContent='表示中のキャラと設定を再読込してから比較してください。';
+  adjustedSplitStatus.textContent=batchStatus.textContent;
   updateControls();
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearBatchOnDeparture();});

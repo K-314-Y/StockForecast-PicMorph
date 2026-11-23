@@ -22,12 +22,12 @@ function independent(plan,slot){
     equity_path:result.equity_path,
   };
 }
-export function compareHistoricalMarket(payload,baseline,candidate){
+function compareHistoricalReplay(payload,baseline,candidate,origins){
   validateLabModel(baseline);
   validateLabModel(candidate);
   const plan=payload?.plan;
   if(payload?.mode!=='HISTORICAL_MARKET_REPLAY_ONLY'||
-     !['LOCAL_JPX_REPORT_CACHE_2024','JQUANTS_API_V2_CACHE'].includes(payload.source_origin)||
+     !origins.includes(payload.source_origin)||
      !REGEX.test(payload.market_id||'')||
      typeof payload.code!=='string'||!/^[0-9A-Z]{5}$/.test(payload.code)||
      ![payload.start_date,payload.history_end_date,payload.end_date].every(d=>
@@ -73,6 +73,14 @@ export function compareHistoricalMarket(payload,baseline,candidate){
   };
 }
 
+export function compareHistoricalMarket(payload,baseline,candidate){
+  return compareHistoricalReplay(payload,baseline,candidate,['LOCAL_JPX_REPORT_CACHE_2024','JQUANTS_API_V2_CACHE']);
+}
+
+export function compareAdjustedResearchWindow(payload,baseline,candidate){
+  return compareHistoricalReplay(payload,baseline,candidate,['LOCAL_PRIVATE_JQUANTS_ADJUSTED_RESEARCH']);
+}
+
 export function compareLocalAccessoryHistory(payload,baseline,candidate,selection){
   if(payload?.source_origin!=='LOCAL_JPX_REPORT_CACHE_2024' || payload.adjusted!==false ||
      (selection.replay_id && payload.market_id!==selection.replay_id) ||
@@ -98,12 +106,12 @@ function day2024(value) {
   return date/DAY;
 }
 
-function modelMatches(data,expected) {
+export function modelMatches(data,expected) {
   return data?.risk_fraction===expected.risk_fraction && INDICATORS.every(key=>
     data.plugin_weights?.[key]===expected.plugin_weights[key] && data.plugin_strengths?.[key]===expected.plugin_strengths[key]);
 }
 
-function summarizeWindows(windows) {
+export function summarizeWindows(windows) {
   const result={};
   for(const [key,direction] of [['brier',-1],['profit_coins',1],['max_drawdown_pct',-1]]) {
     let baseline=0,candidate=0,wins=0,ties=0,losses=0;

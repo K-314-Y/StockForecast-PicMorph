@@ -16,6 +16,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
   let empty=false;
   let historicalStatus=200;
   let batchStatus=200;
+  let adjustedStatus=200;
   function check(value,message) {
     if(!value)throw Error(message);
   }
@@ -30,7 +31,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
         if(pathname==='/accessory-analysis-ui.mjs')return route.fulfill({contentType:'text/javascript; charset=utf-8',body:script});
         if(pathname==='/favicon.ico')return route.fulfill({status:204});
       }
-      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history'].includes(pathname)) {
+      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split'].includes(pathname)) {
         unexpected.push(method+' '+url);
         return route.abort();
       }
@@ -76,6 +77,29 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
           downside:{baseline:{max_drawdown_pct:0,worst_profit_coins:0},candidate:{max_drawdown_pct:3.5,worst_profit_coins:-34}},
           by_code:[{code:'40050',windows:2,metrics},{code:'46890',windows:1,metrics}],provenance:{applied_rules:record.policies}}});
       }
+      if(method==='POST' && pathname===api+'/adjusted-split' && input.expected_revision===record.revision) {
+        check(JSON.stringify(input)===JSON.stringify({character_id,active_revision:2,equipment_revision:3,
+          expected_revision:record.revision}),'Adjusted chronology only accepts the review context');
+        if(adjustedStatus!==200)return route.fulfill({status:adjustedStatus,json:{error:adjustedStatus===409 ?
+          '調整済み比較の設定を再読込してください' : 'ローカルの調整済み研究データを確認できませんでした。'}});
+        const metrics={brier:{baseline_mean:.71,candidate_mean:.7,delta:-.01,wins:1,ties:0,losses:0},
+          profit_coins:{baseline_mean:0,candidate_mean:-6.25,delta:-6.25,wins:0,ties:0,losses:1},
+          max_drawdown_pct:{baseline_mean:0,candidate_mean:2,delta:2,wins:0,ties:0,losses:1}};
+        const phase={sessions_per_code:242,calendar_start:'2024-08-05',calendar_end:'2025-07-31',periods:60,
+          window_start:'2024-08-05',window_end:'2025-06-24',metrics,different_signals:2,signal_comparisons:720,
+          downside:{baseline:{max_drawdown_pct:0,worst_profit_coins:0},candidate:{max_drawdown_pct:3.5,worst_profit_coins:-34}},
+          by_code:[{code:'40050',windows:6,metrics}]};
+        return route.fulfill({json:{scope:'ACCESSORY_RULES_ADJUSTED_CHRONOLOGY_RESEARCH_V1',read_only:true,research_only:true,
+          holdout_evaluated:false,rights_verified:false,point_in_time_verified:false,corporate_actions_verified:false,
+          weighting:'equal_per_window',split_date:'2025-08-01',market:{source_origin:'LOCAL_PRIVATE_JQUANTS_ADJUSTED_RESEARCH',
+            adjusted:true,manifests_verified:true,codes:10,sessions_per_code:485,missing_sessions:['2024-08-01','2024-08-02']},
+          phases:{early:phase,later:{...phase,sessions_per_code:243,calendar_start:'2025-08-01',calendar_end:'2026-07-31',
+            window_start:'2025-08-01',window_end:'2026-06-23'}},
+          direction_by_metric:{brier:{early:'better',later:'worse'},profit_coins:{early:'worse',later:'tie'},
+            max_drawdown_pct:{early:'worse',later:'worse'}},
+          notice:'権利・ライセンス、当時の入手可能性、企業行動の処理は未確認です。前半も後半も遡及比較です。',
+          provenance:{applied_rules:record.policies}}});
+      }
       return route.fulfill({status:409,json:{error:'設定を再読込してください'}});
     });
     const fixture=await context.newPage();
@@ -86,6 +110,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     const compare=fixture.getByRole('button',{name:'保存済み設定で比較する'});
     const history=fixture.getByRole('button',{name:'過去の株価（2024年）で比較する'});
     const batch=fixture.getByRole('button',{name:'重ならない複数期間でまとめて比較する'});
+    const adjusted=fixture.getByRole('button',{name:'調整済み株価で前半・後半を比較（研究用）'});
     const focus=fixture.getByRole('combobox',{name:'分析の焦点'});
     const strength=fixture.getByRole('combobox',{name:'強度'});
     await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
@@ -93,11 +118,13 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     check(await save.isDisabled(),'Save should be disabled before edits');
     check(await history.isDisabled(),'History requires an applied saved policy');
     check(await batch.isDisabled(),'Batch requires an applied saved policy');
+    check(await adjusted.isDisabled(),'Adjusted chronology requires an applied saved policy');
     await focus.selectOption({label:'直近の勢い'});
     await strength.selectOption('3');
     check(await compare.isDisabled(),'Unsaved changes must not be compared');
     check(await history.isDisabled(),'Unsaved policies must not run historical analysis');
     check(await batch.isDisabled(),'Unsaved policies must not run a batch');
+    check(await adjusted.isDisabled(),'Unsaved policies must not run adjusted chronology');
     fixture.once('dialog',dialog=>dialog.dismiss());
     await save.click();
     check(calls.length===1,'Dismissing confirmation must not save');
@@ -173,6 +200,28 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     await fixture.getByText('設定を再読込してください',{exact:true}).waitFor();
     check(await history.isDisabled() && await compare.isDisabled(),'Conflict must require reload');
     check(!await fixture.getByRole('heading',{name:'架空12日間の比較結果'}).isVisible(),'Conflict must clear old outcome');
+    check(!calls.some(call=>call.path===api+'/adjusted-split'),'Adjusted comparison must wait for its own click');
+    await fixture.getByRole('button',{name:'設定を再読込する'}).click();
+    await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
+    await adjusted.click();
+    const chronology=fixture.getByRole('region',{name:'調整済み株価の前半・後半の結果'});
+    await chronology.getByRole('heading',{name:'前半（遡及比較）'}).waitFor();
+    await chronology.getByRole('heading',{name:'後半（遡及比較）'}).waitFor();
+    await chronology.getByText(/2024-08-01、2024-08-02.*2025-08-01/).waitFor();
+    await chronology.getByText(/当時の入手可能性、企業行動の処理は未確認.*価格変動による選別はしません/).waitFor();
+    await chronology.getByText(/Brierスコア.*前半 候補が良い ／ 後半 候補が悪い/).waitFor();
+    await chronology.getByText(/後半の銘柄ごとの平均/).click();
+    await chronology.locator('details[open]').getByText(/^40050（6期間、基準 → 候補）/).waitFor();
+    check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Adjusted result must fit 320px');
+    const beforeUnavailable=calls.length;
+    adjustedStatus=503;
+    await adjusted.click();
+    await fixture.getByText('ローカルの調整済み研究データを確認できませんでした。',{exact:true}).waitFor();
+    check(!await chronology.isVisible() && calls.length===beforeUnavailable+1,'An unavailable adjusted archive must not fall back');
+    adjustedStatus=409;
+    await adjusted.click();
+    await fixture.getByText('調整済み比較の設定を再読込してください',{exact:true}).waitFor();
+    check(await adjusted.isDisabled(),'Stale adjusted results require reload');
     empty=true;
     record={schema:1,revision:0,policies:[]};
     await fixture.reload();
@@ -180,6 +229,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     check(await compare.isDisabled(),'Empty fixture without a character must not allow comparison');
     check(await history.isDisabled(),'Empty fixture must not allow historical analysis');
     check(await batch.isDisabled(),'Empty fixture must not allow a batch');
+    check(await adjusted.isDisabled(),'Empty fixture must not allow adjusted chronology');
     check(unexpected.length===0 && errors.length===0,'Unexpected browser activity: '+JSON.stringify({unexpected,errors}));
     return {viewport:320,requests:calls.map(({method,path})=>method+' '+path),images:0};
   } finally {

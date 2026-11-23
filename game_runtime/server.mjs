@@ -20,6 +20,7 @@ import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
 import {compareHistoricalMarket,compareLocalAccessoryBatch,compareLocalAccessoryHistory} from './historical-market.mjs';
+import {compareAdjustedSplit} from './adjusted-split.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
@@ -38,6 +39,7 @@ const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
 const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
 const MARKET_BATCH_BRIDGE = fileURLToPath(new URL('./market_batch_bridge.py', import.meta.url));
+const ADJUSTED_SPLIT_BRIDGE = fileURLToPath(new URL('./adjusted_split_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const GENERATED_AVATAR_JS = new URL('./generated-avatar.mjs', import.meta.url);
@@ -219,6 +221,26 @@ export async function pythonMarketBatchPredict(input,{signal}={}) {
   });
 }
 
+export async function pythonAdjustedSplitPredict(input,{signal}={}) {
+  const body=JSON.stringify(input);
+  const unavailable=()=>failure('ローカルの調整済み研究データを利用できません');
+  if(Buffer.byteLength(body)>16*1024)throw unavailable();
+  const {execFile}=await import('node:child_process');
+  return new Promise((resolveResult,rejectResult)=>{
+    // No inherited credential, proxy, data-path or Python startup settings.
+    const child=execFile('python3',['-B','-E','-S',ADJUSTED_SPLIT_BRIDGE],{
+      cwd:ROOT,env:{PATH:process.env.PATH??'/usr/bin:/bin',LANG:'C.UTF-8'},signal,
+      timeout:20000,killSignal:'SIGKILL',maxBuffer:512*1024,encoding:'buffer',
+    },(error,stdout)=>{
+      if(error)return rejectResult(unavailable());
+      try {resolveResult(JSON.parse(stdout.toString('utf8')));}
+      catch {rejectResult(unavailable());}
+    });
+    child.stdin.on('error',()=>child.kill('SIGKILL'));
+    child.stdin.end(body);
+  });
+}
+
 export async function readTrainingVersions() {
   const data = await readJson('http://127.0.0.1:8884/api/blueprints/trained');
   if (!data || !Array.isArray(data.versions) || data.versions.length > 100) {
@@ -337,6 +359,7 @@ async function getBody(req, limit = MAX_REQUEST) {
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
                                   historicalBatchPredict = pythonMarketBatchPredict,
+                                  adjustedSplitPredict = pythonAdjustedSplitPredict,
                                   companionStore = createCompanionStore(),
                                   modelShopStore = createModelShopStore(),
                                   lookStore = createLookStore(),
@@ -450,9 +473,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const compare=write && path===ACCESSORY_ANALYSIS_API+'/compare';
       const historical=write && path===ACCESSORY_ANALYSIS_API+'/historical';
       const batchHistory=write && path===ACCESSORY_ANALYSIS_API+'/batch-history';
+      const adjustedSplit=write && path===ACCESSORY_ANALYSIS_API+'/adjusted-split';
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !historical && !batchHistory && !save && !info) || req.url!==path || process.platform!=='linux' ||
+      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info) || req.url!==path || process.platform!=='linux' ||
           !accessoryAnalysisStore || !independentPartReader || !equipmentStore) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
@@ -471,7 +495,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
-        if(historical || batchHistory) {
+        if(historical || batchHistory || adjustedSplit) {
           if(!input || typeof input!=='object' || Array.isArray(input))throw failure('比較する登録キャラと版数を指定してください',400);
           const selection={};
           let context=input;
@@ -495,10 +519,13 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           let result;
           try {
             const models={base_model:original.base_model,models:{mine:candidate,owl:baseline,turtle:baseline}};
-            result=batchHistory ? await historicalBatchPredict(models,{signal}) :
+            if(adjustedSplit)result=await adjustedSplitPredict(models,{signal});
+            else result=batchHistory ? await historicalBatchPredict(models,{signal}) :
               await historicalPredict({...models,selection},{source:'local'});
           } catch {
-            if(!res.destroyed)json(res,503,{error:'ローカルの2024年株価データを読み込めないか、対象の期間がありません。'});
+            if(!res.destroyed)json(res,503,{error:adjustedSplit ?
+              'ローカルの調整済み研究データが見つからないか、整合性を確認できませんでした。' :
+              'ローカルの2024年株価データを読み込めないか、対象の期間がありません。'});
             return;
           }
           if(res.destroyed)return;
@@ -508,8 +535,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           if(!sameLabRevisions(labRevisions(snapshot,companion),labRevisions(after,currentCompanion)))
             throw failure('比較中に基準モデルが更新されました。設定を再読込してください',409);
           if(JSON.stringify(current.applied)!==JSON.stringify(applied) ||
-             (batchHistory && JSON.stringify(current.visibleKinds)!==JSON.stringify(visibleKinds)))throw analysisChanged();
-          const report=batchHistory ? compareLocalAccessoryBatch(result,baseline,candidate) :
+             ((batchHistory || adjustedSplit) && JSON.stringify(current.visibleKinds)!==JSON.stringify(visibleKinds)))throw analysisChanged();
+          const report=adjustedSplit ? compareAdjustedSplit(result,baseline,candidate) :
+            batchHistory ? compareLocalAccessoryBatch(result,baseline,candidate) :
             compareLocalAccessoryHistory(result,baseline,candidate,selection);
           if(!res.destroyed)json(res,200,{...report,
             provenance:{character_id:context.character_id,active_revision:context.active_revision,

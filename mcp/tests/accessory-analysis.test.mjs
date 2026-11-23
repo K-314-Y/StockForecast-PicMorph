@@ -12,6 +12,7 @@ import {createCharacterEquipmentStore} from '../../game_runtime/character-equipm
 import {createIndependentPartReader} from '../../game_runtime/independent-part-reader.mjs';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
 import {compareLocalAccessoryBatch} from '../../game_runtime/historical-market.mjs';
+import {compareAdjustedSplit} from '../../game_runtime/adjusted-split.mjs';
 import {validateLabModel} from '../../game_runtime/model-lab.mjs';
 
 const run=promisify(execFile);
@@ -792,4 +793,246 @@ test('batch HTTP rejects policy, equipment, active character, companion and mode
     active.active_demo_id=cp;
     Object.assign(expected,compareInput(await setup.get().then(r=>r.json())));
   }
+});
+
+const ADJUSTED=API+'/adjusted-split';
+const adjustedCodes=['40050','46890','47550','50200','72010','84100','85930','86040','94320','95010'];
+
+async function adjustedFixture(input=batchModels) {
+  const {base_model,models}=input;
+  const plan=await pythonPredict({base_model,models});
+  for(const [slot,model] of Object.entries(models)) {
+    plan.models[slot].fast_window=model.fast_window;
+    plan.models[slot].slow_window=model.slow_window;
+  }
+  const weekdays=[];
+  for(let t=Date.UTC(2024,7,5); t<=Date.UTC(2026,6,31); t+=86400000) {
+    const date=new Date(t);
+    if(date.getUTCDay()>0 && date.getUTCDay()<6)weekdays.push(date.toISOString().slice(0,10));
+  }
+  const calendar=Array.from({length:485},(_,index)=>weekdays[Math.floor(index*(weekdays.length-1)/484)]);
+  const cut=calendar.findIndex(day=>day>='2025-08-01');
+  const source_origin='LOCAL_PRIVATE_JQUANTS_ADJUSTED_RESEARCH';
+  let identifier=1;
+  const phases={};
+  for(const [phase,from,to] of [['early',0,cut],['later',cut,calendar.length]]) {
+    const count=Math.floor((to-from)/36);
+    const favorable=phase==='early';
+    phases[phase]=adjustedCodes.flatMap(code=>Array.from({length:count},(_,i)=>{
+      const start=from+i*36;
+      return {mode:'HISTORICAL_MARKET_REPLAY_ONLY',source_origin,
+        source:'J-Quants V2 adjusted close (private local research archive)',source_warning:'fixture',
+        adjusted:true,market_id:'mkt_'+(identifier++).toString(16).padStart(24,'0'),code,
+        start_date:calendar[start],history_end_date:calendar[start+23],end_date:calendar[start+35],
+        lookback_days:24,future_days:12,eligible_windows:count*10,price_index_base:100,flat_threshold_pct:.3,
+        brier:{owl:.7,turtle:.7,mine:favorable?.6:.8},plan:{...structuredClone(plan),initial_price:100,
+          future_prices:Array(12).fill(favorable?110:90),
+          signals:Array.from({length:12},(_,day)=>({owl:'CASH',turtle:'CASH',mine:day===0?'LONG':'CASH'}))}};
+    }));
+  }
+  const flags=Object.fromEntries(['rights_verified','license_verified','pit_verified','corporate_action_verified',
+    'full_historical_coverage','forward_eligible','training_eligible','actual_forward_eligible','live_forward_eligible',
+    'forecast_accuracy_established','model_trained','official_allowed','production_certified','trading_allowed']
+    .map(key=>[key,false]));
+  return {schema:1,source_origin,adjusted:true,archive_status:'PARTIAL_485_OF_487_RESEARCH_ONLY_NOT_FORWARD',
+    manifests_verified:true,sessions_per_code:485,missing_sessions:['2024-08-01','2024-08-02'],
+    flags,split_date:'2025-08-01',calendar,phases};
+}
+
+test('adjusted split validates all manifest flags, date-scheduled windows and paired directions',async()=>{
+  const input=await adjustedFixture();
+  const candidate=batchModels.models.mine;
+  const report=compareAdjustedSplit(input,base,candidate);
+  assert.equal(report.weighting,'equal_per_window');
+  assert.equal(report.market.codes,10);
+  assert.deepEqual(report.market.missing_sessions,['2024-08-01','2024-08-02']);
+  assert.equal(report.phases.early.sessions_per_code+report.phases.later.sessions_per_code,485);
+  assert.ok(report.phases.early.window_end<'2025-08-01');
+  assert.ok(report.phases.later.window_start>='2025-08-01');
+  assert.equal(report.phases.early.periods,60);
+  assert.equal(report.phases.later.periods,60);
+  assert.equal(report.phases.early.different_signals,60);
+  assert.deepEqual(report.phases.early.metrics.brier,{baseline_mean:.7,candidate_mean:.6,delta:-.1,
+    wins:60,ties:0,losses:0,direction:'better'});
+  assert.deepEqual(report.phases.later.metrics.brier,{baseline_mean:.7,candidate_mean:.8,delta:.1,
+    wins:0,ties:0,losses:60,direction:'worse'});
+  assert.deepEqual(report.direction_by_metric.brier,{early:'better',later:'worse'});
+  assert.deepEqual(report.direction_by_metric.profit_coins,{early:'better',later:'worse'});
+  assert.equal(report.phases.later.downside.candidate.worst_profit_coins,-356.65);
+  assert.equal(report.phases.later.downside.candidate.max_drawdown_pct,3.566);
+  assert.deepEqual(report.phases.later.by_code.map(row=>[row.code,row.windows]),adjustedCodes.map(code=>[code,6]));
+  assert.doesNotMatch(JSON.stringify(report),/future_prices|equity_path|market_id|"signals"|"calendar":\[|source_warning|AdjC/);
+  for(const modify of [
+    payload=>{payload.source_origin='JQUANTS_API_V2_CACHE';},
+    payload=>{payload.archive_status='TRAINED';},
+    payload=>{payload.manifests_verified=false;},
+    payload=>{payload.flags.pit_verified=true;},
+    payload=>{delete payload.flags.license_verified;},
+    payload=>{payload.flags.holdout_evaluated=true;},
+    payload=>{payload.missing_sessions=[];},
+    payload=>{payload.calendar[40]=payload.calendar[39];},
+    payload=>{payload.calendar[40]='2024-09-31';},
+    payload=>{payload.phases.early.pop();},
+    payload=>{payload.phases.later.reverse();},
+    payload=>{payload.phases.later[0].market_id=payload.phases.early[0].market_id;},
+    payload=>{payload.phases.later[0].start_date=payload.phases.early[0].end_date;},
+    payload=>{payload.phases.early[0].end_date=payload.phases.later[0].end_date;},
+    payload=>{payload.phases.later[0].code='40051';},
+    payload=>{payload.phases.later[0].plan.models.mine.fast_window=5;},
+    payload=>{payload.phases.later[0].plan.models.mine.effective_sha256='b'.repeat(64);},
+    payload=>{payload.phases.later[0].plan.models.mine.plugin_weights=base.plugin_weights;},
+    payload=>{payload.phases.later[0].plan.signals[1].turtle='LONG';},
+    payload=>{payload.phases.later[0].adjusted=false;},
+  ]) {
+    const corrupted=structuredClone(input);
+    modify(corrupted);
+    assert.throws(()=>compareAdjustedSplit(corrupted,base,candidate),{status:503});
+  }
+});
+
+test('adjusted HTTP rejects unknown context and origin, keeps data private and fails closed without fallback',async t=>{
+  const {start,cp,part,local,snapshot,baselineSnapshot,equipment}=await fixture(t);
+  const data=await adjustedFixture();
+  let mode='ok',calls=0,reads=0;
+  const api=await start({loadSnapshot:async()=>{reads++;return snapshot;},
+    historicalBatchPredict:async()=>assert.fail('Adjustments must not fall back to unadjusted history'),
+    historicalPredict:async()=>assert.fail('Adjustments must not fall back to single history'),
+    adjustedSplitPredict:async(input,{signal})=>{
+      calls++;assert.deepEqual(input,batchModels);assert.equal(signal.aborted,false);
+      if(mode==='missing')throw Error('synthetic private path');
+      if(mode==='forged')return {...data,flags:{...data.flags,rights_verified:true}};
+      return data;
+    }});
+  const initial=compareInput(await api.get().then(r=>r.json()));
+  const send=(input=initial,headers={})=>api.post(input,ADJUSTED,headers);
+  assert.equal((await api.get(ADJUSTED)).status,404);
+  assert.equal((await api.post(initial,ADJUSTED+'?file=external')).status,404);
+  for(const bad of [null,[],{}, {...initial,path:'test'}, {...initial,split_date:'2025-08-02'}, {...initial,code:'94320'},
+    {...initial,weights:target},{...initial,expected_revision:false}])assert.equal((await send(bad)).status,400);
+  for(const headers of [{Origin:'https://outside.invalid'},{Origin:api.origin.replace('127.0.0.1','localhost')},{'Sec-Fetch-Site':'cross-site'}])
+    assert.equal((await send(initial,headers)).status,403);
+  const noOrigin=await fetch(api.origin+ADJUSTED,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(initial)});
+  assert.equal(noOrigin.status,403);
+  const wrongHost=await new Promise((resolve,reject)=>{
+    const outbound=request(api.origin+ADJUSTED,{method:'POST',headers:{Host:'outside.invalid',Origin:api.origin}},res=>{
+      res.resume();resolve(res.statusCode);
+    });
+    outbound.once('error',reject);
+    outbound.end();
+  });
+  assert.equal(wrongHost,403);
+  assert.equal(reads,0);
+  assert.equal((await send(initial)).status,422);
+  const context=await practiceContext(api);
+  assert.equal((await send(initial)).status,409);
+  assert.equal(calls,0);
+  const files=[join(local,'accessory_analysis','analysis.json'),join(local,'character_equipment',cp+'.json'),
+    join(local,'independent_parts',part.part_id,'part.png')];
+  const before=await Promise.all(files.map(path=>readFile(path)));
+  const result=await send(context);
+  const report=await result.json();
+  assert.equal(result.status,200,JSON.stringify(report));
+  assert.equal(result.headers.get('cache-control'),'no-store');
+  assert.equal(result.headers.get('cross-origin-resource-policy'),'same-origin');
+  assert.equal(result.headers.get('access-control-allow-origin'),null);
+  assert.deepEqual(report.provenance.applied_rules,[pin]);
+  assert.equal(report.scope,'ACCESSORY_RULES_ADJUSTED_CHRONOLOGY_RESEARCH_V1');
+  assert.equal(report.research_only,true);
+  assert.equal(report.read_only,true);
+  assert.equal(report.effective_hash_changed,true);
+  for(const flag of ['holdout_evaluated','rights_verified','license_verified','point_in_time_verified','corporate_actions_verified',
+    'trained','live_market','persisted','xp_awarded','coins_changed','order_placed'])assert.equal(report[flag],false);
+  assert.deepEqual(await Promise.all(files.map(path=>readFile(path))),before);
+  assert.equal(JSON.stringify(snapshot),baselineSnapshot);
+
+  mode='missing';
+  const missing=await send(context);
+  assert.equal(missing.status,503);
+  assert.match((await missing.json()).error,/ローカルの調整済み研究データ/);
+  mode='forged';
+  const forged=await send(context);
+  assert.equal(forged.status,503);
+  assert.ok(!Object.hasOwn(await forged.json(),'phases'));
+  await equipment.save(cp,{expected_revision:1,parts:[{...part,visible:false}]});
+  assert.equal((await send({...context,equipment_revision:2})).status,422);
+  await equipment.save(cp,{expected_revision:2,parts:[{...part,image_sha256:'0'.repeat(64)}]});
+  assert.equal((await send({...context,equipment_revision:3})).status,422);
+  assert.equal(calls,3);
+});
+
+test('adjusted split discards a computed result whenever model, companion, active equipment or policy revises',async t=>{
+  const {start,cp,part,active,companion,equipment,snapshot}=await fixture(t);
+  const setup=await start();
+  const versions=await practiceContext(setup);
+  const privateResult=await adjustedFixture();
+  let change;
+  const api=await start({loadSnapshot:async()=>({...snapshot}),adjustedSplitPredict:async()=>{
+    await change();
+    return privateResult;
+  }});
+  for(const revise of [
+    ()=>{active.active_demo_id='cp_'+'b'.repeat(32);active.revision++;},
+    ()=>equipment.save(cp,{expected_revision:1,parts:[{...part,x:1}]}),
+    async()=>assert.equal((await setup.post({expected_revision:1,policies:[{...pin,intensity:2}]})).status,200),
+    ()=>{snapshot.source_revision++;},
+    ()=>{companion.revision++;},
+  ]) {
+    change=revise;
+    const reply=await api.post(versions,ADJUSTED);
+    assert.equal(reply.status,409,await reply.text());
+    active.active_demo_id=cp;
+    Object.assign(versions,compareInput(await setup.get().then(r=>r.json())));
+  }
+});
+
+test('adjusted split aborts its worker signal on client disconnect', {timeout:10000}, async t=>{
+  const {start}=await fixture(t);
+  let entered,aborted;
+  const ready=new Promise(resolve=>{entered=resolve;});
+  const stopped=new Promise(resolve=>{aborted=resolve;});
+  const api=await start({adjustedSplitPredict:async(_input,{signal})=>{
+    entered();
+    await new Promise((_,reject)=>signal.addEventListener('abort',()=>{
+      aborted(signal.aborted);
+      reject(Error('client disconnected'));
+    },{once:true}));
+  }});
+  const context=await practiceContext(api);
+  const controller=new AbortController();
+  const pending=fetch(api.origin+ADJUSTED,{method:'POST',headers:{'Content-Type':'application/json',Origin:api.origin},
+    body:JSON.stringify(context),signal:controller.signal}).catch(error=>error);
+  await ready;
+  controller.abort();
+  assert.equal(await stopped,true);
+  assert.equal((await pending).name,'AbortError');
+});
+
+test('adjusted worker starts without secrets or input-path overrides and enforces byte limits',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'creature-adjusted-worker-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const {stdout:interpreter}=await run('python3',['-B','-E','-c','import sys; print(sys.executable)']);
+  await writeFile(join(root,'python3'),`#!${interpreter.trim()} -S
+import json, os, sys
+assert sys.argv[1:-1] == ["-B", "-E", "-S"] and sys.argv[-1].endswith("/adjusted_split_bridge.py")
+assert os.environ.get("LANG") == "C.UTF-8"
+assert not any(key in os.environ for key in ("CREATURE_JQUANTS_API_KEY", "HTTPS_PROXY", "PYTHONPATH",
+    "CREATURE_MARKET_HISTORY_PATH", "CREATURE_ADJUSTED_SPLIT_ROOT", "CREATURE_MARKET_SOURCE"))
+data = json.load(sys.stdin)
+if data["probe"] == "large":
+    print(json.dumps({"response": "x" * (512 * 1024)}))
+else:
+    print(json.dumps({"isolated": True}))
+`,{mode:0o700});
+  const entry=new URL('../../game_runtime/server.mjs',import.meta.url);
+  await run(process.execPath,['--input-type=module','-e',`
+import assert from 'node:assert/strict';
+import {pythonAdjustedSplitPredict} from ${JSON.stringify(entry.href)};
+assert.deepEqual(await pythonAdjustedSplitPredict({probe:'small'}),{isolated:true});
+await assert.rejects(pythonAdjustedSplitPredict({probe:'large'}),{status:503});
+await assert.rejects(pythonAdjustedSplitPredict({probe:'x'.repeat(16*1024)}),{status:503});
+`],{env:{PATH:root+':'+process.env.PATH,CREATURE_JQUANTS_API_KEY:'fixture-key',HTTPS_PROXY:'fixture-proxy',
+    PYTHONPATH:'fixture-python',CREATURE_MARKET_HISTORY_PATH:'fixture-market-path',CREATURE_ADJUSTED_SPLIT_ROOT:'fixture-archive',
+    CREATURE_MARKET_SOURCE:'jquants'},timeout:5000,maxBuffer:4096});
+  assert.deepEqual(await readdir(root),['python3']);
 });
