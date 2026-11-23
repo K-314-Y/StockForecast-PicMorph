@@ -32,6 +32,8 @@ import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from '.
 import {createImportedCharacterStore,IMPORTED_CHARACTER_ID,MAX_IMPORTED_REQUEST,
   MAX_IMPORTED_VISUAL_EDIT_REQUEST} from './imported-characters.mjs';
 import {createPracticeEngineSourceGuard} from './practice-engine-fingerprint.mjs';
+import {isMainCharacterId,listMainCharacters,prepareMainCharacterZip}
+  from '../scripts/export-main-character-zip.mjs';
 
 // Static imports are already evaluated. A server created later in this process
 // cannot pair a new disk baseline with the same cached Node modules.
@@ -83,6 +85,8 @@ const UPSTREAM = 'http://127.0.0.1:8765';
 const MAX_REQUEST = 2048;
 const MAX_ARTWORK_REQUEST = 750 * 1024;
 const EXPRESSIONS_API = '/api/artwork-expressions';
+const MAIN_TRANSFER_API = '/api/main-character-transfer';
+const MAIN_TRANSFER_ZIP = MAIN_TRANSFER_API + '/zip/';
 const REVISIONS = ['source_revision', 'lineup_revision', 'growth_revision'];
 const MARKET_ID = /^mkt_[a-f0-9]{24}$/;
 const TRAINED_ID = /^tv_[0-9a-f]{32}$/;
@@ -321,6 +325,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   artworkExpressionStore = createArtworkExpressionStore(),
                                   appearanceCatalog = readAppearanceCatalog,
                                   appearanceImage = readAppearanceImage,
+                                  mainCharacterTransfer = {list:listMainCharacters, prepareZip:prepareMainCharacterZip},
                                   trainedVersions = readTrainingVersions,
                                   trainedVersion = resolveTrainedVersion,
                                   chatgptDialogue = null, chatgptClient = null,
@@ -463,6 +468,40 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       return json(res, 400, {error: 'リクエストURLが不正です'});
     }
     const rawPath = req.url.split('?')[0];
+    if ([rawPath,path].some(target=>target===MAIN_TRANSFER_API || target.startsWith(MAIN_TRANSFER_API+'/'))) {
+      const list = rawPath === MAIN_TRANSFER_API;
+      const id = rawPath.startsWith(MAIN_TRANSFER_ZIP) ? rawPath.slice(MAIN_TRANSFER_ZIP.length) : null;
+      if (req.url !== rawPath || (!list && !isMainCharacterId(id))) {
+        return json(res,404,{error:'見つかりません'});
+      }
+      if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+        return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow','GET');
+        return json(res,405,{error:'GETで取得してください'});
+      }
+      if (inFlight>=2) return json(res,429,{error:'処理が混雑しています'});
+      inFlight++;
+      try {
+        if (list) return json(res,200,{characters:await mainCharacterTransfer.list()});
+        const {zip} = await mainCharacterTransfer.prepareZip(id);
+        res.writeHead(200,{
+          'Content-Type':'application/zip','Content-Length':zip.length,
+          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+          'Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'; sandbox",
+          'Cross-Origin-Resource-Policy':'same-origin',
+        });
+        return res.end(zip);
+      } catch (error) {
+        if (error?.status===404) return json(res,404,{error:'通常ゲームの一覧にキャラが見つかりません。一覧を更新してください。'});
+        return json(res,503,{error:list ?
+          '通常ゲームのキャラ一覧を取得できません。通常ゲーム (127.0.0.1:8890) の起動状態を確認してください。' :
+          '通常ゲームのキャラ画像を取得できません。通常ゲームの起動状態と画像を確認してください。'});
+      } finally {
+        inFlight--;
+      }
+    }
     if (req.method === 'GET' && HATCH_ASSETS.has(rawPath)) {
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
         return json(res, 403, {error: 'ローカルの同一画面からのみ利用できます'});

@@ -24,10 +24,14 @@ let pack = null;
 let currentZipFiles = null;
 let visualEdit = null;
 let editLoad = null;
+let mainCatalogLoad = null;
+let mainZipLoad = null;
 let loadingEditPicker = false;
 let editPickerEpoch = 0;
 const zipLookFields=['zipHairStyle','zipExpression'];
 const characterEndpoint='/api/imported-characters';
+const mainTransferEndpoint='/api/main-character-transfer';
+const mainCharacterPicker=$('mainCharacter');
 const accessoryEndpoint=characterEndpoint+'/accessories';
 const methodLabels={
   bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',
@@ -71,6 +75,11 @@ function release(bundle) {
 function resetPack() {
   editLoad?.abort();
   editLoad=null;
+  if(mainZipLoad) {
+    mainZipLoad.abort();
+    mainZipLoad=null;
+    $('mainTransferStatus').textContent='読み込みを中止しました。';
+  }
   endDrag();
   stopClock();
   if (pack) release(pack);
@@ -743,6 +752,7 @@ void loadAccessoryCatalog();
 
 function refreshZipTraitStatus() {
   const pending=[...accessoryOverlays.values()].some(overlay=>overlay.pending);
+  refreshMainTransfer(pending);
   $('saveVisualEdit').disabled=busy || !visualEdit || pending;
   $('restoreVisualEdit').hidden=!visualEdit?.can_restore_previous;
   $('restoreVisualEdit').disabled=busy || pending || $('restoreVisualEdit').hidden;
@@ -829,6 +839,89 @@ $('zipFile').addEventListener('change',()=>{
   if(file)void importCharacterZip(file);
 });
 $('zipFrames').addEventListener('change',endDrag);
+
+function validMainCharacterId(id) {
+  return typeof id==='string' && id.length===35 && /^cp_[0-9a-f]{32}$/.test(id);
+}
+function refreshMainTransfer(pending=[...accessoryOverlays.values()].some(overlay=>overlay.pending)) {
+  const blocked=busy || Boolean(visualEdit || mainCatalogLoad);
+  $('refreshMainCharacters').disabled=blocked;
+  mainCharacterPicker.disabled=blocked || mainCharacterPicker.options.length<=1;
+  $('loadMainCharacter').disabled=mainCharacterPicker.disabled || pending || !validMainCharacterId(mainCharacterPicker.value);
+}
+async function mainTransferRequest(path,signal) {
+  const response=await fetch(mainTransferEndpoint+path,{
+    signal,mode:'same-origin',cache:'no-store',redirect:'error',
+  });
+  if(!response.ok) {
+    const data=await response.json();
+    throw Error(data.error || '通常ゲームから取得できませんでした。');
+  }
+  return response;
+}
+async function refreshMainCharacters() {
+  if($('refreshMainCharacters').disabled)return;
+  const selected=mainCharacterPicker.value;
+  const feedback=$('mainTransferStatus');
+  const controller=new AbortController();
+  mainCatalogLoad=controller;
+  mainCharacterPicker.replaceChildren(new Option('選択してください',''));
+  refreshMainTransfer();
+  feedback.textContent='通常ゲームの一覧を取得しています…';
+  try {
+    const response=await mainTransferRequest('',controller.signal);
+    const {characters}=await response.json();
+    if(mainCatalogLoad!==controller)return;
+    if(!Array.isArray(characters) || characters.some(item=>
+      !validMainCharacterId(item?.id) || typeof item.name!=='string')) {
+      throw Error('通常ゲームのキャラ一覧の形式が不正です。');
+    }
+    for(const {id,name} of characters)mainCharacterPicker.add(new Option(name+'（'+id+'）',id));
+    if(characters.some(item=>item.id===selected))mainCharacterPicker.value=selected;
+    feedback.textContent=characters.length ?
+      '通常ゲームのキャラを選んでください。' : '通常ゲームに読み込めるキャラがありません。';
+  } catch(error) {
+    if(mainCatalogLoad===controller)feedback.textContent=error.message || '通常ゲームの一覧を取得できませんでした。';
+  } finally {
+    if(mainCatalogLoad===controller) {
+      mainCatalogLoad=null;
+      refreshMainTransfer();
+    }
+  }
+}
+async function loadMainCharacter() {
+  const id=mainCharacterPicker.value;
+  if($('loadMainCharacter').disabled || !validMainCharacterId(id))return;
+  const feedback=$('mainTransferStatus');
+  const controller=new AbortController();
+  mainZipLoad=controller;
+  // A pending deep link to a saved ZIP must yield to this draft.
+  ++epoch;
+  setBusy(true);
+  feedback.textContent='通常ゲームのキャラ画像を取得しています…';
+  let file;
+  try {
+    const response=await mainTransferRequest('/zip/'+id,controller.signal);
+    const zip=await response.blob();
+    if(mainZipLoad!==controller)return;
+    file=new File([zip],id+'.zip',{type:zip.type});
+    feedback.textContent='';
+  } catch(error) {
+    if(mainZipLoad===controller)feedback.textContent=error.message || '通常ゲームの画像を取得できませんでした。';
+  } finally {
+    if(mainZipLoad===controller) {
+      mainZipLoad=null;
+      setBusy(false);
+    }
+  }
+  if(file) {
+    $('zipFrames').value='6';
+    await importCharacterZip(file);
+  }
+}
+$('refreshMainCharacters').addEventListener('click',refreshMainCharacters);
+mainCharacterPicker.addEventListener('change',()=>refreshMainTransfer());
+$('loadMainCharacter').addEventListener('click',loadMainCharacter);
 
 async function encodeImage(file) {
   const bytes=new Uint8Array(await file.arrayBuffer());
@@ -1258,6 +1351,9 @@ function restartPreview() {
 document.addEventListener('visibilitychange',restartPreview);
 reduced.addEventListener('change',restartPreview);
 window.addEventListener('pagehide',()=>{
+  mainCatalogLoad?.abort();
+  if(mainCatalogLoad)$('mainTransferStatus').textContent='';
+  mainCatalogLoad=null;
   ++epoch;currentZipFiles=null;visualEdit=null;resetPack();clearZipEquipment();
   showVisualEdit(false);setRegistering(false);
 });

@@ -29,7 +29,7 @@ MAIN (127.0.0.1:8890) から外見素材4枚と名前を取得します。
 ZIPの保存後、DEVのZIPインポーターで開き、手動で登録してください。
 --port で接続先ポートを変更できます（分離したテスト用）。`;
 
-function validId(id) {
+export function isMainCharacterId(id) {
   return typeof id === 'string' && id.length === 35 && /^cp_[0-9a-f]{32}$/.test(id);
 }
 
@@ -49,7 +49,7 @@ export function parseCatalog(bytes) {
   const ids = new Set();
   return catalog.map((item, index) => {
     const {generated_id:id, name, engine, model} = item ?? {};
-    if (!validId(id) || !validName(name) || !ENGINES.includes(engine) ||
+    if (!isMainCharacterId(id) || !validName(name) || !ENGINES.includes(engine) ||
         typeof model !== 'string' || !model.trim() || UNSAFE_TEXT.test(model) || ids.has(id)) {
       throw new Error(`キャラ一覧の${index + 1}件目の情報が不正か、IDが重複しています。`);
     }
@@ -119,7 +119,7 @@ export function buildCharacterZip(name, images) {
   return Buffer.concat([...locals, directory, end]);
 }
 
-async function readBytes(port, path, mime, maxBytes, label) {
+async function fetchReadBytes(port, path, mime, maxBytes, label) {
   const signal = AbortSignal.timeout(TIMEOUT_MS);
   let response;
   try {
@@ -159,6 +159,28 @@ async function readBytes(port, path, mime, maxBytes, label) {
   } finally {
     response.destroy();
   }
+}
+
+export async function listMainCharacters(port = DEFAULT_PORT) {
+  const bytes = await fetchReadBytes(port, API, 'application/json', MAX_CATALOG_BYTES, 'キャラ一覧');
+  return parseCatalog(bytes);
+}
+
+export async function prepareMainCharacterZip(id, port = DEFAULT_PORT) {
+  if (!isMainCharacterId(id)) throw new Error('キャラIDが不正です。');
+  const catalog = await listMainCharacters(port);
+  const character = catalog.find(entry => entry.id === id);
+  if (!character) {
+    throw Object.assign(new Error('指定したIDがMAINのカタログにありません。--list で確認してください。'),
+      {status:404});
+  }
+  const images = {};
+  // MAIN limits concurrent image requests and rechecks its saved source for each GET.
+  for (const part of PARTS) {
+    const filename = `${part}.png`;
+    images[part] = await fetchReadBytes(port, `${API}/${id}/${filename}`, 'image/png', MAX_PNG_BYTES, filename);
+  }
+  return {name:character.name, zip:buildCharacterZip(character.name, images)};
 }
 
 async function saveZip(output, bytes) {
@@ -212,7 +234,7 @@ function command(args) {
     throw new Error('--port は1〜65535の整数で指定してください。');
   }
   if (values.help || (list ? id !== undefined || dryRun || output !== undefined :
-    !validId(id) || Boolean(dryRun) === (output !== undefined))) {
+    !isMainCharacterId(id) || Boolean(dryRun) === (output !== undefined))) {
     throw new Error('--list、--id と --dry-run、または --id と --output を指定してください。');
   }
   if (output !== undefined && (!output.trim() || output.endsWith('/') || UNSAFE_TEXT.test(output))) {
@@ -224,22 +246,14 @@ function command(args) {
 async function run(args) {
   const {help, list, id, dryRun, output, port} = command(args);
   if (help) return console.log(HELP);
-  const catalog = parseCatalog(await readBytes(port, API, 'application/json', MAX_CATALOG_BYTES, 'キャラ一覧'));
   if (list) {
+    const catalog = await listMainCharacters(port);
     for (const entry of catalog) console.log(`${entry.id}\t${entry.name}`);
     if (!catalog.length) console.log('MAINのカタログにキャラがありません。');
     return;
   }
-  const character = catalog.find(entry => entry.id === id);
-  if (!character) throw new Error('指定したIDがMAINのカタログにありません。--list で確認してください。');
-  const images = {};
-  // MAIN limits concurrent image requests and rechecks its saved source for each GET.
-  for (const part of PARTS) {
-    const filename = `${part}.png`;
-    images[part] = await readBytes(port, `${API}/${id}/${filename}`, 'image/png', MAX_PNG_BYTES, filename);
-  }
-  const zip = buildCharacterZip(character.name, images);
-  const details = `「${character.name}」の外見素材4枚と名前（ZIP ${zip.length} バイト）`;
+  const {name, zip} = await prepareMainCharacterZip(id, port);
+  const details = `「${name}」の外見素材4枚と名前（ZIP ${zip.length} バイト）`;
   if (dryRun) return console.log(`確認完了: ${details}。ドライランのためファイルは作成していません。`);
   try {
     await saveZip(output, zip);
