@@ -95,6 +95,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
   const state={models,imported,accessory:async (body,options,index)=>accessoryReply(body,index),
+    fixedAccessory:async body=>fixedAccessoryReply(body),
     session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,order_placed:false,xp_awarded:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
@@ -126,6 +127,12 @@ async function mount(models=[],chatgpt=false,imported=[]) {
       assert.equal(options.method,'POST');
       assert.equal(options.headers['Content-Type'],'application/json');
       const value=await state.accessory(body,options,accessoryCalls++);
+      return {ok:!value?.error,status:value?.error?409:200,json:async()=>parseJson(JSON.stringify(value))};
+    }
+    if(path==='/api/accessory-control/fixed'){
+      assert.equal(options.method,'POST');
+      assert.equal(options.headers['Content-Type'],'application/json');
+      const value=await state.fixedAccessory(body,options);
       return {ok:!value?.error,status:value?.error?409:200,json:async()=>parseJson(JSON.stringify(value))};
     }
     assert.equal(path,'/api/quick-practice');
@@ -1822,6 +1829,7 @@ test('a registered ZIP character selects its own AI and owns its result image an
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls.map(call=>call.path),['/api/model-shop','/api/model-shop']);
   assert.equal(get('quickZipPortrait').srcAssignments,1);
+  assert.equal(get('quickMiniPortrait').srcAssignments,0);
   const practice=state.practice;
   state.practice=async body=>({...await practice(body),model_id:body.model_id,companion_name:own.name});
   await fire('quickForm','submit');
@@ -1829,6 +1837,17 @@ test('a registered ZIP character selects its own AI and owns its result image an
   assert.equal(calls.at(-1).body.model_id,id);
   assert.match(get('quickReplayOwner').textContent,/登録したZIPキャラ「ラベンダー」専用AI/);
   assert.equal(get('quickMiniPortrait').src,own.image_url);
+  await fire('quickMiniPortrait','load');
+  assert.equal(get('quickMini').hidden,false);
+  const replayDay=get('quickReplayDay').textContent;
+  const revisedUrl=own.image_url+'?revision=2';
+  state.imported=[{...own,image_url:revisedUrl}];
+  focus();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(get('quickZipPortrait').src,revisedUrl);
+  assert.equal(get('quickMiniPortrait').src,revisedUrl);
+  assert.equal(get('quickReplayDay').textContent,replayDay);
+  assert.equal(get('quickMini').hidden,true);
   await fire('quickMiniPortrait','load');
   assert.equal(get('quickMini').hidden,false);
   await fire('quickAgain');
@@ -4981,4 +5000,233 @@ test('accessory aggregate times out an uncooperative request and preserves the f
   assert.match(get('quickAccessoryMultiStatus').textContent,/追加実験を完了できません/);
   assert.equal(get('quickAccessoryResult').hidden,false);
   assert.equal(calls.filter(call=>call.path===accessoryEndpoint).length,2);
+});
+
+const fixedAccessoryEndpoint=accessoryEndpoint+'/fixed';
+const fixedAccessoryCases=[1,2,3,4];
+function fixedAccessoryReply(body){
+  const value=accessoryReply(body,body.case_number);
+  value.a.profit_coins=body.case_number*10;
+  value.a.max_drawdown_pct=body.case_number;
+  return {...value,mode:'CONTROLLED_SYNTHETIC_ACCESSORY_FIXED_V1',
+    scenario_set:'accessory-precommitted-v1',case_number:body.case_number};
+}
+
+test('fixed accessory set waits for all four sequential cases and verifies the same setting once',async()=>{
+  const {get,fire,state,calls,storageWrites}=await mount();
+  const count=()=>calls.filter(call=>call.path===fixedAccessoryEndpoint).length;
+  const result=get('quickAccessoryFixedResult'),rows=get('quickAccessoryFixedRows'),summary=get('quickAccessoryFixedSummary');
+  const verify=get('quickAccessoryFixedVerify'),run=get('quickAccessoryFixedRun');
+  assert.equal(run.disabled,false);
+  assert.equal(verify.hidden,true);
+  await fire('quickAccessoryFixedRun','click',false);
+  await fire('quickAccessoryFixedVerify');
+  assert.equal(count(),0);
+  await fire('quickAccessoryRun');
+  await fire('quickAccessoryMultiRun');
+  const random=get('quickAccessoryMultiRows').children;
+  const pending=[];
+  state.fixedAccessory=(body,options)=>new Promise(resolve=>{
+    assert.equal(options.signal.aborted,false);
+    pending.push(()=>resolve(fixedAccessoryReply(body)));
+  });
+  for(const [pass,button] of [run,verify].entries()){
+    const running=button.fire();
+    await button.fire();
+    for(const case_number of fixedAccessoryCases){
+      assert.equal(count(),pass*4+case_number);
+      assert.equal(pending.length,1);
+      assert.equal(result.hidden,pass===0);
+      assert.equal(rows.children.length,pass===0?0:4);
+      pending.shift()();
+      await nextTurn();
+    }
+    await running;
+  }
+  assert.equal(result.hidden,false);
+  assert.deepEqual(rows.children.map(row=>row.children[0].textContent),['1','2','3','4']);
+  assert.deepEqual(summary.children[0].children[1].children.map(cell=>cell.textContent),['A 25 C','B 12 C']);
+  assert.deepEqual(summary.children[0].children[2].children.map(cell=>cell.textContent),['A 2.5%','B 3%']);
+  assert.equal(summary.children[0].children[3].textContent,'48/48日');
+  assert.equal(get('quickAccessoryFixedStatus').textContent,'同じ条件の同じ架空相場で結果一致');
+  assert.equal(verify.disabled,true);
+  await verify.fire();
+  assert.deepEqual(calls.filter(call=>call.path===fixedAccessoryEndpoint),
+    [...fixedAccessoryCases,...fixedAccessoryCases].map(case_number=>({path:fixedAccessoryEndpoint,
+      body:{model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:1,case_number}})));
+  assert.equal(get('quickAccessoryMultiRows').children,random);
+  assert.equal(random.length,4);
+  assert.deepEqual(calls.map(call=>call.path),['/api/model-shop',...Array(4).fill(accessoryEndpoint),
+    ...Array(8).fill(fixedAccessoryEndpoint)]);
+  assert.deepEqual(storageWrites,[]);
+});
+
+test('fixed accessory replay reports a change to any result field even when the averages would agree',async()=>{
+  for(const damage of [
+    value=>{if(value.case_number===2)value.scenario_token='v1_ffffffffffffffff';},
+    value=>{value.daily_synthetic_prices[0]+=.001;},
+    value=>{value.a.daily_ai_signals[11]='CASH';value.b.daily_ai_signals[11]='LONG';},
+    value=>{value.b.profit_coins+=.001;},
+    value=>{value.b.max_drawdown_pct+=.001;},
+    value=>{value.a.liquidated_at_step=12;},
+    value=>{value.engine_source_sha256='e'.repeat(64);},
+    value=>{value.baseline_fingerprint='e'.repeat(64);},
+    value=>{value.a.model_effective_sha256='e'.repeat(64);},
+    value=>{value.b.model_effective_sha256='e'.repeat(64);},
+  ]){
+    const {get,fire,state,calls}=await mount();
+    const fixture=body=>{
+      const value=fixedAccessoryReply(body);
+      Object.assign(value.a,{profit_coins:-1000,max_drawdown_pct:100});
+      return value;
+    };
+    state.fixedAccessory=fixture;
+    await fire('quickAccessoryFixedRun');
+    const initial=get('quickAccessoryFixedRows').children;
+    state.fixedAccessory=body=>{
+      const value=fixture(body);
+      damage(value);
+      return value;
+    };
+    await fire('quickAccessoryFixedVerify');
+    assert.equal(get('quickAccessoryFixedStatus').textContent,'初回と再計算の結果が一致しませんでした。');
+    assert.equal(get('quickAccessoryFixedRows').children,initial);
+    assert.equal(get('quickAccessoryFixedVerify').disabled,true);
+    assert.equal(calls.filter(call=>call.path===fixedAccessoryEndpoint).length,8);
+  }
+});
+
+test('invalid fixed accessory replay leaves the initial result unverified',async()=>{
+  for(const damage of [
+    value=>{value.scenario_token='v1_0000000000000001';},
+    value=>{value.a.liquidated_at_step=12;},
+    value=>{value.a.max_drawdown_pct=101;},
+    value=>{value.daily_synthetic_prices.pop();},
+    ()=>{throw Error('Network error');},
+  ]){
+    const {get,fire,state,calls,storageWrites}=await mount();
+    await fire('quickAccessoryFixedRun');
+    const rows=get('quickAccessoryFixedRows').children;
+    const summary=get('quickAccessoryFixedSummary').children;
+    state.fixedAccessory=body=>{
+      const value=fixedAccessoryReply(body);
+      if(body.case_number===2)damage(value);
+      return value;
+    };
+    await fire('quickAccessoryFixedVerify');
+    assert.equal(get('quickAccessoryFixedStatus').textContent,
+      '再計算結果の一致を確認できませんでした（通信またはデータ検証失敗）。');
+    assert.equal(get('quickAccessoryFixedResult').hidden,false);
+    assert.equal(get('quickAccessoryFixedRows').children,rows);
+    assert.equal(get('quickAccessoryFixedSummary').children,summary);
+    assert.equal(get('quickAccessoryFixedVerify').disabled,true);
+    await fire('quickAccessoryFixedVerify');
+    assert.equal(calls.filter(call=>call.path===fixedAccessoryEndpoint).length,6);
+    assert.deepEqual(storageWrites,[]);
+  }
+});
+
+test('fixed accessory set fails closed before rendering on invalid replies',async()=>{
+  for(const damage of [
+    value=>{value.scenario_token='v1_0000000000000001';},
+    value=>{value.engine_source_sha256='e'.repeat(64);},
+    value=>{value.baseline_fingerprint='e'.repeat(64);},
+    value=>{value.b.model_effective_sha256='e'.repeat(64);},
+    value=>{value.daily_synthetic_prices.pop();},
+    value=>{value.b.daily_ai_signals.pop();},
+    value=>{value.a.max_drawdown_pct=101;},
+    value=>{value.case_number=4;},
+    value=>{value.scenario_set='holdout';},
+    value=>{value.mode='CONTROLLED_SYNTHETIC_ACCESSORY_ONLY';},
+    value=>{value.unexpected=true;},
+  ]){
+    const {get,fire,state,calls,storageWrites}=await mount();
+    state.fixedAccessory=body=>{
+      const value=fixedAccessoryReply(body);
+      if(body.case_number===2)damage(value);
+      return value;
+    };
+    await fire('quickAccessoryFixedRun');
+    assert.equal(get('quickAccessoryFixedResult').hidden,true);
+    assert.equal(get('quickAccessoryFixedRows').children.length,0);
+    assert.equal(get('quickAccessoryFixedSummary').children.length,0);
+    assert.equal(get('quickAccessoryFixedVerify').hidden,true);
+    assert.match(get('quickAccessoryFixedStatus').textContent,/完了できません/);
+    assert.equal(calls.filter(call=>call.path===fixedAccessoryEndpoint).length,2);
+    assert.deepEqual(storageWrites,[]);
+  }
+});
+
+test('fixed accessory invalidation aborts both initial and replay requests and ignores late replies',async()=>{
+  const id='zip_'+'e'.repeat(32);
+  const imported={id,ai_id:id,name:'ZIP',model_version:'test',image_url:'/zip.png'};
+  for(const [target,event,next] of [
+    ['quickModel','change','self'],['quickAccessoryA','input','ribbon'],
+    ['quickAccessoryB','change','none'],['quickAmount','input','1001'],['quickLeverage','change','5'],
+    ['refresh'],['pagehide'],['quickAccessoryRun','click'],['quickAccessoryMultiRun','click'],
+  ]){
+    for(const replay of [false,true]){
+      const {get,fire,state,calls,pagehide,focus,storageWrites}=await mount([],false,[imported]);
+      get('quickModel').value=id;
+      await fire('quickModel','change');
+      if(target==='quickAccessoryMultiRun')await fire('quickAccessoryRun');
+      if(replay)await fire('quickAccessoryFixedRun');
+      let finish,signal;
+      state.fixedAccessory=(body,options)=>{
+        signal=options.signal;
+        return new Promise(resolve=>{finish=()=>resolve(fixedAccessoryReply(body));});
+      };
+      const running=fire(replay?'quickAccessoryFixedVerify':'quickAccessoryFixedRun');
+      if(target==='refresh'){
+        state.imported=[{...imported,model_version:'updated'}];
+        focus();
+        await nextTurn();
+        assert.equal(get('quickModel').value,id);
+      }else if(target==='pagehide')pagehide();
+      else{
+        if(next!==undefined)get(target).value=next;
+        await fire(target,event);
+      }
+      assert.equal(signal.aborted,true,target);
+      finish();
+      await running;
+      assert.equal(get('quickAccessoryFixedResult').hidden,true,target);
+      assert.equal(get('quickAccessoryFixedRows').children.length,0,target);
+      assert.equal(get('quickAccessoryFixedVerify').hidden,true,target);
+      assert.equal(get('quickAccessoryFixedStatus').textContent,'',target);
+      assert.equal(calls.filter(call=>call.path===fixedAccessoryEndpoint).length,replay?5:1,target);
+      assert.deepEqual(storageWrites,[]);
+    }
+  }
+});
+
+test('fixed accessory times out an uncooperative request and requires eligible settings',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {get,fire,state,calls}=await mount([{id:'demo_one',name:'Demo',owned:true}]);
+  const run=get('quickAccessoryFixedRun');
+  for(const [id,value] of [['quickModel','demo_one'],['quickAmount','0'],['quickLeverage','26'],['quickAccessoryB','star']]){
+    const field=get(id),previous=field.value;
+    field.value=value;
+    await fire(id,'change');
+    assert.equal(run.disabled,true,id);
+    await fire('quickAccessoryFixedRun');
+    field.value=previous;
+    await fire(id,'change');
+  }
+  assert.equal(run.disabled,false);
+  assert.deepEqual(calls.map(call=>call.path),['/api/model-shop']);
+  let finish,signal;
+  state.fixedAccessory=(body,options)=>{
+    signal=options.signal;
+    return new Promise(resolve=>{finish=()=>resolve(fixedAccessoryReply(body));});
+  };
+  const running=fire('quickAccessoryFixedRun');
+  t.mock.timers.tick(15000);
+  await running;
+  assert.equal(signal.aborted,true);
+  finish();
+  await nextTurn();
+  assert.match(get('quickAccessoryFixedStatus').textContent,/完了できません/);
+  assert.equal(get('quickAccessoryFixedResult').hidden,true);
+  assert.equal(calls.filter(call=>call.path===fixedAccessoryEndpoint).length,1);
 });

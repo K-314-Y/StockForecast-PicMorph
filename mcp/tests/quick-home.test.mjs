@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {copyFile,lstat,mkdtemp,readFile,rm,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -522,6 +523,7 @@ test('P9s ZIP fingerprints reflect the equipped analysis even with identical pre
 });
 
 const accessoryPath='/api/accessory-control';
+const fixedAccessoryPath=accessoryPath+'/fixed';
 const accessoryBody={model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:5};
 const postAccessory=(base,patch={},path=accessoryPath)=>post(base,{...accessoryBody,...patch},{},path);
 const zipId='zip_'+'f'.repeat(32);
@@ -612,11 +614,18 @@ test('accessory ZIP lookup does not create missing storage or rewrite registered
       assert.ok(inputs.slice(-2).every(input=>!Object.hasOwn(input,'accessory_methods')));
       assert.deepEqual(inputs.at(-2).models.mine,saved.model);
     }
+    const equippedFile=join(zipRoot,equipped.id+'.json');
+    const equippedBefore=await readFile(equippedFile);
+    const fixed=await postAccessory(base,{model_id:equipped.id,case_number:1},fixedAccessoryPath);
+    assert.equal(fixed.status,200,JSON.stringify(fixed.data));
+    assert.equal(fixed.data.model_id,equipped.id);
+    assert.deepEqual(inputs.at(-2).models.mine,(await zip.model(equipped.id)).model);
+    assert.deepEqual(await readFile(equippedFile),equippedBefore);
     assert.deepEqual(await zip.list(),listed);
     assert.equal((await postAccessory(base,{model_id:zipId})).status,404);
     await writeFile(join(zipRoot,legacy.id+'.json'),'{}');
     assert.equal((await postAccessory(base,{model_id:legacy.id})).status,503);
-    assert.deepEqual(read(),{writes:0,predictions:4});
+    assert.deepEqual(read(),{writes:0,predictions:6});
   },{inspectPlan:input=>{inputs.push(input);}});
 });
 
@@ -688,4 +697,70 @@ test('accessory control rejects plans with mismatched prices, numeric model or f
       else damage(plan,first);
     }});
   }
+});
+
+test('fixed accessory cases reproduce the benchmark tokens and complete results without writing',async()=>{
+  const inputs=[];
+  await withServer(async({base,shop,zipRoot,read})=>{
+    const before=await shop.public();
+    const first=[];
+    for(let pass=0;pass<2;pass++){
+      for(let case_number=1;case_number<=4;case_number++){
+        const {status,data}=await postAccessory(base,{case_number},fixedAccessoryPath);
+        assert.equal(status,200,JSON.stringify(data));
+        assert.equal(data.mode,'CONTROLLED_SYNTHETIC_ACCESSORY_FIXED_V1');
+        assert.equal(data.scenario_set,'accessory-precommitted-v1');
+        assert.equal(data.case_number,case_number);
+        const hash=createHash('sha256').update('creature-v1-precommitted-20261123-'+(case_number-1));
+        assert.equal(data.scenario_token,'v1_'+hash.digest('hex').slice(0,16));
+        assert.equal(data.daily_synthetic_prices.length,13);
+        assert.equal(data.a.daily_ai_signals.length,12);
+        assert.equal(data.b.daily_ai_signals.length,12);
+        for(const key of ['persisted','order_placed','xp_awarded','real_market'])assert.equal(data[key],false);
+        const [planA,planB]=inputs.slice(-2);
+        assert.equal(planA.scenario_token,data.scenario_token);
+        assert.deepEqual(planB,{...planA,accessory_strategy:'glasses'});
+        assert.deepEqual(planA.models.mine,inputs[0].models.mine);
+        if(first.length){
+          assert.equal(data.engine_source_sha256,first[0].engine_source_sha256);
+          assert.equal(data.baseline_fingerprint,first[0].baseline_fingerprint);
+          for(const arm of ['a','b'])assert.equal(data[arm].model_effective_sha256,first[0][arm].model_effective_sha256);
+        }
+        if(pass===0)first.push(data);
+        else assert.deepEqual(data,first[case_number-1]);
+      }
+    }
+    const random=await postAccessory(base);
+    assert.equal(random.status,200);
+    assert.equal(random.data.mode,'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY');
+    assert.equal(Object.hasOwn(random.data,'case_number'),false);
+    assert.equal(Object.hasOwn(random.data,'scenario_set'),false);
+    assert.match(random.data.scenario_token,/^v1_[a-f0-9]{16}$/);
+    assert.deepEqual(await shop.public(),before);
+    await assert.rejects(lstat(zipRoot),{code:'ENOENT'});
+    assert.deepEqual(read(),{writes:0,predictions:18});
+  },{inspectPlan:input=>inputs.push(input)});
+});
+
+test('fixed accessory route rejects invalid cases, overrides, non-exact paths and unregistered ZIPs',async()=>{
+  await withServer(async({base,zipRoot,read})=>{
+    for(const patch of [{case_number:undefined},{case_number:0},{case_number:5},{case_number:1.5},
+      {case_number:'1'},{case_number:true},{case_number:null},{scenario_token:'v1_0123456789abcdef'},
+      {weights:{}},{accessory_strategy:'none'},{model_id:'demo_one'}]){
+      assert.equal((await postAccessory(base,{case_number:1,...patch},fixedAccessoryPath)).status,400,
+        JSON.stringify(patch));
+    }
+    for(const suffix of ['?foo=1','/']){
+      assert.equal((await postAccessory(base,{case_number:1},fixedAccessoryPath+suffix)).status,404,suffix);
+    }
+    assert.equal((await fetch(base+fixedAccessoryPath)).status,404);
+    const otherOrigin=base.replace('127.0.0.1','localhost');
+    assert.equal((await post(base,{...accessoryBody,case_number:1},{Origin:otherOrigin},fixedAccessoryPath)).status,403);
+    assert.equal((await postAccessory(base,{case_number:1,model_id:zipId},fixedAccessoryPath)).status,404);
+    assert.equal((await postAccessory(base,{case_number:1})).status,400);
+    assert.equal((await post(base,{model_id:'self',amount:1000,case_number:1})).status,400);
+    assert.equal((await post(base,{model_id:'self',amount:1000,accessory_strategy:'star'})).status,400);
+    await assert.rejects(lstat(zipRoot),{code:'ENOENT'});
+    assert.deepEqual(read(),{writes:0,predictions:0});
+  });
 });

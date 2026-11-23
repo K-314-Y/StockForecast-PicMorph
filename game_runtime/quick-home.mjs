@@ -767,6 +767,7 @@ let modelListEpoch=0;
 let compareChoices=new Map();
 async function loadModels() {
   const epoch=++modelListEpoch;
+  resetAccessoryFixed();
   try {
     const data=await request('/api/model-shop');
     if(epoch!==modelListEpoch)return;
@@ -796,6 +797,7 @@ async function loadModels() {
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
     showLinkedZip();
+    if(replay && replayZipId===modelField.value)syncMini();
     // A refreshed model may have different settings under the same ID.
     resetAccessoryControl();
     if(prior && prior!==modelField.value)clearReplay();
@@ -841,8 +843,8 @@ element('quickForm').addEventListener('submit',event=>{
 for(const [id,ratio] of [['quickTen',0.1],['quickHalf',0.5],['quickAll',1]]) {
   element(id).addEventListener('click',()=>{
     if(busy)return;
-    resetAccessoryControl();
     amountField.value=String(BALANCE*ratio);
+    resetAccessoryControl();
     touched=true;
     resetReview();
   });
@@ -917,10 +919,50 @@ const accessoryRows=element('quickAccessoryRows');
 const accessoryMultiRun=element('quickAccessoryMultiRun'),accessoryMultiStatus=element('quickAccessoryMultiStatus');
 const accessoryMultiResult=element('quickAccessoryMultiResult'),accessoryMultiRows=element('quickAccessoryMultiRows');
 const accessoryMultiSummary=element('quickAccessoryMultiSummary');
+const accessoryFixedRun=element('quickAccessoryFixedRun'),accessoryFixedVerify=element('quickAccessoryFixedVerify');
+const accessoryFixedStatus=element('quickAccessoryFixedStatus'),accessoryFixedResult=element('quickAccessoryFixedResult');
+const accessoryFixedRows=element('quickAccessoryFixedRows'),accessoryFixedSummary=element('quickAccessoryFixedSummary');
+const ACCESSORY_FIXED_PATH='/api/accessory-control/fixed';
+const ACCESSORY_FIXED_SET='accessory-precommitted-v1';
 const ACCESSORY_TRIAL_COUNT=4;
 const ACCESSORY_TRIAL_TIMEOUT_MS=15_000;
 let accessoryEpoch=0,accessoryController=null;
 let accessoryFirst=null,accessoryMultiEpoch=0,accessoryMultiController=null;
+let accessoryFixedEpoch=0,accessoryFixedController=null,accessoryFixedFirst=null;
+
+function currentAccessoryOrder() {
+  return Object.freeze({model_id:modelField.value,accessory_a:accessoryA.value,accessory_b:accessoryB.value,
+    amount:validAmount(),leverage:validLeverage()});
+}
+
+function availableAccessoryModel(id) {
+  return id==='self' || zipCharacters.some(zip=>zip.id===id);
+}
+
+function distinctAccessoryMethods({accessory_a,accessory_b}) {
+  return Object.hasOwn(accessoryLabels,accessory_a) && Object.hasOwn(accessoryLabels,accessory_b) &&
+    accessory_a!==accessory_b;
+}
+
+function updateAccessoryFixedRun() {
+  const ordered=currentAccessoryOrder();
+  accessoryFixedRun.disabled=!!accessoryFixedController || !availableAccessoryModel(ordered.model_id) ||
+    ordered.amount===null || ordered.leverage===null || !distinctAccessoryMethods(ordered);
+}
+
+function resetAccessoryFixed() {
+  accessoryFixedEpoch++;
+  accessoryFixedController?.abort();
+  accessoryFixedController=null;
+  accessoryFixedFirst=null;
+  updateAccessoryFixedRun();
+  accessoryFixedVerify.hidden=true;
+  accessoryFixedVerify.disabled=true;
+  accessoryFixedStatus.textContent='';
+  accessoryFixedResult.hidden=true;
+  accessoryFixedRows.replaceChildren();
+  accessoryFixedSummary.replaceChildren();
+}
 
 function clearAccessoryMultiResult() {
   accessoryMultiResult.hidden=true;
@@ -946,6 +988,7 @@ function resetAccessoryControl() {
   accessoryMultiStatus.hidden=true;
   accessoryMultiStatus.textContent='';
   clearAccessoryMultiResult();
+  resetAccessoryFixed();
 }
 for(const select of [accessoryA,accessoryB]) {
   select.addEventListener('input',resetAccessoryControl);
@@ -953,7 +996,7 @@ for(const select of [accessoryA,accessoryB]) {
 }
 window.addEventListener('pagehide',resetAccessoryControl);
 
-function validAccessoryResponse(value,ordered) {
+function validAccessoryResponse(value,ordered,fixedCaseNumber=null) {
   const validArm=(arm,accessory)=>hasComparisonKeys(arm,'accessory','model_effective_sha256',
     'daily_ai_signals','profit_coins','max_drawdown_pct','liquidated_at_step') &&
     arm.accessory===accessory && validFingerprint(arm.model_effective_sha256) &&
@@ -962,9 +1005,13 @@ function validAccessoryResponse(value,ordered) {
     validImportedOutcome({profit_coins:arm.profit_coins,max_drawdown_pct:arm.max_drawdown_pct,
       liquidated_at_step:arm.liquidated_at_step},ordered.amount) &&
     (arm.liquidated_at_step===null || (arm.profit_coins===-ordered.amount && arm.max_drawdown_pct===100));
+  const fixed=fixedCaseNumber!==null;
   return hasComparisonKeys(value,'mode','real_market','persisted','order_placed','xp_awarded',
     'model_id','scenario_token','engine_source_sha256','amount','leverage','daily_synthetic_prices',
-    'baseline_fingerprint','a','b') && value.mode==='CONTROLLED_SYNTHETIC_ACCESSORY_ONLY' &&
+    'baseline_fingerprint','a','b',...(fixed?['scenario_set','case_number']:[])) &&
+    (fixed ? value.mode==='CONTROLLED_SYNTHETIC_ACCESSORY_FIXED_V1' &&
+      value.scenario_set===ACCESSORY_FIXED_SET && value.case_number===fixedCaseNumber :
+      value.mode==='CONTROLLED_SYNTHETIC_ACCESSORY_ONLY') &&
     value.real_market===false && value.persisted===false && value.order_placed===false &&
     value.xp_awarded===false && value.model_id===ordered.model_id && value.amount===ordered.amount &&
     value.leverage===ordered.leverage && validScenarioToken(value.scenario_token) &&
@@ -1028,7 +1075,7 @@ function accessoryTrialStats(value) {
     aDrawdown:value.a.max_drawdown_pct,bDrawdown:value.b.max_drawdown_pct,differences:accessoryDifferences(value)};
 }
 
-function renderAccessoryMultiResult(trials) {
+function renderAccessoryTrialResults(trials,result,rows,summary) {
   const amountText=(value,unit)=>{
     const formatted=money(value);
     return (formatted==='-0'?'0':formatted)+unit;
@@ -1059,12 +1106,12 @@ function renderAccessoryMultiResult(trials) {
   const mean={aProfit:total.aProfit/ACCESSORY_TRIAL_COUNT,bProfit:total.bProfit/ACCESSORY_TRIAL_COUNT,
     aDrawdown:total.aDrawdown/ACCESSORY_TRIAL_COUNT,bDrawdown:total.bDrawdown/ACCESSORY_TRIAL_COUNT,
     differences:total.differences};
-  accessoryMultiRows.replaceChildren(...trials.map((trial,index)=>makeRow(String(index+1),trial,12)));
-  accessoryMultiSummary.replaceChildren(makeRow('平均／合計',mean,12*ACCESSORY_TRIAL_COUNT));
-  accessoryMultiResult.hidden=false;
+  rows.replaceChildren(...trials.map((trial,index)=>makeRow(String(index+1),trial,12)));
+  summary.replaceChildren(makeRow('平均／合計',mean,12*ACCESSORY_TRIAL_COUNT));
+  result.hidden=false;
 }
 
-async function requestAccessoryTrial(ordered,controller) {
+async function requestAccessoryTrial(ordered,controller,path='/api/accessory-control') {
   const {signal}=controller;
   let onAbort;
   const canceled=new Promise((_,reject)=>{
@@ -1073,7 +1120,7 @@ async function requestAccessoryTrial(ordered,controller) {
   });
   const timeout=setTimeout(()=>controller.abort(),ACCESSORY_TRIAL_TIMEOUT_MS);
   try {
-    return await Promise.race([request('/api/accessory-control',ordered,signal),canceled]);
+    return await Promise.race([request(path,ordered,signal),canceled]);
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener('abort',onAbort);
@@ -1083,9 +1130,8 @@ async function requestAccessoryTrial(ordered,controller) {
 accessoryRun.addEventListener('click',async event=>{
   if(!event.isTrusted || accessoryController)return;
   resetAccessoryControl();
-  const ordered=Object.freeze({model_id:modelField.value,accessory_a:accessoryA.value,accessory_b:accessoryB.value,
-    amount:validAmount(),leverage:validLeverage()});
-  if(ordered.model_id!=='self' && !zipCharacters.some(zip=>zip.id===ordered.model_id)) {
+  const ordered=currentAccessoryOrder();
+  if(!availableAccessoryModel(ordered.model_id)) {
     accessoryStatus.textContent='自分のAIまたは登録済みZIPのAIを選んでください。';
     return;
   }
@@ -1093,8 +1139,7 @@ accessoryRun.addEventListener('click',async event=>{
     accessoryStatus.textContent='試算額は1〜10,000の整数、倍率は1〜25から選んでください。';
     return;
   }
-  if(!Object.hasOwn(accessoryLabels,ordered.accessory_a) || !Object.hasOwn(accessoryLabels,ordered.accessory_b) ||
-     ordered.accessory_a===ordered.accessory_b) {
+  if(!distinctAccessoryMethods(ordered)) {
     accessoryStatus.textContent='AとBで異なる分析を選んでください。';
     return;
   }
@@ -1135,6 +1180,7 @@ accessoryMultiRun.addEventListener('click',async event=>{
   if(!event.isTrusted || accessoryMultiRun.disabled || !accessoryFirst || accessoryController || accessoryMultiController)return;
   const first=accessoryFirst;
   if(!accessoryOrderIsCurrent(first.ordered)){resetAccessoryControl();return;}
+  resetAccessoryFixed();
   accessoryFirst=null;
   accessoryMultiRun.disabled=true;
   accessoryMultiStatus.hidden=false;
@@ -1156,7 +1202,7 @@ accessoryMultiRun.addEventListener('click',async event=>{
       tokens.add(value.scenario_token);
       trials.push(accessoryTrialStats(value));
     }
-    renderAccessoryMultiResult(trials);
+    renderAccessoryTrialResults(trials,accessoryMultiResult,accessoryMultiRows,accessoryMultiSummary);
     accessoryMultiStatus.textContent='4例の結果を集計しました。再度試すには初回の実験から始めてください。';
   } catch {
     if(!isCurrent())return;
@@ -1168,6 +1214,80 @@ accessoryMultiRun.addEventListener('click',async event=>{
       else accessoryMultiController=null;
     }
   }
+});
+
+function sameAccessoryFingerprints(a,b) {
+  return a.engine_source_sha256===b.engine_source_sha256 && a.baseline_fingerprint===b.baseline_fingerprint &&
+    a.a.model_effective_sha256===b.a.model_effective_sha256 && a.b.model_effective_sha256===b.b.model_effective_sha256;
+}
+
+function sameFixedAccessoryResult(a,b) {
+  return sameAccessoryFingerprints(a,b) && a.scenario_token===b.scenario_token &&
+    a.daily_synthetic_prices.every((price,i)=>Object.is(price,b.daily_synthetic_prices[i])) &&
+    ['a','b'].every(arm=>a[arm].daily_ai_signals.every((signal,i)=>signal===b[arm].daily_ai_signals[i]) &&
+      ['profit_coins','max_drawdown_pct','liquidated_at_step'].every(key=>Object.is(a[arm][key],b[arm][key])));
+}
+
+async function runFixedAccessory(verify) {
+  if(accessoryFixedController || (verify?accessoryFixedVerify.disabled:accessoryFixedRun.disabled))return;
+  const first=verify?accessoryFixedFirst:null;
+  if(verify && !first)return;
+  const ordered=first?.ordered??currentAccessoryOrder();
+  if(!accessoryOrderIsCurrent(ordered) || !availableAccessoryModel(ordered.model_id) ||
+     ordered.amount===null || ordered.leverage===null || !distinctAccessoryMethods(ordered)) {
+    resetAccessoryFixed();
+    return;
+  }
+  if(!verify)resetAccessoryFixed();
+  accessoryFixedFirst=null;
+  const epoch=++accessoryFixedEpoch;
+  const controller=new AbortController();
+  accessoryFixedController=controller;
+  accessoryFixedRun.disabled=true;
+  accessoryFixedVerify.disabled=true;
+  accessoryFixedStatus.textContent=verify?'同じ4例を再計算中…':'固定の架空相場4例を実験中…';
+  const isCurrent=()=>epoch===accessoryFixedEpoch && accessoryOrderIsCurrent(ordered);
+  const trials=[],tokens=new Set();
+  try {
+    for(let case_number=1;case_number<=ACCESSORY_TRIAL_COUNT;case_number++) {
+      const value=await requestAccessoryTrial({...ordered,case_number},controller,ACCESSORY_FIXED_PATH);
+      if(!isCurrent())return;
+      if(controller.signal.aborted || !validAccessoryResponse(value,ordered,case_number) ||
+         tokens.has(value.scenario_token) || (trials.length && !sameAccessoryFingerprints(value,trials[0]))) {
+        throw Error('Invalid fixed accessory trial');
+      }
+      tokens.add(value.scenario_token);
+      trials.push(value);
+    }
+    if(verify) {
+      accessoryFixedStatus.textContent=trials.every((trial,i)=>sameFixedAccessoryResult(trial,first.trials[i])) ?
+        '同じ条件の同じ架空相場で結果一致' : '初回と再計算の結果が一致しませんでした。';
+    } else {
+      renderAccessoryTrialResults(trials.map(accessoryTrialStats),accessoryFixedResult,accessoryFixedRows,accessoryFixedSummary);
+      accessoryFixedFirst={ordered,trials};
+      accessoryFixedVerify.hidden=false;
+      accessoryFixedVerify.disabled=false;
+      accessoryFixedStatus.textContent='固定の架空相場4例を集計しました。';
+    }
+  } catch {
+    if(!isCurrent())return;
+    accessoryFixedStatus.textContent=verify?
+      '再計算結果の一致を確認できませんでした（通信またはデータ検証失敗）。':'固定の4例を完了できませんでした。';
+  } finally {
+    if(epoch===accessoryFixedEpoch) {
+      if(!isCurrent())resetAccessoryFixed();
+      else {
+        accessoryFixedController=null;
+        updateAccessoryFixedRun();
+      }
+    }
+  }
+}
+accessoryFixedRun.addEventListener('click',event=>{
+  if(event.isTrusted)return runFixedAccessory(false);
+});
+accessoryFixedVerify.addEventListener('click',event=>{
+  if(event.isTrusted)return runFixedAccessory(true);
 });
 
 const compareModel = element('quickCompareModel');

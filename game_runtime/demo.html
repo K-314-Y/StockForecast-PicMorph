@@ -278,12 +278,14 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickAccessoryResult thead th:first-child{width:15%}
 #quickAccessoryResult small{display:block;color:var(--soft);font-size:inherit}
 #quickAccessoryMultiRun{max-width:100%;white-space:normal;margin-block-start:8px}
-#quickAccessoryMultiResult table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.875rem}
-#quickAccessoryMultiResult :is(th,td){padding:5px 3px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-#quickAccessoryMultiResult thead th:first-child{width:16%}
-#quickAccessoryMultiResult thead th:last-child{width:22%}
-#quickAccessoryMultiResult td span{display:block}
-#quickAccessoryMultiResult tfoot{font-weight:700}
+#quickAccessoryFixed{margin-block-start:16px;padding-block-start:12px;border-block-start:1px solid var(--line)}
+#quickAccessoryFixed button{max-width:100%;white-space:normal;margin-block-end:6px}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.875rem}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) :is(th,td){padding:5px 3px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) thead th:first-child{width:16%}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) thead th:last-child{width:22%}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) td span{display:block}
+:is(#quickAccessoryMultiResult,#quickAccessoryFixedResult) tfoot{font-weight:700}
 @media(max-width:550px){
  .quick-accessory-fields{grid-template-columns:1fr}
  #quickAccessoryResult :is(th,td){padding-inline:3px}
@@ -539,6 +541,22 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <tbody id="quickAccessoryRows"></tbody>
    </table>
   </div>
+  <section id="quickAccessoryFixed" aria-labelledby="quickAccessoryFixedTitle">
+   <h4 id="quickAccessoryFixedTitle">固定の架空相場4例</h4>
+   <p class="simple-hint">相場の番号から作る同じ4例で試算します。モデルや計算方法が変わると、同じ相場でも結果が変わることがあります。ここで確認するのは計算結果の一致です。</p>
+   <button id="quickAccessoryFixedRun" type="button" aria-controls="quickAccessoryFixedResult" disabled>固定の4例を試す</button>
+   <button id="quickAccessoryFixedVerify" type="button" aria-controls="quickAccessoryFixedStatus" hidden disabled>同じ4例で結果を確かめる</button>
+   <p id="quickAccessoryFixedStatus" class="simple-hint" role="status"></p>
+   <div id="quickAccessoryFixedResult" hidden>
+    <table>
+     <caption>固定の架空相場ごとの結果（各12日間）</caption>
+     <thead><tr><th scope="col">相場</th><th scope="col">仮想損益</th><th scope="col">最大下落率</th><th scope="col">判断相違日数</th></tr></thead>
+     <tbody id="quickAccessoryFixedRows"></tbody>
+     <tfoot id="quickAccessoryFixedSummary"></tfoot>
+    </table>
+    <p class="simple-hint">仮想損益と最大下落率は4例の平均、判断相違日数は合計です。強制終了後の判断も日数に含めます。実際の予測精度は測れません。</p>
+   </div>
+  </section>
  </section>
  <section id="quickReplay" class="quick-replay" aria-labelledby="quickReplayTitle" hidden>
   <h3 id="quickReplayTitle">12日間を振り返る</h3>

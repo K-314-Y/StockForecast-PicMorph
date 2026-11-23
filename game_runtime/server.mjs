@@ -348,7 +348,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     }
     return current;
   }
-  async function runAccessoryControl({model_id,accessory_a,accessory_b,amount,leverage}) {
+  async function runAccessoryControl({model_id,accessory_a,accessory_b,amount,leverage},fixedCaseNumber=null) {
     const snapshot = await loadSnapshot();
     const revisions = REVISIONS.map(key=>snapshot[key]);
     const companion = await companionStore.read();
@@ -358,7 +358,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     const imported = model_id==='self' ? null : await readZip();
     const zipRevisions = imported && ACCESSORY_ZIP_REVISIONS.map(key=>imported[key]);
     const mine = model_id==='self' ? applyCompanion(originals,companion).models.mine : imported.model;
-    const scenario_token = 'v1_'+randomBytes(8).toString('hex');
+    // The first four main scenarios in scripts/benchmark-accessory-ai.mjs.
+    const scenario_token = 'v1_'+(fixedCaseNumber===null ? randomBytes(8).toString('hex') :
+      createHash('sha256').update('creature-v1-precommitted-20261123-'+(fixedCaseNumber-1))
+        .digest('hex').slice(0,16));
     const common = structuredClone({...originals,models:{...originals.models,mine},scenario_token});
     const engine_source_sha256 = await verifyPracticeEngineSource();
     let planA,planB;
@@ -414,7 +417,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       orderedEntries(baseline.plugin_weights),orderedEntries(baseline.plugin_strengths),
     ])).digest('hex');
     await verifyPracticeEngineSource();
-    return {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY',real_market:false,persisted:false,
+    const scenario = fixedCaseNumber===null ? {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY'} :
+      {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_FIXED_V1',scenario_set:'accessory-precommitted-v1',case_number:fixedCaseNumber};
+    return {...scenario,real_market:false,persisted:false,
       order_placed:false,xp_awarded:false,model_id,scenario_token,engine_source_sha256,amount,leverage,
       daily_synthetic_prices:[planA.initial_price,...planA.future_prices],baseline_fingerprint,a,b};
   }
@@ -835,10 +840,14 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         'Content-Security-Policy': "default-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"});
       return res.end(body);
     }
-    const isAccessoryControl = path === '/api/accessory-control';
+    const isFixedAccessoryControl = path === '/api/accessory-control/fixed';
+    const isAccessoryControl = path === '/api/accessory-control' || isFixedAccessoryControl;
     if (req.method !== 'POST' || (isAccessoryControl && req.url!==path) || (!isAccessoryControl &&
         !['/api/practice','/api/practice/preview','/api/compare','/api/model-lab/compare','/api/model-lab/historical','/api/model-shop/buy','/api/model-shop/practice','/api/quick-practice','/api/training/complete','/api/companion','/api/companion/forward-ai','/api/looks','/api/artwork'].includes(path))) {
       return json(res, 404, {error: '見つかりません'});
+    }
+    if (isFixedAccessoryControl && req.headers.origin!==undefined && req.headers.origin!==`http://${req.headers.host}`) {
+      return json(res,403,{error:'ローカルの同一画面からのみ利用できます'});
     }
     if (inFlight >= 2) return json(res, 429, {error: '処理が混雑しています'});
     inFlight++;
@@ -888,8 +897,12 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const fields = Object.keys(payload).sort();
       const names = fields.join('|');
       if (isAccessoryControl) {
-        const {model_id,accessory_a,accessory_b,amount,leverage} = payload;
-        if(fields.length!==5 || names!=='accessory_a|accessory_b|amount|leverage|model_id' ||
+        const {model_id,accessory_a,accessory_b,amount,leverage,case_number} = payload;
+        if(isFixedAccessoryControl && (fields.length!==6 || names!=='accessory_a|accessory_b|amount|case_number|leverage|model_id' ||
+           !Number.isInteger(case_number) || case_number<1 || case_number>4)) {
+          throw failure('固定相場は1〜4の番号で指定してください',400);
+        }
+        if((!isFixedAccessoryControl && (fields.length!==5 || names!=='accessory_a|accessory_b|amount|leverage|model_id')) ||
            (model_id!=='self' && (typeof model_id!=='string' || model_id.length!==36 ||
              !IMPORTED_CHARACTER_ID.test(model_id))) ||
            !ACCESSORY_STRATEGIES.has(accessory_a) || !ACCESSORY_STRATEGIES.has(accessory_b) ||
@@ -897,7 +910,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
            !Number.isSafeInteger(leverage) || leverage<1 || leverage>25) {
           throw failure('自分のAIまたは登録済みZIP、異なる2種類の分析、試算額と倍率を指定してください',400);
         }
-        return json(res,200,await runAccessoryControl(payload));
+        return json(res,200,await runAccessoryControl(payload,isFixedAccessoryControl?case_number:null));
       }
       if (path === '/api/quick-practice') {
         if (!['amount|leverage|model_id','amount|model_id',
