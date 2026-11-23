@@ -95,8 +95,10 @@ private local Creature Lab Node game. It has no real-trading capability.
    hash and signal differences accurately. Rules adjust weights without model
    training and never change ordinary forecasts or XP.
    過去株価の比較は、本人が分析画面で明示的に実行したときだけ利用する。
-   ローカルの未調整の2024年終値から12営業日を1期間だけ再現する。候補期間は
-   重なっており、独立した検証用データの評価や実運用成績の検証には使えない。
+   ローカルの未調整の2024年終値から、単一期間または銘柄ごとに24＋12営業日が
+   重ならない複数期間を再現する。異なる銘柄は同じ市場・日程を共有する。
+   再現する12日間も含む急変の除外による選択の偏りに注意する。集計は独立した
+   検証用データでの評価や実運用の成績を示さない。
    比較結果は保存せず、ローカルデータがないときは利用できない旨を伝える。
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.

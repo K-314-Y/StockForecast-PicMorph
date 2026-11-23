@@ -220,28 +220,14 @@ def sample_window(windows, request):
     return choices[secrets.randbelow(len(choices))]
 
 
-def generate(data):
-    if not isinstance(data, dict) or set(data) != {"base_model", "models", "selection"}:
-        raise ValueError("invalid_market_request")
-    if not isinstance(data["selection"], dict) or not set(data["selection"]) <= {
-        "replay_id", "exclude_id"}:
-        raise ValueError("invalid_selection")
-    if not isinstance(data["models"], dict) or set(data["models"]) != set(SLOTS):
+def parse_models(base, models):
+    if not isinstance(models, dict) or set(models) != set(SLOTS):
         raise ValueError("invalid_model_slots")
-    models = {slot: model_from_record(data["models"][slot]) for slot in SLOTS}
-    base = model_from_record(data["base_model"])
-    mode = os.environ.get("CREATURE_MARKET_SOURCE", "auto").strip().lower()
-    if mode not in ("auto", "local", "jquants"):
-        raise ValueError("invalid_market_source_mode")
-    if mode == "local":
-        source = load_local()
-    else:
-        key = load_jquants_key()
-        if mode == "jquants" and not key:
-            raise ValueError("jquants_key_not_configured")
-        source = fetch_jquants(key) if key else load_local()
-    windows = candidate_windows(source)
-    wid, code, selected = sample_window(windows, data["selection"])
+    return model_from_record(base), {slot: model_from_record(models[slot]) for slot in SLOTS}
+
+
+def replay_window(source, eligible_count, window, base, models):
+    wid, code, selected = window
     # Convert to a 100-based price index using only the final *observed* day.
     factor = 100 / selected[LOOKBACK - 1][1]
     prices = [round(value[1] * factor, 6) for value in selected]
@@ -267,7 +253,7 @@ def generate(data):
         "market_id": wid, "code": code, "start_date": first_date,
         "history_end_date": selected[LOOKBACK-1][0],
         "end_date": final_date, "lookback_days": LOOKBACK,
-        "future_days": HORIZON, "eligible_windows": len(windows),
+        "future_days": HORIZON, "eligible_windows": eligible_count,
         "price_index_base": 100, "flat_threshold_pct": .3,
         "brier": {k: round(v / HORIZON, 6) for k, v in brier_total.items()},
         "plan": {
@@ -284,6 +270,27 @@ def generate(data):
             "model_sha256": sha256(python_source(base).encode()).hexdigest(),
         },
     }
+
+
+def generate(data):
+    if not isinstance(data, dict) or set(data) != {"base_model", "models", "selection"}:
+        raise ValueError("invalid_market_request")
+    if not isinstance(data["selection"], dict) or not set(data["selection"]) <= {
+        "replay_id", "exclude_id"}:
+        raise ValueError("invalid_selection")
+    base, models = parse_models(data["base_model"], data["models"])
+    mode = os.environ.get("CREATURE_MARKET_SOURCE", "auto").strip().lower()
+    if mode not in ("auto", "local", "jquants"):
+        raise ValueError("invalid_market_source_mode")
+    if mode == "local":
+        source = load_local()
+    else:
+        key = load_jquants_key()
+        if mode == "jquants" and not key:
+            raise ValueError("jquants_key_not_configured")
+        source = fetch_jquants(key) if key else load_local()
+    windows = candidate_windows(source)
+    return replay_window(source, len(windows), sample_window(windows, data["selection"]), base, models)
 
 
 if __name__ == "__main__":

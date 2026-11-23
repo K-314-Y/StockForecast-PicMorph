@@ -19,7 +19,7 @@ import {runSyntheticGame, validateAllocations} from './practice.mjs';
 import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
 import {validateLabModel, validateLabRevisions, labRevisions, sameLabRevisions, compareLabPlan} from './model-lab.mjs';
-import {compareHistoricalMarket,compareLocalAccessoryHistory} from './historical-market.mjs';
+import {compareHistoricalMarket,compareLocalAccessoryBatch,compareLocalAccessoryHistory} from './historical-market.mjs';
 import {createActiveCharacterStore} from './active-character.mjs';
 import {CHARACTER_DEMOS_API,createCharacterDemoCatalog} from './character-demo-catalog.mjs';
 import {INDEPENDENT_PARTS_API,createIndependentPartReader} from './independent-part-reader.mjs';
@@ -37,6 +37,7 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BRIDGE = fileURLToPath(new URL('./predict_bridge.py', import.meta.url));
 const TRAINED_BRIDGE = fileURLToPath(new URL('./trained_bridge.py', import.meta.url));
 const MARKET_BRIDGE = fileURLToPath(new URL('./market_bridge.py', import.meta.url));
+const MARKET_BATCH_BRIDGE = fileURLToPath(new URL('./market_batch_bridge.py', import.meta.url));
 const DEMO = new URL('./demo.html', import.meta.url);
 const DEMO_JS = new URL('./demo.mjs', import.meta.url);
 const GENERATED_AVATAR_JS = new URL('./generated-avatar.mjs', import.meta.url);
@@ -162,17 +163,20 @@ export async function pythonPredict(models) {
   });
 }
 
+function localMarketEnvironment() {
+  // Local replay does not inherit API keys, proxy credentials or Python overrides.
+  return {PATH:process.env.PATH ?? '/usr/bin:/bin',LANG:'C.UTF-8',CREATURE_MARKET_SOURCE:'local',
+    ...(process.env.CREATURE_MARKET_HISTORY_PATH!==undefined ?
+      {CREATURE_MARKET_HISTORY_PATH:process.env.CREATURE_MARKET_HISTORY_PATH} : {})};
+}
+
 export async function pythonHistoricalPredict(input,{source}={}) {
   if(source!==undefined && source!=='local')throw failure('過去株価の取得元が不正です');
   const local=source==='local';
-  // Local replay does not inherit API keys, proxy credentials or Python overrides.
-  const env=local ? {PATH:process.env.PATH ?? '/usr/bin:/bin',LANG:'C.UTF-8',CREATURE_MARKET_SOURCE:'local',
-    ...(process.env.CREATURE_MARKET_HISTORY_PATH!==undefined ?
-      {CREATURE_MARKET_HISTORY_PATH:process.env.CREATURE_MARKET_HISTORY_PATH} : {})} : undefined;
   const {spawn}=await import('node:child_process');
   return new Promise((resolveResult,rejectResult)=>{
     const child=spawn('python3',local?['-B','-E',MARKET_BRIDGE]:['-B',MARKET_BRIDGE],
-      {cwd:ROOT,stdio:['pipe','pipe','pipe'],env});
+      {cwd:ROOT,stdio:['pipe','pipe','pipe'],env:local?localMarketEnvironment():undefined});
     const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
     let output='',failed=false,settled=false;
     const finish=(err,result)=>{
@@ -195,6 +199,23 @@ export async function pythonHistoricalPredict(input,{source}={}) {
       catch{finish(failure('過去株価の予測結果が不正です'));}
     });
     child.stdin.end(JSON.stringify(input));
+  });
+}
+
+export async function pythonMarketBatchPredict(input,{signal}={}) {
+  const body=JSON.stringify(input);
+  if(Buffer.byteLength(body)>16*1024)throw failure('過去株価一括比較の入力が大きすぎます');
+  const {execFile}=await import('node:child_process');
+  return new Promise((resolveResult,rejectResult)=>{
+    const unavailable=()=>failure('ローカルの過去株価を一括比較できませんでした');
+    const child=execFile('python3',['-B','-E',MARKET_BATCH_BRIDGE],{cwd:ROOT,env:localMarketEnvironment(),
+      signal,timeout:15000,killSignal:'SIGKILL',maxBuffer:256*1024,encoding:'buffer'},(error,stdout)=>{
+      if(error)return rejectResult(unavailable());
+      try {resolveResult(JSON.parse(stdout.toString('utf8')));}
+      catch {rejectResult(unavailable());}
+    });
+    child.stdin.on('error',()=>child.kill('SIGKILL'));
+    child.stdin.end(body);
   });
 }
 
@@ -315,6 +336,7 @@ async function getBody(req, limit = MAX_REQUEST) {
 
 export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   predict = pythonPredict, historicalPredict = pythonHistoricalPredict,
+                                  historicalBatchPredict = pythonMarketBatchPredict,
                                   companionStore = createCompanionStore(),
                                   modelShopStore = createModelShopStore(),
                                   lookStore = createLookStore(),
@@ -427,9 +449,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       const compare=write && path===ACCESSORY_ANALYSIS_API+'/compare';
       const historical=write && path===ACCESSORY_ANALYSIS_API+'/historical';
+      const batchHistory=write && path===ACCESSORY_ANALYSIS_API+'/batch-history';
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !historical && !save && !info) || req.url!==path || process.platform!=='linux' ||
+      if ((!compare && !historical && !batchHistory && !save && !info) || req.url!==path || process.platform!=='linux' ||
           !accessoryAnalysisStore || !independentPartReader || !equipmentStore) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
@@ -448,18 +471,21 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
-        if(historical) {
+        if(historical || batchHistory) {
           if(!input || typeof input!=='object' || Array.isArray(input))throw failure('比較する登録キャラと版数を指定してください',400);
-          const {replay_id,exclude_id,...context}=input;
-          validateAnalysisContext(context);
           const selection={};
-          for(const key of ['replay_id','exclude_id']) {
-            if(!Object.hasOwn(input,key))continue;
-            if(typeof input[key]!=='string' || input[key].length!==28 || !MARKET_ID.test(input[key]))
-              throw failure('相場期間IDが不正です',400);
-            selection[key]=input[key];
-          }
-          if(replay_id && exclude_id)throw failure('同じ期間の指定と除外は同時にできません',400);
+          let context=input;
+          if(historical) {
+            const {replay_id,exclude_id,...versions}=input;
+            context=validateAnalysisContext(versions);
+            for(const key of ['replay_id','exclude_id']) {
+              if(!Object.hasOwn(input,key))continue;
+              if(typeof input[key]!=='string' || input[key].length!==28 || !MARKET_ID.test(input[key]))
+                throw failure('相場期間IDが不正です',400);
+              selection[key]=input[key];
+            }
+            if(replay_id && exclude_id)throw failure('同じ期間の指定と除外は同時にできません',400);
+          } else validateAnalysisContext(context);
 
           const [snapshot,companion]=await Promise.all([loadSnapshot(),companionStore.read()]);
           const original=modelPlanFromSnapshot(snapshot,null);
@@ -468,8 +494,9 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           if(res.destroyed)return;
           let result;
           try {
-            result=await historicalPredict({base_model:original.base_model,
-              models:{mine:candidate,owl:baseline,turtle:baseline},selection},{source:'local'});
+            const models={base_model:original.base_model,models:{mine:candidate,owl:baseline,turtle:baseline}};
+            result=batchHistory ? await historicalBatchPredict(models,{signal}) :
+              await historicalPredict({...models,selection},{source:'local'});
           } catch {
             if(!res.destroyed)json(res,503,{error:'ローカルの2024年株価データを読み込めないか、対象の期間がありません。'});
             return;
@@ -480,8 +507,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           ]);
           if(!sameLabRevisions(labRevisions(snapshot,companion),labRevisions(after,currentCompanion)))
             throw failure('比較中に基準モデルが更新されました。設定を再読込してください',409);
-          if(JSON.stringify(current.applied)!==JSON.stringify(applied))throw analysisChanged();
-          const report=compareLocalAccessoryHistory(result,baseline,candidate,selection);
+          if(JSON.stringify(current.applied)!==JSON.stringify(applied) ||
+             (batchHistory && JSON.stringify(current.visibleKinds)!==JSON.stringify(visibleKinds)))throw analysisChanged();
+          const report=batchHistory ? compareLocalAccessoryBatch(result,baseline,candidate) :
+            compareLocalAccessoryHistory(result,baseline,candidate,selection);
           if(!res.destroyed)json(res,200,{...report,
             provenance:{character_id:context.character_id,active_revision:context.active_revision,
               equipment_revision:context.equipment_revision,policy_revision:context.expected_revision,

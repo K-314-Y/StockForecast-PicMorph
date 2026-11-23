@@ -15,6 +15,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
   let record={schema:1,revision:0,policies:[]};
   let empty=false;
   let historicalStatus=200;
+  let batchStatus=200;
   function check(value,message) {
     if(!value)throw Error(message);
   }
@@ -29,7 +30,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
         if(pathname==='/accessory-analysis-ui.mjs')return route.fulfill({contentType:'text/javascript; charset=utf-8',body:script});
         if(pathname==='/favicon.ico')return route.fulfill({status:204});
       }
-      if(url.origin!==origin || ![api,api+'/compare',api+'/historical'].includes(pathname)) {
+      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history'].includes(pathname)) {
         unexpected.push(method+' '+url);
         return route.abort();
       }
@@ -58,6 +59,23 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
           baseline:{...baseline,brier:.75,signals:undefined},candidate:{...candidate,brier:.8,signals:undefined},
           difference:{different_signals:2,profit_coins:-25},provenance:{applied_rules:record.policies}}});
       }
+      if(method==='POST' && pathname===api+'/batch-history' && input.expected_revision===record.revision) {
+        check(JSON.stringify(input)===JSON.stringify({character_id,active_revision:2,equipment_revision:3,
+          expected_revision:record.revision}),'Unexpected historical batch parameters');
+        if(batchStatus===0)return route.abort();
+        if(batchStatus===409)return route.fulfill({status:409,json:{error:'一括比較の設定を再読込してください'}});
+        const metrics={brier:{baseline_mean:.71,candidate_mean:.7,wins:1,ties:1,losses:1},
+          profit_coins:{baseline_mean:0,candidate_mean:-6.25,wins:1,ties:1,losses:1},
+          max_drawdown_pct:{baseline_mean:0,candidate_mean:2,wins:0,ties:1,losses:2}};
+        return route.fulfill({json:{scope:'ACCESSORY_RULES_HISTORICAL_LOCAL_NONOVERLAP_V1',read_only:true,holdout_evaluated:false,
+          weighting:'equal_per_window',coverage:{codes:2,selected_windows:3,eligible_windows:694,
+            period_start:'2024-01-04',period_end:'2024-03-19'},
+          market:{source_origin:'LOCAL_JPX_REPORT_CACHE_2024',source:'合成の出典',adjusted:false,warning:'分割・配当の影響があります。'},
+          notice:'銘柄間では同じ市場を共有します。再現する12日間も含めた急変の除外で、選択に偏りがあり得ます。',
+          signal_comparisons:36,different_signals:2,metrics,
+          downside:{baseline:{max_drawdown_pct:0,worst_profit_coins:0},candidate:{max_drawdown_pct:3.5,worst_profit_coins:-34}},
+          by_code:[{code:'40050',windows:2,metrics},{code:'46890',windows:1,metrics}],provenance:{applied_rules:record.policies}}});
+      }
       return route.fulfill({status:409,json:{error:'設定を再読込してください'}});
     });
     const fixture=await context.newPage();
@@ -67,16 +85,19 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     const save=fixture.getByRole('button',{name:'分析設定を保存する'});
     const compare=fixture.getByRole('button',{name:'保存済み設定で比較する'});
     const history=fixture.getByRole('button',{name:'過去の株価（2024年）で比較する'});
+    const batch=fixture.getByRole('button',{name:'重ならない複数期間でまとめて比較する'});
     const focus=fixture.getByRole('combobox',{name:'分析の焦点'});
     const strength=fixture.getByRole('combobox',{name:'強度'});
     await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
     check(calls.length===1 && calls[0].method==='GET','Page load must only read metadata');
     check(await save.isDisabled(),'Save should be disabled before edits');
     check(await history.isDisabled(),'History requires an applied saved policy');
+    check(await batch.isDisabled(),'Batch requires an applied saved policy');
     await focus.selectOption({label:'直近の勢い'});
     await strength.selectOption('3');
     check(await compare.isDisabled(),'Unsaved changes must not be compared');
     check(await history.isDisabled(),'Unsaved policies must not run historical analysis');
+    check(await batch.isDisabled(),'Unsaved policies must not run a batch');
     fixture.once('dialog',dialog=>dialog.dismiss());
     await save.click();
     check(calls.length===1,'Dismissing confirmation must not save');
@@ -112,7 +133,37 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
       await card.getByText('最大下落率 '+drawdown+'%',{exact:true}).waitFor();
     }
     check(await fixture.getByRole('heading',{name:'架空12日間の比較結果'}).isVisible(),'Historical result must stay separate');
+    check(!calls.some(call=>call.path===api+'/batch-history'),'Historical batch must wait for its own click');
+    await batch.click();
+    const batchResult=fixture.getByRole('region',{name:'重ならない複数期間の比較結果'});
+    await batchResult.getByText(/2銘柄・3期間（重なる候補は694件）/).waitFor();
+    await batchResult.getByText(/同じ市場を共有.*12日間.*偏り/).waitFor();
+    await batchResult.getByText(/36日のうち2日/).waitFor();
+    await batchResult.getByText(/候補が良い 0 ／ 同じ 1 ／ 悪い 2/).waitFor();
+    await batchResult.getByText(/最も大きな下落率.*3.5%.*-34コイン/).waitFor();
+    await batchResult.getByText('銘柄ごとの平均と対象期間数',{exact:true}).click();
+    await batchResult.getByText(/^40050（2期間、基準 → 候補）/).waitFor();
+    check(await historicalResult.isVisible(),'Single-window result must stay separate');
     check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'320px viewport should not overflow');
+    await strength.selectOption('2');
+    check(!await batchResult.isVisible() && await batch.isDisabled(),'Editing settings must clear batch result');
+    await strength.selectOption('3');
+    await batch.click();
+    await batchResult.waitFor();
+    await fixture.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+    check(!await batchResult.isVisible() && await batch.isDisabled(),'Leaving for another active character must invalidate the batch');
+    await fixture.getByRole('button',{name:'設定を再読込する'}).click();
+    await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
+    batchStatus=0;
+    await batch.click();
+    await fixture.getByText('接続に失敗しました。設定を再読込してください。',{exact:true}).waitFor();
+    check(!await batchResult.isVisible(),'A failed batch must not display substitute metrics');
+    batchStatus=409;
+    await batch.click();
+    await fixture.getByText('一括比較の設定を再読込してください',{exact:true}).waitFor();
+    check(await batch.isDisabled(),'A stale batch must require reload');
+    await fixture.getByRole('button',{name:'設定を再読込する'}).click();
+    await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
     historicalStatus=503;
     await history.click();
     await fixture.getByText('ローカルの2024年株価データを読み込めません。',{exact:true}).waitFor();
@@ -128,6 +179,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     await fixture.getByText('カタログに登録された装飾品はありません。').waitFor();
     check(await compare.isDisabled(),'Empty fixture without a character must not allow comparison');
     check(await history.isDisabled(),'Empty fixture must not allow historical analysis');
+    check(await batch.isDisabled(),'Empty fixture must not allow a batch');
     check(unexpected.length===0 && errors.length===0,'Unexpected browser activity: '+JSON.stringify({unexpected,errors}));
     return {viewport:320,requests:calls.map(({method,path})=>method+' '+path),images:0};
   } finally {

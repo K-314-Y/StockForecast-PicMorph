@@ -48,6 +48,25 @@
       <div id="historical-reports" class="comparison"></div>
     </section>
   </section>
+  <section aria-labelledby="batch-title">
+    <h2 id="batch-title">複数期間で再現</h2>
+    <p id="batch-help">銘柄ごとに、直前の24営業日と再現する12営業日の全体が重ならないよう、古い期間から順に選びます。</p>
+    <button id="batch-compare" type="button" aria-describedby="batch-help batch-status" disabled>重ならない複数期間でまとめて比較する</button>
+    <p id="batch-status" role="status"></p>
+    <section id="batch-result" aria-labelledby="batch-result-title" hidden>
+      <h3 id="batch-result-title">重ならない複数期間の比較結果</h3>
+      <p id="batch-coverage"></p>
+      <p id="batch-warning"></p>
+      <p id="batch-signals"></p>
+      <p id="batch-rules"></p>
+      <div id="batch-metrics" class="comparison"></div>
+      <p id="batch-downside"></p>
+      <details>
+        <summary>銘柄ごとの平均と対象期間数</summary>
+        <ul id="batch-codes"></ul>
+      </details>
+    </section>
+  </section>
 </main>
 <script type="module" src="/accessory-analysis-ui.mjs"></script>
 </html>

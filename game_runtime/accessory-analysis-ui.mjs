@@ -10,14 +10,22 @@ const result=$('result');
 const historical=$('historical-compare');
 const historicalStatus=$('historical-status');
 const historicalResult=$('historical-result');
+const batch=$('batch-compare');
+const batchStatus=$('batch-status');
+const batchResult=$('batch-result');
+const formatMetric=new Intl.NumberFormat('ja-JP',{maximumFractionDigits:6});
 let state;
 let controls=[];
 let busy=false;
 let refreshRequired=false;
+let batchEpoch=0;
+let batchPending=false;
+let batchNeedsReload=false;
 
 async function request(path='',input) {
   const response=await fetch(API+path,{mode:'same-origin',credentials:'same-origin',cache:'no-store',redirect:'error',
-    signal:AbortSignal.timeout(path==='/historical'?40000:20000),...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
+    signal:AbortSignal.timeout(['/historical','/batch-history'].includes(path)?40000:20000),
+    ...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
   const body=await response.json();
   if(!response.ok)throw Object.assign(new Error(body.error || '分析実験を実行できませんでした'),{status:response.status});
   return body;
@@ -32,6 +40,7 @@ function updateControls() {
   save.disabled=busy || refreshRequired || !changed;
   compare.disabled=busy || refreshRequired || !state?.equipped.character_id || Boolean(changed);
   historical.disabled=compare.disabled || !state.policies.some(rule=>state.equipped.visible_kinds.includes(rule.kind_id));
+  batch.disabled=historical.disabled || batchNeedsReload;
   reload.disabled=busy;
   for(const {focus,intensity} of controls) {
     focus.disabled=busy || refreshRequired;
@@ -49,6 +58,7 @@ function select(label,options,value) {
 }
 
 function renderSettings() {
+  batchNeedsReload=false;
   settings.replaceChildren();
   const saved=new Map(state.policies.map(policy=>[policy.kind_id,policy]));
   controls=state.kinds.map(({kind_id})=>{
@@ -124,10 +134,50 @@ function renderHistoricalComparison(report) {
   historicalResult.hidden=false;
 }
 
+const batchMetrics=[['brier','Brierスコア（低いほど誤差が小さい）',''],
+  ['profit_coins','仮想損益','コイン'],['max_drawdown_pct','最大下落率','%']];
+
+function renderBatchComparison(report) {
+  const {coverage,market,downside}=report;
+  if(report.scope!=='ACCESSORY_RULES_HISTORICAL_LOCAL_NONOVERLAP_V1' || report.holdout_evaluated!==false ||
+     report.read_only!==true || report.weighting!=='equal_per_window' ||
+     market?.source_origin!=='LOCAL_JPX_REPORT_CACHE_2024' || market.adjusted!==false) {
+    throw Object.assign(new Error('ローカルの一括比較結果を確認できませんでした。'),{status:503});
+  }
+  $('batch-coverage').textContent=`${coverage.codes}銘柄・${coverage.selected_windows}期間（重なる候補は${coverage.eligible_windows}件）。全体の日付範囲は${coverage.period_start}〜${coverage.period_end}。出典は${market.source}（未調整）。`;
+  $('batch-warning').textContent=report.notice+' '+market.warning;
+  $('batch-signals').textContent=`シグナルが異なった日数は、各期間を合計して${report.signal_comparisons}日のうち${report.different_signals}日です。`;
+  $('batch-rules').textContent=appliedRules(report);
+  const cards=$('batch-metrics');
+  cards.replaceChildren();
+  for(const [key,label,unit] of batchMetrics) {
+    const metric=report.metrics[key];
+    const article=document.createElement('article');
+    const title=document.createElement('h4');
+    title.textContent=label;
+    const means=document.createElement('p');
+    means.textContent=`平均（各期間を同じ重みで集計） 基準 ${formatMetric.format(metric.baseline_mean)}${unit} ／ 候補 ${formatMetric.format(metric.candidate_mean)}${unit}`;
+    const counts=document.createElement('p');
+    counts.textContent=`候補が良い ${metric.wins} ／ 同じ ${metric.ties} ／ 悪い ${metric.losses}`;
+    article.append(title,means,counts);
+    cards.append(article);
+  }
+  $('batch-downside').textContent=`全期間で最も大きな下落率は基準 ${downside.baseline.max_drawdown_pct}% ／ 候補 ${downside.candidate.max_drawdown_pct}%。最も低い仮想損益は基準 ${downside.baseline.worst_profit_coins}コイン ／ 候補 ${downside.candidate.worst_profit_coins}コイン。`;
+  $('batch-codes').replaceChildren(...report.by_code.map(({code,windows,metrics})=>{
+    const item=document.createElement('li');
+    const means=batchMetrics.map(([key,label,unit])=>`${label} ${formatMetric.format(metrics[key].baseline_mean)}${unit} → ${formatMetric.format(metrics[key].candidate_mean)}${unit}`);
+    item.textContent=`${code}（${windows}期間、基準 → 候補） ${means.join(' ／ ')}`;
+    return item;
+  }));
+  batchResult.hidden=false;
+}
+
 function clearResults() {
   result.hidden=true;
   historicalResult.hidden=true;
   historicalStatus.textContent='';
+  batchResult.hidden=true;
+  batchStatus.textContent='';
 }
 
 function comparisonContext() {
@@ -190,4 +240,31 @@ historical.addEventListener('click',()=>{
     historicalStatus.textContent='過去株価の比較が完了しました。';
   },historicalStatus);
 });
+batch.addEventListener('click',()=>{
+  if(batch.disabled)return;
+  batchResult.hidden=true;
+  batchPending=true;
+  const epoch=++batchEpoch;
+  void run('ローカルの過去株価で一括比較しています…',async()=>{
+    try {
+      const report=await request('/batch-history',comparisonContext());
+      if(epoch!==batchEpoch)return;
+      renderBatchComparison(report);
+      batchStatus.textContent='過去株価の一括比較が完了しました。';
+    } catch(error) {
+      if(epoch===batchEpoch)throw error;
+    } finally {batchPending=false;}
+  },batchStatus);
+});
+
+function clearBatchOnDeparture() {
+  if(!batchPending && batchResult.hidden)return;
+  batchEpoch++;
+  batchNeedsReload=true;
+  batchResult.hidden=true;
+  batchStatus.textContent='表示中のキャラと設定を再読込してから比較してください。';
+  updateControls();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearBatchOnDeparture();});
+window.addEventListener('pagehide',clearBatchOnDeparture);
 void load();

@@ -1,6 +1,6 @@
 /** Read-only evaluation of actual historical prices in a virtual simulator. */
 import {runSyntheticGame} from './practice.mjs';
-import {validateLabModel} from './model-lab.mjs';
+import {INDICATORS,validateLabModel} from './model-lab.mjs';
 
 const REGEX=/^mkt_[a-f0-9]{24}$/;
 const positive=value=>typeof value==='number'&&Number.isFinite(value)&&value>0;
@@ -85,4 +85,85 @@ export function compareLocalAccessoryHistory(payload,baseline,candidate,selectio
   return {...report,baseline:metrics(control),candidate:metrics(adjusted),
     scope:'ACCESSORY_RULES_HISTORICAL_LOCAL_12',read_only:true,persisted:false,coins_changed:false,order_placed:false,
     notice:'未調整の2024年終値から選んだ1期間の再現です。候補期間は互いに重なるため、独立した検証回数ではありません。分割や配当の影響が残ることがあります。独立した検証用データでの評価は行っていません。'};
+}
+
+const LOCAL_CODES=new Set(['40050','46890','47550','50200','72010','84100','85930','86040','94320','95010']);
+const BATCH_LIMIT=40;
+const DAY=86400000;
+
+function day2024(value) {
+  if(typeof value!=='string' || !/^2024-\d{2}-\d{2}$/.test(value))throw fail();
+  const date=Date.parse(value);
+  if(!Number.isFinite(date) || new Date(date).toISOString().slice(0,10)!==value)throw fail();
+  return date/DAY;
+}
+
+function modelMatches(data,expected) {
+  return data?.risk_fraction===expected.risk_fraction && INDICATORS.every(key=>
+    data.plugin_weights?.[key]===expected.plugin_weights[key] && data.plugin_strengths?.[key]===expected.plugin_strengths[key]);
+}
+
+function summarizeWindows(windows) {
+  const result={};
+  for(const [key,direction] of [['brier',-1],['profit_coins',1],['max_drawdown_pct',-1]]) {
+    let baseline=0,candidate=0,wins=0,ties=0,losses=0;
+    for(const pair of windows) {
+      const before=pair.baseline[key],after=pair.candidate[key];
+      baseline+=before;
+      candidate+=after;
+      if(after===before)ties++;
+      else if((after-before)*direction>0)wins++;
+      else losses++;
+    }
+    const mean=total=>Number((total/windows.length).toFixed(6));
+    result[key]={baseline_mean:mean(baseline),candidate_mean:mean(candidate),wins,ties,losses};
+  }
+  return result;
+}
+
+export function compareLocalAccessoryBatch(payload,baseline,candidate) {
+  if(payload?.schema!==1 || !Array.isArray(payload.windows) || payload.windows.length!==payload.selected_windows ||
+     payload.windows.length<1 || payload.windows.length>BATCH_LIMIT || !Number.isSafeInteger(payload.eligible_windows) ||
+     payload.eligible_windows<payload.windows.length || payload.eligible_windows>LOCAL_CODES.size*(366-35))throw fail();
+
+  const ids=new Set(),byCode=new Map(),reports=[];
+  for(const raw of payload.windows) {
+    const plan=raw?.plan;
+    const models=plan?.models;
+    if(!LOCAL_CODES.has(raw?.code) || typeof raw.market_id!=='string' || raw.market_id.length!==28 || ids.has(raw.market_id) ||
+       raw.eligible_windows!==payload.eligible_windows || plan?.initial_price!==100 ||
+       !modelMatches(models?.owl,baseline) || !modelMatches(models?.turtle,baseline) || !modelMatches(models?.mine,candidate) ||
+       models.owl.effective_sha256!==models.turtle.effective_sha256 || raw.brier?.owl!==raw.brier?.turtle ||
+       !Array.isArray(plan.signals) || !plan.signals.every(row=>row?.owl===row?.turtle))throw fail();
+    const start=day2024(raw.start_date),historyEnd=day2024(raw.history_end_date),end=day2024(raw.end_date);
+    if(historyEnd-start<23 || end-historyEnd<12)throw fail();
+    const first=reports[0],previous=reports.at(-1)?.market;
+    if(previous && (previous.code>raw.code || (previous.code===raw.code && raw.start_date<=previous.period_end)))throw fail();
+    const report=compareLocalAccessoryHistory(raw,baseline,candidate,{});
+    if(report.market.source!=='SoftHompo-reformatted JPX daily reports (2024)' ||
+       (first && (first.market.warning!==report.market.warning || first.baseline.effective_sha256!==report.baseline.effective_sha256 ||
+         first.candidate.effective_sha256!==report.candidate.effective_sha256 || first.base_sha256!==plan.model_sha256)))throw fail();
+    ids.add(raw.market_id);
+    reports.push({...report,base_sha256:plan.model_sha256});
+    if(!byCode.has(raw.code))byCode.set(raw.code,[]);
+    byCode.get(raw.code).push(report);
+  }
+  const first=reports[0];
+  const coverage={eligible_windows:payload.eligible_windows,selected_windows:reports.length,codes:byCode.size,
+    period_start:reports.map(row=>row.market.period_start).sort()[0],period_end:reports.map(row=>row.market.period_end).sort().at(-1),
+    lookback_days:first.market.lookback_days,simulation_days:first.market.simulation_days};
+  const downside=slot=>({max_drawdown_pct:Math.max(...reports.map(pair=>pair[slot].max_drawdown_pct)),
+    worst_profit_coins:Math.min(...reports.map(pair=>pair[slot].profit_coins))});
+  const model=slot=>({parameters:first[slot].parameters,effective_sha256:first[slot].effective_sha256});
+  return {scope:'ACCESSORY_RULES_HISTORICAL_LOCAL_NONOVERLAP_V1',mode:'HISTORICAL_MARKET_REPLAY_ONLY',
+    read_only:true,holdout_evaluated:false,trained:false,live_market:false,real_market_history:true,
+    comparison_only:true,save_performed:false,persisted:false,xp_awarded:false,coins_changed:false,order_placed:false,
+    market:{source_origin:first.market.source_origin,source:first.market.source,adjusted:false,warning:first.market.warning},
+    coverage,weighting:'equal_per_window',selection:'earliest_full_window_per_code',
+    baseline:model('baseline'),candidate:model('candidate'),metrics:summarizeWindows(reports),
+    downside:{baseline:downside('baseline'),candidate:downside('candidate')},
+    different_signals:reports.reduce((sum,pair)=>sum+pair.difference.different_signals,0),
+    signal_comparisons:reports.length*coverage.simulation_days,
+    by_code:[...byCode].map(([code,windows])=>({code,windows:windows.length,metrics:summarizeWindows(windows)})),
+    notice:'各銘柄の24＋12営業日は重複しません。異なる銘柄は同じ市場や日程を共有し、統計的に独立していません。再現する12日間も含めて15%を超える前日比の変動などを除外するため、選択に偏りがあり得ます。独立した検証用データでの評価や学習は行っていません。'};
 }

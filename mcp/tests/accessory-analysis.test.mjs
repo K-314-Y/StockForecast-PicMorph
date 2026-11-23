@@ -11,6 +11,7 @@ import {ACCESSORY_ANALYSIS_API as API,createAccessoryAnalysisStore} from '../../
 import {createCharacterEquipmentStore} from '../../game_runtime/character-equipment.mjs';
 import {createIndependentPartReader} from '../../game_runtime/independent-part-reader.mjs';
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
+import {compareLocalAccessoryBatch} from '../../game_runtime/historical-market.mjs';
 import {validateLabModel} from '../../game_runtime/model-lab.mjs';
 
 const run=promisify(execFile);
@@ -602,17 +603,193 @@ exec ${python} "$@"
   const input={base_model:base,models:{mine:{...base,plugin_weights:target},owl:base,turtle:base},selection:{}};
   const entry=new URL('../../game_runtime/server.mjs',import.meta.url);
   const {stdout}=await run(process.execPath,['--input-type=module','-e',`
-import {pythonHistoricalPredict} from ${JSON.stringify(entry.href)};
-console.log(JSON.stringify(await pythonHistoricalPredict(JSON.parse(process.argv[1]),{source:'local'})));
+import {pythonHistoricalPredict,pythonMarketBatchPredict} from ${JSON.stringify(entry.href)};
+const {selection,...batchInput}=JSON.parse(process.argv[1]);
+const result=await pythonHistoricalPredict({...batchInput,selection},{source:'local'});
+const batch=await pythonMarketBatchPredict(batchInput);
+console.log(JSON.stringify({result,batch}));
 `,JSON.stringify(input)],{env:{PATH:root+':'+process.env.PATH,CREATURE_MARKET_HISTORY_PATH:prices,
     CREATURE_MARKET_SOURCE:'jquants',CREATURE_JQUANTS_API_KEY:'fixture-key',HTTPS_PROXY:'fixture-proxy',PYTHONPATH:'fixture-python-path'},
     timeout:18000,maxBuffer:65536});
-  const result=JSON.parse(stdout);
+  const {result,batch}=JSON.parse(stdout);
   assert.equal(result.source_origin,'LOCAL_JPX_REPORT_CACHE_2024');
   assert.equal(result.adjusted,false);
   assert.equal(result.eligible_windows,7);
   assert.ok(Number.isFinite(result.brier.mine) && Number.isFinite(result.brier.owl));
   assert.notEqual(result.plan.models.mine.effective_sha256,result.plan.models.owl.effective_sha256);
+  assert.equal(batch.eligible_windows,7);
+  assert.equal(batch.selected_windows,1);
+  assert.equal(batch.windows[0].start_date,'2024-01-04');
+  assert.equal(batch.windows[0].source_origin,'LOCAL_JPX_REPORT_CACHE_2024');
   assert.deepEqual(await readFile(prices),before);
   assert.deepEqual((await readdir(root)).sort(),['prehistory.json','python3']);
+});
+
+const BATCH_HISTORY=API+'/batch-history';
+const batchModels={base_model:base,models:{mine:{...base,plugin_weights:target},owl:base,turtle:base}};
+
+async function batchFixture() {
+  const first=await historicalFixture({...batchModels,selection:{replay_id:windowA}});
+  const rows=[
+    [windowA,'40050','2024-01-01','2024-01-24','2024-02-05',110,.6,.5,true],
+    [windowB,'40050','2024-02-06','2024-03-01','2024-03-13',90,.8,.9,true],
+    ['mkt_'+'c'.repeat(24),'46890','2024-01-01','2024-01-24','2024-02-05',103,.7,.7,false],
+  ];
+  return {schema:1,eligible_windows:694,selected_windows:rows.length,
+    windows:rows.map(([market_id,code,start_date,history_end_date,end_date,price,before,after,trade])=>({
+      ...first,market_id,code,start_date,history_end_date,end_date,
+      source:'SoftHompo-reformatted JPX daily reports (2024)',
+      brier:{owl:before,turtle:before,mine:after},
+      plan:{...first.plan,models:structuredClone(first.plan.models),initial_price:100,future_prices:Array(12).fill(price),
+        signals:Array.from({length:12},(_,day)=>({owl:'CASH',turtle:'CASH',mine:day===0&&trade?'LONG':'CASH'}))},
+    }))};
+}
+
+test('historical batch verifies whole sorted disjoint windows and returns paired means and downside',async()=>{
+  const data=await batchFixture();
+  const report=compareLocalAccessoryBatch(data,base,batchModels.models.mine);
+  assert.deepEqual(report.coverage,{codes:2,selected_windows:3,eligible_windows:694,
+    period_start:'2024-01-01',period_end:'2024-03-13',lookback_days:24,simulation_days:12});
+  assert.equal(report.weighting,'equal_per_window');
+  assert.deepEqual(report.metrics.brier,{baseline_mean:.7,candidate_mean:.7,wins:1,ties:1,losses:1});
+  assert.deepEqual(report.metrics.profit_coins,{baseline_mean:0,candidate_mean:-4.666667,wins:1,ties:1,losses:1});
+  assert.equal(report.metrics.max_drawdown_pct.losses,2);
+  assert.equal(report.metrics.max_drawdown_pct.ties,1);
+  assert.equal(report.downside.candidate.worst_profit_coins,-356.65);
+  // Both execution fees leave 9,643.35 of 10,000. The 3.5665% decline rounds to even.
+  assert.equal(report.downside.candidate.max_drawdown_pct,3.566);
+  assert.equal(report.different_signals,2);
+  assert.equal(report.signal_comparisons,36);
+  assert.deepEqual(report.by_code.map(row=>[row.code,row.windows,row.metrics.profit_coins.candidate_mean]),
+    [['40050',2,-7],['46890',1,0]]);
+  assert.match(report.notice,/12日間も含めて15%.*偏り/);
+  assert.match(report.notice,/同じ市場や日程を共有/);
+  assert.ok(!/future_prices|equity_path|market_id|"signals"|"windows":\[/.test(JSON.stringify(report)));
+
+  for(const corrupt of [
+    batch=>batch.windows.pop(),
+    batch=>{batch.windows=[];batch.selected_windows=0;},
+    batch=>{batch.selected_windows=41;batch.windows=Array(41).fill(batch.windows[0]);},
+    batch=>batch.windows.reverse(),
+    ({windows})=>{windows[1].market_id=windows[0].market_id;},
+    ({windows})=>{windows[1].start_date=windows[0].end_date;},
+    ({windows})=>{windows[1].history_end_date='2024-02-31';},
+    ({windows})=>{windows[1].code='99999';},
+    ({windows})=>{windows[1].eligible_windows=693;},
+    ({windows})=>{windows[1].source_origin='JQUANTS_API_V2_CACHE';},
+    ({windows})=>{windows[1].source='different provenance';},
+    ({windows})=>{windows[1].source_warning='different warning';},
+    ({windows})=>{windows[1].adjusted=true;},
+    ({windows})=>{windows[1].plan.initial_price=99;},
+    ({windows})=>{windows[1].plan.models.mine.effective_sha256='a'.repeat(64);},
+    ({windows})=>{windows[1].plan.models.mine.plugin_weights=base.plugin_weights;},
+    ({windows})=>{windows[1].plan.signals[0].turtle='LONG';},
+    ({windows})=>{windows[1].brier.mine=3;},
+  ]) {
+    const modified=structuredClone(data);
+    corrupt(modified);
+    assert.throws(()=>compareLocalAccessoryBatch(modified,base,batchModels.models.mine),{status:503});
+  }
+});
+
+test('batch HTTP requires strict local origin and current equipped rules, and exposes only read-only aggregates',async t=>{
+  const {start,cp,part,local,snapshot,baselineSnapshot,equipment}=await fixture(t);
+  const data=await batchFixture();
+  let historyCalls=0,modelReads=0,fail;
+  const api=await start({loadSnapshot:async()=>{modelReads++;return snapshot;},
+    historicalBatchPredict:async (input,{signal})=>{
+      historyCalls++;
+      assert.deepEqual(input,batchModels);
+      assert.ok(signal instanceof AbortSignal);
+      if(fail==='missing')throw Error('synthetic private path');
+      if(fail==='forged')return {...data,selected_windows:999};
+      return data;
+    }});
+  const initial=compareInput(await api.get().then(r=>r.json()));
+  const send=(input=initial,headers={})=>api.post(input,BATCH_HISTORY,headers);
+  for(const bad of [null,[],{}, {...initial,source:'jquants'}, {...initial,code:'40050'},
+    {...initial,weights:target},{...initial,start_date:'2024-01-01'},
+    {...initial,replay_id:windowA},{...initial,exclude_id:windowB},{...initial,expected_revision:true}])
+    assert.equal((await send(bad)).status,400);
+  for(const headers of [{Origin:'https://outside.invalid'},{Origin:api.origin.replace('127.0.0.1','localhost')},{'Sec-Fetch-Site':'cross-site'}])
+    assert.equal((await send(initial,headers)).status,403);
+  const noOrigin=await fetch(api.origin+BATCH_HISTORY,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(initial)});
+  assert.equal(noOrigin.status,403);
+  const wrongHost=await new Promise((resolve,reject)=>{
+    const outbound=request(api.origin+BATCH_HISTORY,{method:'POST',headers:{Host:'outside.invalid',Origin:api.origin}},res=>{
+      res.resume();resolve(res.statusCode);
+    });
+    outbound.once('error',reject);
+    outbound.end();
+  });
+  assert.equal(wrongHost,403);
+  assert.equal((await api.get(BATCH_HISTORY)).status,404);
+  assert.equal((await api.post(initial,BATCH_HISTORY+'?source=local')).status,404);
+  assert.equal(modelReads,0);
+  assert.equal((await send()).status,422);
+  const context=await practiceContext(api);
+  assert.equal((await send(initial)).status,409);
+  assert.equal(historyCalls,0);
+
+  const paths=[join(local,'accessory_analysis','analysis.json'),join(local,'character_equipment',cp+'.json'),
+    join(local,'independent_parts',part.part_id,'part.png')];
+  const before=await Promise.all(paths.map(path=>readFile(path)));
+  const response=await send(context);
+  const report=await response.json();
+  assert.equal(response.status,200,JSON.stringify(report));
+  assert.equal(response.headers.get('cache-control'),'no-store');
+  assert.equal(response.headers.get('cross-origin-resource-policy'),'same-origin');
+  assert.equal(response.headers.get('access-control-allow-origin'),null);
+  assert.equal(report.scope,'ACCESSORY_RULES_HISTORICAL_LOCAL_NONOVERLAP_V1');
+  assert.equal(report.market.source_origin,'LOCAL_JPX_REPORT_CACHE_2024');
+  assert.equal(report.market.adjusted,false);
+  assert.equal(report.read_only,true);
+  assert.equal(report.weights_changed,true);
+  assert.equal(report.effective_hash_changed,true);
+  for(const flag of ['trained','live_market','holdout_evaluated','persisted','save_performed','xp_awarded','coins_changed','order_placed'])
+    assert.equal(report[flag],false);
+  assert.deepEqual(report.provenance.applied_rules,[pin]);
+  assert.equal(report.coverage.selected_windows,3);
+  assert.deepEqual(await Promise.all(paths.map(path=>readFile(path))),before);
+  assert.equal(JSON.stringify(snapshot),baselineSnapshot);
+
+  fail='missing';
+  const unavailable=await send(context);
+  assert.equal(unavailable.status,503);
+  assert.match((await unavailable.json()).error,/ローカルの2024年株価データを読み込めない/);
+  fail='forged';
+  const forged=await send(context);
+  assert.equal(forged.status,503);
+  assert.ok(!Object.hasOwn(await forged.json(),'metrics'));
+  await equipment.save(cp,{expected_revision:1,parts:[{...part,visible:false}]});
+  assert.equal((await send({...context,equipment_revision:2})).status,422);
+  await equipment.save(cp,{expected_revision:2,parts:[{...part,image_sha256:'0'.repeat(64)}]});
+  assert.equal((await send({...context,equipment_revision:3})).status,422);
+  assert.equal(historyCalls,3);
+});
+
+test('batch HTTP rejects policy, equipment, active character, companion and model changes during computation',async t=>{
+  const {start,cp,part,active,companion,equipment,snapshot}=await fixture(t);
+  const setup=await start();
+  const expected=await practiceContext(setup);
+  const report=await batchFixture();
+  let mutate;
+  const api=await start({loadSnapshot:async()=>({...snapshot}),historicalBatchPredict:async()=>{
+    await mutate();
+    return report;
+  }});
+  for(const change of [
+    ()=>{active.active_demo_id='cp_'+'b'.repeat(32);active.revision++;},
+    ()=>equipment.save(cp,{expected_revision:1,parts:[{...part,x:1}]}),
+    async()=>assert.equal((await setup.post({expected_revision:1,policies:[{...pin,intensity:2}]})).status,200),
+    ()=>{snapshot.source_revision++;},
+    ()=>{companion.revision++;},
+  ]) {
+    mutate=change;
+    const response=await api.post(expected,BATCH_HISTORY);
+    assert.equal(response.status,409,await response.text());
+    active.active_demo_id=cp;
+    Object.assign(expected,compareInput(await setup.get().then(r=>r.json())));
+  }
 });
