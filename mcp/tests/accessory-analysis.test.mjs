@@ -107,3 +107,29 @@ test('browser cannot submit an accessory override to quick-practice',async()=>{
     }
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+
+test('the offline accessory benchmark reproduces fixed scenarios without real market or user data',async()=>{
+  const {execFileSync}=await import('node:child_process');
+  const benchmark=fileURLToPath(new URL('../../scripts/benchmark-accessory-ai.mjs',import.meta.url));
+  const run=set=>JSON.parse(execFileSync(process.execPath,[benchmark,'--count','8','--set',set],
+    {encoding:'utf8',timeout:20000}));
+  const main=run('main'),repeat=run('main'),heldout=run('holdout');
+  assert.deepEqual(repeat,main,'predeclared synthetic scenario replays must be deterministic');
+  assert.equal(main.mode,'SYNTHETIC_12_DAY_GAME_ONLY');
+  assert.equal(main.scenarios,8);
+  assert.equal(main.plans,48);
+  assert.equal(main.initialCoins,1000);
+  assert.equal(main.riskFraction,.35);
+  assert.equal(main.feeRate,.001);
+  assert.equal(main.pricesMatched,true);
+  assert.equal(main.modelParametersMatched,true);
+  assert.equal(main.firstDecisionsIndependentOfFuture,true);
+  assert.deepEqual(Object.keys(main.results),['standard','star','glasses','ribbon','none','triple']);
+  assert.equal(heldout.set,'holdout');
+  assert.equal(heldout.plans,48);
+  assert.notDeepEqual(main.results,heldout.results,'held-out tokens must produce different outcome sets');
+  for(const result of Object.values(main.tripleComparisons)){
+    assert.equal(result.tripleBetter+result.tied+result.tripleWorse,8);
+  }
+});
