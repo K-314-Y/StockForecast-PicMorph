@@ -608,6 +608,10 @@ let busy = false;
 let touched = false;
 const amountField = element('quickAmount');
 const modelField = element('quickModel');
+const linkedModelIds=new URLSearchParams(location.search).getAll('model');
+const linkedModelId=linkedModelIds[0];
+let initialZipId=linkedModelIds.length===1 && linkedModelId.length===36 &&
+  /^zip_[a-f0-9]{32}$/.test(linkedModelId) ? linkedModelId : null;
 let zipCharacters = [];
 function showLinkedZip() {
   const record=zipCharacters.find(item=>item.id===modelField.value);
@@ -795,17 +799,28 @@ async function loadModels() {
       option.textContent=item.name;
       modelField.append(option);
     }
-    modelField.value=next.some(x=>x.id===prior)?prior:'self';
+    // Only a successful ZIP listing can resolve the link.
+    const requestedZipId=importedWarning ? null : initialZipId;
+    if(!importedWarning)initialZipId=null;
+    const linkedZipFound=registeredIds.has(requestedZipId);
+    const preservedId=next.some(item=>item.id===prior) ? prior : 'self';
+    modelField.value=linkedZipFound ? requestedZipId : preservedId;
     showLinkedZip();
     if(replay && replayZipId===modelField.value)syncMini();
     // A refreshed model may have different settings under the same ID.
     resetAccessoryControl();
     if(prior && prior!==modelField.value)clearReplay();
     if(compareBase)refreshCompareModels();
-    statusField.textContent=(next.length>1 ?
-      '自作AIと、登録済み・解放済みのAIから選べます。' :
-      '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。')+
-      (importedWarning ? ' ZIPキャラ一覧の読み込みには失敗しました。' : '');
+    if(requestedZipId) {
+      statusField.textContent=linkedZipFound ?
+        'リンク先のZIPキャラのAIを選びました。' :
+        'リンク先のZIPキャラが見つかりません。練習に使うAIを選んでください。';
+    } else {
+      statusField.textContent=(next.length>1 ?
+        '自作AIと、登録済み・解放済みのAIから選べます。' :
+        '自分のAIで始められます。他人のAIは「詳しい機能」のショップで解放できます。')+
+        (importedWarning ? ' ZIPキャラ一覧の読み込みには失敗しました。' : '');
+    }
   } catch {
     if(epoch!==modelListEpoch)return;
     clearFreeChatGPT();
@@ -829,6 +844,7 @@ element('quickForm').addEventListener('submit',event=>{
   if(leverage===null){errorField.textContent='倍率は1〜25の整数を選んでください。';leverageField.focus();return;}
   const option=modelField.selectedOptions[0];
   if(!option) return;
+  initialZipId=null;
   pending={amount,leverage,model_id:modelField.value,model_name:option.textContent};
   element('quickReviewText').textContent=
     'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
@@ -856,8 +872,16 @@ element('quickEdit').addEventListener('click',()=>{
 amountField.addEventListener('input',()=>{resetAccessoryControl();resetReview();});
 amountField.addEventListener('change',()=>resetAccessoryControl());
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
-modelField.addEventListener('change',()=>{resetAccessoryControl();resetReview();showLinkedZip();});
-modelField.addEventListener('input',()=>resetAccessoryControl());
+modelField.addEventListener('change',()=>{
+  initialZipId=null;
+  resetAccessoryControl();
+  resetReview();
+  showLinkedZip();
+});
+modelField.addEventListener('input',()=>{
+  initialZipId=null;
+  resetAccessoryControl();
+});
 window.addEventListener('focus',()=>{if(!busy)void loadModels();});
 leverageField.addEventListener('change',()=>{resetAccessoryControl();showLeverageInfo();resetReview();});
 leverageField.addEventListener('input',()=>resetAccessoryControl());

@@ -669,7 +669,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         // ZIP-owned characters appear alongside licensed models, without changing
         // shop ownership, prices, XP or the existing forecast engine.
         let imported_characters=[],imported_characters_error=false;
-        try {imported_characters=(await importedCharacterStore.list()).characters;}
+        try {imported_characters=(await importedCharacterStore.list({readOnly:true})).characters;}
         catch {imported_characters_error=true;}
         return json(res,200,{...shop,imported_characters,imported_characters_error});
       }catch{return json(res,503,{error:'ショップ情報を読み込めません'});}

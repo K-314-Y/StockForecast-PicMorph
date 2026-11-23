@@ -32,6 +32,8 @@ const zipLookFields=['zipHairStyle','zipExpression'];
 const characterEndpoint='/api/imported-characters';
 const mainTransferEndpoint='/api/main-character-transfer';
 const mainCharacterPicker=$('mainCharacter');
+const zipGameLink=$('zipGameLink');
+const zipGameAnchor=zipGameLink.querySelector('a');
 const accessoryEndpoint=characterEndpoint+'/accessories';
 const methodLabels={
   bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',
@@ -72,7 +74,12 @@ function release(bundle) {
   if (!bundle) return;
   for (const bitmap of new Set(Object.values(bundle.images))) bitmap.close();
 }
+function clearZipGameLink() {
+  zipGameLink.hidden=true;
+  zipGameAnchor.removeAttribute('href');
+}
 function resetPack() {
+  clearZipGameLink();
   editLoad?.abort();
   editLoad=null;
   if(mainZipLoad) {
@@ -389,6 +396,7 @@ function inspect(images, frames) {
 }
 async function loadPack(isSample) {
   if (busy || visualEdit) return;
+  clearZipGameLink();
   currentZipFiles = null;
   clearZipEquipment();
   $('registerZip').disabled = true;
@@ -487,6 +495,7 @@ function displayLoaded(next,frames,offsets){
 }
 async function loadGeneratedSheets(){
   if(busy||visualEdit)return;
+  clearZipGameLink();
   currentZipFiles=null;
   clearZipEquipment();
   $('registerZip').disabled=true;
@@ -799,7 +808,6 @@ async function importCharacterZip(file){
   currentZipFiles=null;
   clearZipEquipment();
   $('registerZip').disabled=true;
-  $('zipGameLink').hidden=true;
   $('zipRegisterStatus').textContent='新しいZIPを確認しています。登録はまだしていません。';
   const myEpoch=++epoch;
   const temp={};
@@ -892,6 +900,7 @@ async function refreshMainCharacters() {
 async function loadMainCharacter() {
   const id=mainCharacterPicker.value;
   if($('loadMainCharacter').disabled || !validMainCharacterId(id))return;
+  clearZipGameLink();
   const feedback=$('mainTransferStatus');
   const controller=new AbortController();
   mainZipLoad=controller;
@@ -1216,6 +1225,7 @@ void loadEditPicker(openLinkedEdit?editId:undefined,openLinkedEdit);
 
 $('registerZip').addEventListener('click',async()=>{
   if($('registerZip').disabled||busy||visualEdit||!currentZipFiles)return;
+  clearZipGameLink();
   const name=$('zipName').value.trim();
   if(!name||[...name].length>16) {
     $('zipRegisterStatus').textContent='キャラ名は1〜16文字にしてください。';
@@ -1252,14 +1262,14 @@ $('registerZip').addEventListener('click',async()=>{
     });
     const record=await response.json();
     if(chosenEpoch!==epoch)return;
-    if(!response.ok||!/^zip_[0-9a-f]{32}$/.test(record.id)||record.ai_id!==record.id||
+    if(!response.ok||typeof record.id!=='string'||record.id.length!==36||
+       !/^zip_[0-9a-f]{32}$/.test(record.id)||record.ai_id!==record.id||
        record.source!=='ZIP_LOCAL'||record.model_origin!=='appearance_features'||
        record.trained!==false||!/^appearance-v1_/.test(record.model_version)||
        !record.model?.plugin_weights||!Number.isFinite(record.model.risk_fraction))
       throw Error(record.error||'外見からのAI作成結果を確認できません。');
     currentZipFiles=null; // one explicit registration per ZIP selection
     renderEquipment('');
-    $('zipGameLink').hidden=false;
     const w=record.model.plugin_weights;
     const analysis=record.accessory_analysis;
     const builtin=builtinAccessories.get(analysis?.accessory);
@@ -1273,6 +1283,8 @@ $('registerZip').addEventListener('click',async()=>{
       '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+
       '%。外見の特徴で決まる新規モデルです（未学習・実株価未対応）。';
     status('ZIPの外見と予測AI設定が同じIDで登録されました。表情・位置・重ね絵も保存しました。');
+    zipGameAnchor.setAttribute('href','/game?'+new URLSearchParams({model:record.id}));
+    zipGameLink.hidden=false;
     void loadEditPicker(record.id);
   }catch(error){
     if(chosenEpoch===epoch)$('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;

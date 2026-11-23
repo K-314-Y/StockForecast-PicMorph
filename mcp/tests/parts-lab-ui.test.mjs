@@ -207,13 +207,20 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const red=[255,0,0,255];
       const saved=()=>page.waitForResponse(response=>response.url()===origin+'/api/imported-characters/register');
       const waitEnabled=()=>page.waitForFunction(()=>!document.getElementById('registerZip').disabled);
+      const gameLink=page.locator('#zipGameLink a');
+      const assertGameLinkCleared=async()=>{
+        assert.equal(await gameLink.isVisible(),false);
+        assert.equal(await gameLink.getAttribute('href'),null);
+      };
       const registerNow=async()=>{
         const response=saved();
         await register.click();
         const result=await response;
         assert.equal(result.status(),201,await result.text());
-        await page.locator('#zipGameLink').waitFor();
-        return result.json();
+        const record=await result.json();
+        await gameLink.waitFor();
+        assert.equal(await gameLink.getAttribute('href'),'/game?model='+record.id);
+        return record;
       };
       const cdp=await page.context().newCDPSession(page);
       const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{
@@ -390,6 +397,7 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await page.locator('#zipFrames').selectOption('6');
       await zipInput.setInputFiles(multiZip);
       await waitEnabled();
+      await assertGameLinkCleared();
       assert.match(await page.locator('#frameInfo').textContent(),/1 \/ 6/);
       await row(2).getByText('<b>手作り</b>',{exact:false}).waitFor();
       assert.equal(await row(2).locator('b').count(),0);
@@ -535,7 +543,8 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const result=await response;
       assert.equal(result.status(),201,await result.text());
       const created=await result.json();
-      await page.locator('#zipGameLink').waitFor();
+      await gameLink.waitFor();
+      assert.equal(await gameLink.getAttribute('href'),'/game?model='+created.id);
       assert.equal(created.accessory_analysis.equipped.length,3);
       const stored=JSON.parse(await readFile(join(importedRoot,created.id+'.json'),'utf8'));
       assert.equal(stored.visual.mood,'happy');
@@ -582,7 +591,9 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       await chooser.selectOption(created.id);
       await page.locator('#openVisualEdit').click();
       await page.waitForFunction(()=>window.finishRestoredOverlay);
+      await assertGameLinkCleared();
       await page.locator('#clear').click();
+      await assertGameLinkCleared();
       assert.match(await page.locator('#editStatus').textContent(),/中止/);
       await page.evaluate(()=>{
         window.holdRestoredOverlay=false;

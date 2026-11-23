@@ -380,11 +380,15 @@ export function createImportedCharacterStore({root=IMPORTED_CHARACTER_ROOT}={}) 
       await writeRecord(join(root,id+'.json'),record);
       return summary(record);
     },
-    async list() {
-      try {await ensureRoot();}catch(error){throw fail(error.message,503);}
+    async list({readOnly=false}={}) {
+      try {await ensureRoot(!readOnly);}
+      catch(error){
+        if(readOnly && error.code==='ENOENT')return {characters:[]};
+        throw fail(error.message,503);
+      }
       const entries=(await readdir(root)).filter(name=>/^zip_[a-f0-9]{32}\.json$/.test(name)).sort();
       const chars=[];
-      for(const filename of entries)chars.push(summary(await load(filename.slice(0,-5))));
+      for(const filename of entries)chars.push(summary(await load(filename.slice(0,-5),{},readOnly)));
       return {characters:chars};
     },
     async model(id,{readOnly=false}={}) {const record=await load(id,{},readOnly);return {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,readdir,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -29,11 +29,16 @@ async function listen(t,server) {
     server.once('error',reject);
     server.listen(0,'127.0.0.1',resolve);
   });
-  t.after(()=>new Promise(resolve=>{
-    server.close(resolve);
-    server.closeAllConnections();
-  }));
+  t.after(()=>closeServer(server));
   return server.address().port;
+}
+
+function closeServer(server) {
+  if(!server.listening)return;
+  return new Promise((resolve,reject)=>{
+    server.close(error=>error?reject(error):resolve());
+    server.closeAllConnections();
+  });
 }
 
 async function mockMain(t,page) {
@@ -82,7 +87,7 @@ async function isolatedDev(t,root,sourcePort) {
     ['audit74-fixture.mjs',fileURLToPath(new URL('./audit74-fixture.mjs',import.meta.url))],
   ]});
   const predictions=[];
-  const port=await listen(t,createGameServer({
+  const server=createGameServer({
     store,modelShopStore,importedCharacterStore,practiceEngineSourceGuard,
     companionStore:createCompanionStore({file:file('companion')}),
     lookStore:createLookStore({file:file('look')}),
@@ -107,9 +112,10 @@ async function isolatedDev(t,root,sourcePort) {
       ]));
       return {...roundingPlan(),models,model_sha256:sha256(JSON.stringify(input.base_model))};
     },
-  }));
+  });
+  const port=await listen(t,server);
   return {store,modelShopStore,importedCharacterStore,importedRoot,predictions,
-    origin:`http://127.0.0.1:${port}`};
+    origin:`http://127.0.0.1:${port}`,close:()=>closeServer(server)};
 }
 
 async function checkFlow(t,{liveMain=false}={}) {
@@ -133,7 +139,7 @@ async function checkFlow(t,{liveMain=false}={}) {
   const page=await context.newPage();
   const mock=liveMain?null:await mockMain(t,page);
   const sourcePort=mock?.port??8890;
-  const {origin,store,modelShopStore,importedCharacterStore,importedRoot,predictions}=
+  const {origin,store,modelShopStore,importedCharacterStore,importedRoot,predictions,close}=
     await isolatedDev(t,state,sourcePort);
   const sourceCatalog=async()=>{
     const response=await fetch(`http://127.0.0.1:${sourcePort}${catalogPath}`,{
@@ -152,18 +158,38 @@ async function checkFlow(t,{liveMain=false}={}) {
   if(mock)mock.requests.length=0;
 
   const external=[],pageErrors=[],posts=[];
+  const allowedOrigins=new Set([origin]);
   context.on('weberror',event=>pageErrors.push(event.error().message));
   await context.route('**/*',route=>{
     const request=route.request();
     const url=new URL(request.url());
-    if(url.origin!==origin) {external.push(url.href);return route.abort();}
+    if(!allowedOrigins.has(url.origin)) {external.push(url.href);return route.abort();}
     if(request.method()!=='GET')posts.push([request.method(),url.pathname]);
     return route.continue();
   });
   const respond=(tab,path,method='GET')=>tab.waitForResponse(response=>
     response.url()===origin+path && response.request().method()===method);
+  const gamePath=(...ids)=>'/game?'+new URLSearchParams(ids.map(id=>['model',id]));
+  const loadedStatus=(tab,message)=>tab.locator('#quickStatus').filter({hasText:message}).waitFor();
+  const checkHtml=response=>{
+    assert.equal(response.status(),200);
+    assert.match(response.headers()['content-type'],/^text\/html/);
+  };
+  const missingZip='リンク先のZIPキャラが見つかりません。';
+  const selectedZip='リンク先のZIPキャラのAIを選びました。';
+  const model=page.locator('#quickModel');
+  const details=page.locator('#quickZipDetails');
+
+  const unknownId='zip_'+'0'.repeat(32);
+  checkHtml(await page.goto(origin+gamePath(unknownId)));
+  await loadedStatus(page,missingZip);
+  assert.equal(await model.inputValue(),'self');
+  assert.deepEqual(await readdir(state),[]);
+  assert.deepEqual(posts,[]);
 
   await page.goto(origin+'/parts-lab/preview.html');
+  const gameLink=page.locator('#zipGameLink a');
+  assert.equal(await gameLink.getAttribute('href'),null);
   const picker=page.getByLabel('通常ゲームのキャラ',{exact:true});
   assert.equal(await picker.isDisabled(),true);
   assert.equal(await page.locator('#registerZip').isDisabled(),true);
@@ -197,6 +223,14 @@ async function checkFlow(t,{liveMain=false}={}) {
     await page.locator('#zipAccessory').selectOption(accessory);
     await page.locator('#zipEquip').click();
   }
+  await page.route(origin+registerPath,route=>route.fulfill({
+    status:503,json:{error:'登録できませんでした。'},
+  }),{times:1});
+  await page.locator('#registerZip').click();
+  await page.locator('#zipRegisterStatus').filter({hasText:'登録に失敗しました'}).waitFor();
+  assert.equal(await gameLink.isVisible(),false);
+  assert.equal(await gameLink.getAttribute('href'),null);
+  assert.deepEqual(await readdir(importedRoot),[]);
   const [registration]=await Promise.all([respond(page,registerPath,'POST'),
     page.locator('#registerZip').click()]);
   assert.equal(registration.status(),201,await registration.text());
@@ -220,24 +254,34 @@ async function checkFlow(t,{liveMain=false}={}) {
   const originalSha=sha256((await importedCharacterStore.image(created.id)).bytes);
   assert.equal(new URL(created.image_url,origin).searchParams.get('v'),originalSha);
 
-  const [initialModels]=await Promise.all([respond(page,'/api/model-shop'),
-    page.locator('#zipGameLink a').click()]);
-  await page.waitForURL(origin+'/game');
+  const deepLink=gamePath(created.id);
+  await gameLink.waitFor();
+  assert.equal(await gameLink.getAttribute('href'),deepLink);
+  const [gameResponse,initialModels]=await Promise.all([respond(page,deepLink),
+    respond(page,'/api/model-shop'),gameLink.click()]);
+  checkHtml(gameResponse);
+  await page.waitForURL(origin+deepLink);
   assert.equal(initialModels.status(),200,await initialModels.text());
-  assert.ok((await initialModels.json()).imported_characters.some(({id})=>id===created.id));
-  const model=page.locator('#quickModel');
-  await model.selectOption(created.id);
+  assert.deepEqual((await initialModels.json()).imported_characters.find(({id})=>id===created.id),created);
+  await loadedStatus(page,selectedZip);
+  assert.equal(await model.inputValue(),created.id);
   assert.equal(await model.locator(`option[value="${source.id}"]`).count(),0);
   const gamePortrait=page.locator('#quickZipPortrait');
   const replayPortrait=page.locator('#quickMiniPortrait');
-  const loadedPortrait=async(locator,url)=>{
+  const loadedPortrait=async(locator,url,base=origin)=>{
     await locator.waitFor();
     await page.waitForFunction(({id,url})=>{
       const img=document.getElementById(id);
       return img?.src===url && img.complete && img.naturalWidth>0;
-    },{id:await locator.getAttribute('id'),url:new URL(url,origin).href});
+    },{id:await locator.getAttribute('id'),url:new URL(url,base).href});
   };
   await loadedPortrait(gamePortrait,created.image_url);
+  const expectedDetails=await details.textContent();
+  assert.ok(expectedDetails.includes(created.name));
+  assert.match(expectedDetails,/星（ボリンジャーバンド.*眼鏡（RSI/);
+  assert.ok(expectedDetails.includes('資金使用率'+Math.round(created.model.risk_fraction*100)+'%'));
+  assert.deepEqual(posts,[['POST',registerPath]]);
+  assert.deepEqual(predictions,[]);
   await page.locator('#quickAmount').fill('2750');
   await page.locator('#quickLeverage').selectOption('3');
   await page.locator('#quickConfirm').click();
@@ -320,9 +364,56 @@ async function checkFlow(t,{liveMain=false}={}) {
   await page.locator('#quickSameScenario').check();
   assert.match(await page.locator('#quickScenarioNote').innerText(),/同じ架空相場での再挑戦/);
 
+  await model.selectOption('self');
+  const [manualRefresh]=await Promise.all([respond(page,'/api/model-shop'),
+    page.evaluate(()=>window.dispatchEvent(new Event('focus')))]);
+  assert.equal(manualRefresh.status(),200);
+  await loadedStatus(page,'登録済み・解放済みのAIから選べます。');
+  assert.equal(await model.inputValue(),'self');
+  assert.equal(await gamePortrait.getAttribute('src'),null);
+  await editor.close();
+
+  checkHtml(await page.goto(origin+gamePath(unknownId)));
+  await loadedStatus(page,missingZip);
+  assert.equal(await model.inputValue(),'self');
+  for(const ids of [['<b>無効</b>'],[created.id+'\n'],[created.id.toUpperCase()],
+    ['demo_trend'],['self'],[created.id,'self']]) {
+    checkHtml(await page.goto(origin+gamePath(...ids)));
+    await loadedStatus(page,'登録済み・解放済みのAIから選べます。');
+    assert.equal(await model.inputValue(),'self');
+    assert.equal(await gamePortrait.getAttribute('src'),null);
+  }
+  const modelShopUrl=origin+'/api/model-shop';
+  await page.route(modelShopUrl,route=>route.fulfill({
+    status:503,json:{error:'一覧を読み込めませんでした。'},
+  }));
+  checkHtml(await page.goto(origin+deepLink));
+  await loadedStatus(page,'モデル一覧を読み込めません。');
+  assert.equal(await model.inputValue(),'self');
+  await page.unroute(modelShopUrl);
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await loadedStatus(page,selectedZip);
+  assert.equal(await model.inputValue(),created.id);
+  await loadedPortrait(gamePortrait,updated.image_url);
+
   assert.deepEqual(await storeState(),beforePractice);
   assert.deepEqual(await readdir(state),['imported']);
   assert.deepEqual(await readdir(importedRoot),[created.id+'.json']);
+  const savedFile=join(importedRoot,created.id+'.json');
+  const savedBytes=await readFile(savedFile);
+  await close();
+  const restarted=await isolatedDev(t,state,sourcePort);
+  allowedOrigins.add(restarted.origin);
+  checkHtml(await page.goto(restarted.origin+deepLink));
+  await loadedStatus(page,selectedZip);
+  assert.equal(await model.inputValue(),created.id);
+  await loadedPortrait(gamePortrait,updated.image_url,restarted.origin);
+  assert.equal(await details.textContent(),expectedDetails);
+  assert.deepEqual(await restarted.importedCharacterStore.list(),{characters:[updated]});
+  assert.deepEqual(await restarted.importedCharacterStore.model(created.id,{readOnly:true}),originalModel);
+  assert.deepEqual(await readFile(savedFile),savedBytes);
+  assert.deepEqual(await readdir(state),['imported']);
+  assert.deepEqual(restarted.predictions,[]);
   assert.equal(sha256((await prepareMainCharacterZip(source.id,sourcePort)).zip),sourceZipSha);
   assert.deepEqual(await sourceRecord(),originalSource);
   assert.deepEqual(posts,[['POST',registerPath],['POST',practicePath],['POST',editPath]]);
@@ -331,7 +422,7 @@ async function checkFlow(t,{liveMain=false}={}) {
   assert.deepEqual(pageErrors,[]);
 }
 
-test('Chromium imports a MAIN avatar into DEV and preserves its synthetic practice while editing its portrait',
+test('Chromium deep-links to a new ZIP AI and preserves its model and equipment through visual edits and restart',
   {timeout:45_000},t=>checkFlow(t));
 
 test('Chromium smoke from the read-only MAIN bridge on 8890 into temporary DEV',
