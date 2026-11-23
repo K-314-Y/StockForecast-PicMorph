@@ -277,6 +277,13 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
 #quickAccessoryResult :is(th,td){padding:6px 4px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 #quickAccessoryResult thead th:first-child{width:15%}
 #quickAccessoryResult small{display:block;color:var(--soft);font-size:inherit}
+#quickAccessoryMultiRun{max-width:100%;white-space:normal;margin-block-start:8px}
+#quickAccessoryMultiResult table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.875rem}
+#quickAccessoryMultiResult :is(th,td){padding:5px 3px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+#quickAccessoryMultiResult thead th:first-child{width:16%}
+#quickAccessoryMultiResult thead th:last-child{width:22%}
+#quickAccessoryMultiResult td span{display:block}
+#quickAccessoryMultiResult tfoot{font-weight:700}
 @media(max-width:550px){
  .quick-accessory-fields{grid-template-columns:1fr}
  #quickAccessoryResult :is(th,td){padding-inline:3px}
@@ -492,7 +499,7 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
  <section id="quickAccessoryControl" class="quick-replay" aria-labelledby="quickAccessoryTitle">
   <h3 id="quickAccessoryTitle">アクセサリー分析だけ切り替える実験</h3>
   <p class="simple-hint">上で選んだ自分のAIまたは登録済みZIPのAIと、同じ試算額・倍率を使います。数値設定はこのキャラの保存設定のままです。12日間の架空価格をそろえ、A・Bで判断に使う補助分析を一つずつ切り替えます。</p>
-  <p class="simple-hint">登録済みZIPの装備はそのままです。見た目をもとに作成したZIPでは、元の装備を反映した分析比率も維持します。この実験では複数装備を組み合わせた分析は再現しません。架空相場1例の試算で、実際の注文は行いません。実際の収益や手法の性能順位は示せません。</p>
+  <p class="simple-hint">登録済みZIPの装備はそのままです。見た目をもとに作成したZIPでは、元の装備を反映した分析比率も維持します。この実験では複数装備を組み合わせた分析は再現しません。各12日間の架空相場の試算で、実際の注文は行いません。実際の収益や手法の性能順位は示せません。</p>
   <div class="simple-fields quick-accessory-fields">
    <label for="quickAccessoryA">Aの分析
     <select id="quickAccessoryA">
@@ -513,6 +520,17 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
   </div>
   <button id="quickAccessoryRun" type="button" aria-controls="quickAccessoryResult">実験する</button>
   <p id="quickAccessoryStatus" class="simple-hint" role="status"></p>
+  <button id="quickAccessoryMultiRun" type="button" aria-controls="quickAccessoryMultiResult" hidden disabled>同じ条件で3例追加する（計4例）</button>
+  <p id="quickAccessoryMultiStatus" class="simple-hint" hidden></p>
+  <div id="quickAccessoryMultiResult" hidden>
+   <table>
+    <caption>12日間の架空相場4例（初回＋追加3例）</caption>
+    <thead><tr><th scope="col">相場</th><th scope="col">仮想損益</th><th scope="col">最大下落率</th><th scope="col">判断相違日数</th></tr></thead>
+    <tbody id="quickAccessoryMultiRows"></tbody>
+    <tfoot id="quickAccessoryMultiSummary"></tfoot>
+   </table>
+   <p class="simple-hint">4例はすべて架空の相場です。実際の予測精度は測れず、手法の一般的な優位性を統計的に示すこともできません。強制終了後の判断も相違日数に含めますが、その判断は実行されず、損益にも反映されません。</p>
+  </div>
   <div id="quickAccessoryResult" hidden>
    <ul id="quickAccessorySummary"></ul>
    <table>

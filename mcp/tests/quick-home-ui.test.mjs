@@ -10,12 +10,12 @@ const selfFingerprint='a'.repeat(64);
 const otherFingerprint='b'.repeat(64);
 const engineFingerprint='c'.repeat(64);
 
-function accessoryReply(body){
+function accessoryReply(body,index=0){
   const arm=(accessory,model_effective_sha256,signal)=>({accessory,model_effective_sha256,
     daily_ai_signals:Array(12).fill(signal),profit_coins:12,max_drawdown_pct:3,liquidated_at_step:null});
   return {mode:'CONTROLLED_SYNTHETIC_ACCESSORY_ONLY',real_market:false,persisted:false,order_placed:false,
     xp_awarded:false,model_id:body.model_id,amount:body.amount,leverage:body.leverage,
-    scenario_token:'v1_0123456789abcdef',engine_source_sha256:engineFingerprint,
+    scenario_token:'v1_'+index.toString(16).padStart(16,'0'),engine_source_sha256:engineFingerprint,
     baseline_fingerprint:'d'.repeat(64),daily_synthetic_prices:Array.from({length:13},(_,i)=>100+i),
     a:arm(body.accessory_a,selfFingerprint,'LONG'),b:arm(body.accessory_b,otherFingerprint,'CASH')};
 }
@@ -24,6 +24,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
   const nodes=new Map(),calls=[],scrolls=[],storageWrites=[],copies=[];
   const downloads=[],objectUrls=new Map(),revokedUrls=[];
   let nextObjectUrl=0;
+  let accessoryCalls=0;
   let observeSource=()=>{};
   let document;
   class Element {
@@ -93,7 +94,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     }
   }
   document={getElementById:id=>nodes.get(id)||null,createElement:tag=>new Element(tag)};
-  const state={models,imported,accessory:async body=>accessoryReply(body),
+  const state={models,imported,accessory:async (body,options,index)=>accessoryReply(body,index),
     session:async()=>({connected:true,sharing:true}),dialogue:async()=>({status:'ok',commentary:'何を重視しましたか？'}),practice:async body=>({
     mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',real_market:false,persisted:false,order_placed:false,xp_awarded:false,
     scenario_token:body.scenario_token??'v1_0123456789abcdef',
@@ -124,7 +125,7 @@ async function mount(models=[],chatgpt=false,imported=[]) {
     if(path==='/api/accessory-control'){
       assert.equal(options.method,'POST');
       assert.equal(options.headers['Content-Type'],'application/json');
-      const value=await state.accessory(body,options);
+      const value=await state.accessory(body,options,accessoryCalls++);
       return {ok:!value?.error,status:value?.error?409:200,json:async()=>parseJson(JSON.stringify(value))};
     }
     assert.equal(path,'/api/quick-practice');
@@ -4774,10 +4775,210 @@ test('accessory experiment accepts matching judgments and rejects malformed resu
     assert.equal(get('quickAccessoryResult').hidden,true,damage.toString());
     assert.equal(get('quickAccessorySummary').children.length,0);
     assert.equal(get('quickAccessoryRows').children.length,0);
+    assert.equal(get('quickAccessoryMultiRun').hidden,true);
+    assert.equal(get('quickAccessoryMultiRun').disabled,true);
     assert.match(get('quickAccessoryStatus').textContent,/実験結果を確認できません/);
   }
   state.accessory=async()=>({error:'<img src=x onerror=alert(1)>'});
   await fire('quickAccessoryRun');
   assert.doesNotMatch(get('quickAccessoryStatus').textContent,/<img/);
   assert.deepEqual(storageWrites,[]);
+});
+
+const accessoryEndpoint='/api/accessory-control';
+const nextTurn=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('accessory aggregate runs only three sequential extra trials and reports four-case means and all 48 days',async()=>{
+  const {get,fire,calls,state,storageWrites}=await mount();
+  const button=get('quickAccessoryMultiRun'),result=get('quickAccessoryMultiResult');
+  const status=get('quickAccessoryMultiStatus'),rows=get('quickAccessoryMultiRows');
+  const summary=get('quickAccessoryMultiSummary');
+  const experiments=()=>calls.filter(call=>call.path===accessoryEndpoint);
+  const markup=html.split('<div id="quickAccessoryMultiResult" hidden>')[1].split('</div>')[0];
+  assert.match(markup,/<caption>12日間の架空相場4例（初回＋追加3例）<\/caption>/);
+  assert.match(markup,/仮想損益.*最大下落率.*判断相違日数/);
+  assert.match(markup,/4例はすべて架空.*実際の予測精度.*一般的な優位性を統計的.*強制終了後の判断も相違日数に含めますが、その判断は実行されず/);
+  assert.equal(button.hidden,true);
+  assert.equal(button.disabled,true);
+  assert.equal(result.hidden,true);
+  assert.equal(status.hidden,true);
+  await fire('quickAccessoryMultiRun');
+  await fire('quickForm','submit');
+  await fire('quickRun');
+  await fire('quickFollowing');
+  const replayDay=get('quickReplayDay').textContent;
+  assert.equal(experiments().length,0);
+
+  const pending=[];
+  state.accessory=async (body,options,index)=>{
+    const value=accessoryReply(body,index);
+    value.engine_source_sha256='e'.repeat(64);
+    value.baseline_fingerprint='f'.repeat(64);
+    value.a.model_effective_sha256='1'.repeat(64);
+    value.b.model_effective_sha256='2'.repeat(64);
+    value.daily_synthetic_prices=value.daily_synthetic_prices.map(price=>price+index*5);
+    Object.assign(value.a,{profit_coins:[12,-20,30,51][index],max_drawdown_pct:[3,8,12.5,4.5][index]});
+    Object.assign(value.b,{profit_coins:[-1000,17,-31,22][index],max_drawdown_pct:[100,4,5,7][index],
+      liquidated_at_step:index===0?2:null,
+      daily_ai_signals:Array.from({length:12},(_,day)=>day<[12,0,4,7][index]?'CASH':'LONG')});
+    return index===0?value:new Promise(resolve=>pending.push(()=>resolve(value)));
+  };
+  await fire('quickAccessoryRun');
+  assert.equal(button.hidden,false);
+  assert.equal(button.disabled,false);
+  await fire('quickAccessoryMultiRun','click',false);
+  assert.equal(experiments().length,1);
+  const running=fire('quickAccessoryMultiRun');
+  await fire('quickAccessoryMultiRun');
+  for(let index=0;index<3;index++){
+    assert.equal(pending.length,index+1);
+    assert.equal(experiments().length,index+2);
+    assert.equal(button.disabled,true);
+    assert.equal(result.hidden,true);
+    assert.equal(rows.children.length,0);
+    assert.equal(summary.children.length,0);
+    pending[index]();
+    await nextTurn();
+  }
+  await running;
+  const readRow=({children})=>[children[0].textContent,
+    ...children.slice(1,3).flatMap(cell=>cell.children.map(line=>line.textContent)),children[3].textContent];
+  assert.equal(result.hidden,false);
+  assert.deepEqual(rows.children.map(readRow),[
+    ['1','A 12 C','B -1,000 C','A 3%','B 100%','12/12日'],
+    ['2','A -20 C','B 17 C','A 8%','B 4%','0/12日'],
+    ['3','A 30 C','B -31 C','A 12.5%','B 5%','4/12日'],
+    ['4','A 51 C','B 22 C','A 4.5%','B 7%','7/12日'],
+  ]);
+  assert.ok(rows.children.every(row=>row.children[0].getAttribute('scope')==='row'));
+  assert.deepEqual(summary.children.map(readRow),[
+    ['平均／合計','A 18.25 C','B -248 C','A 7%','B 29%','23/48日'],
+  ]);
+  assert.equal(get('quickAccessoryRows').children.length,12);
+  assert.equal(button.disabled,true);
+  await fire('quickAccessoryMultiRun');
+  assert.deepEqual(experiments(),Array.from({length:4},()=>({path:accessoryEndpoint,
+    body:{model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:1}})));
+  assert.deepEqual(calls.map(({path})=>path),['/api/model-shop','/api/quick-practice',
+    accessoryEndpoint,accessoryEndpoint,accessoryEndpoint,accessoryEndpoint]);
+  assert.equal(get('quickReplay').hidden,false);
+  assert.equal(get('quickReplayDay').textContent,replayDay);
+  assert.deepEqual(storageWrites,[]);
+  await fire('quickTen');
+  assert.equal(button.hidden,true);
+  assert.equal(result.hidden,true);
+  assert.equal(rows.children.length,0);
+  assert.equal(summary.children.length,0);
+});
+
+test('accessory aggregate fails closed on duplicate trials, calculation drift, wrong responses and HTTP errors',async()=>{
+  for(const [label,index,damage] of [
+    ['duplicate initial token',1,(v,body)=>{v.scenario_token=accessoryReply(body,0).scenario_token;}],
+    ['duplicate extra token',3,(v,body)=>{v.scenario_token=accessoryReply(body,2).scenario_token;}],
+    ['engine drift',2,v=>{v.engine_source_sha256='e'.repeat(64);}],
+    ['baseline drift',2,v=>{v.baseline_fingerprint='e'.repeat(64);}],
+    ['A model SHA drift',3,v=>{v.a.model_effective_sha256='e'.repeat(64);}],
+    ['B model SHA drift',3,v=>{v.b.model_effective_sha256='e'.repeat(64);}],
+    ['wrong model',1,v=>{v.model_id='demo_one';}],
+    ['wrong amount',2,v=>{v.amount++;}],
+    ['wrong accessory',2,v=>{v.a.accessory='ribbon';}],
+    ['wrong leverage',3,v=>{v.leverage++;}],
+    ['bad price array',2,v=>{v.daily_synthetic_prices.pop();}],
+    ['bad signal array',3,v=>{v.b.daily_ai_signals.pop();}],
+    ['HTTP error',3,v=>{v.error='<img src=x onerror=alert(1)>'; }],
+    ['network error',2,()=>{throw Error('<img src=x onerror=alert(1)>');}],
+  ]){
+    const {get,fire,calls,state,storageWrites}=await mount();
+    state.accessory=async (body,options,callIndex)=>{
+      const value=accessoryReply(body,callIndex);
+      if(callIndex===index)damage(value,body);
+      return value;
+    };
+    await fire('quickAccessoryRun');
+    const initialRows=get('quickAccessoryRows').children;
+    const initialStatus=get('quickAccessoryStatus').textContent;
+    await fire('quickAccessoryMultiRun');
+    assert.equal(get('quickAccessoryMultiResult').hidden,true,label);
+    assert.equal(get('quickAccessoryMultiRows').children.length,0,label);
+    assert.equal(get('quickAccessoryMultiSummary').children.length,0,label);
+    assert.equal(get('quickAccessoryResult').hidden,false,label);
+    assert.equal(get('quickAccessoryRows').children,initialRows,label);
+    assert.equal(get('quickAccessoryStatus').textContent,initialStatus,label);
+    assert.equal(get('quickAccessoryMultiRun').disabled,true,label);
+    assert.equal(get('quickAccessoryMultiStatus').textContent,
+      '追加実験を完了できませんでした。再度試すには初回の実験から始めてください。',label);
+    await fire('quickAccessoryMultiRun');
+    assert.equal(calls.filter(call=>call.path===accessoryEndpoint).length,index+1,label);
+    assert.deepEqual(storageWrites,[],label);
+    await fire('quickAccessoryRun');
+    assert.equal(get('quickAccessoryMultiRun').disabled,false,label);
+    assert.equal(get('quickAccessoryMultiStatus').hidden,true,label);
+  }
+});
+
+test('accessory aggregate aborts pending requests and discards late results on invalidation',async()=>{
+  for(const [id,event,next] of [
+    ['quickAccessoryA','change','ribbon'],['quickAccessoryB','input','none'],['quickAmount','input','1001'],
+    ['quickLeverage','change','5'],['quickTen','click'],['quickModel','change','demo_one'],
+    ['refresh'],['same-ID refresh'],['pagehide'],['quickAccessoryRun','click'],
+  ]){
+    const zip='zip_'+'e'.repeat(32);
+    const imported={id:zip,ai_id:zip,name:'ZIP',model_version:'test',image_url:'/zip.png'};
+    const {get,fire,state,calls,pagehide,focus}=await mount([{id:'demo_one',name:'Demo',owned:true}],false,[imported]);
+    if(id==='refresh')get('quickModel').value=zip;
+    await fire('quickAccessoryRun');
+    let resolve,signal;
+    state.accessory=(body,options,index)=>{
+      if(index!==1)return accessoryReply(body,index);
+      signal=options.signal;
+      return new Promise(ok=>{resolve=()=>ok(accessoryReply(body,index));});
+    };
+    const running=fire('quickAccessoryMultiRun');
+    if(id==='pagehide')pagehide();
+    else if(id.endsWith('refresh')){
+      if(id==='refresh')state.imported=[];
+      focus();
+      await nextTurn();
+      assert.equal(get('quickModel').value,'self');
+    } else {
+      if(next!==undefined)get(id).value=next;
+      await fire(id,event);
+    }
+    assert.equal(signal.aborted,true,id);
+    resolve();
+    await running;
+    const restarted=id==='quickAccessoryRun';
+    assert.equal(get('quickAccessoryMultiRun').hidden,!restarted,id);
+    assert.equal(get('quickAccessoryMultiRun').disabled,!restarted,id);
+    assert.equal(get('quickAccessoryMultiResult').hidden,true,id);
+    assert.equal(get('quickAccessoryMultiRows').children.length,0,id);
+    assert.equal(get('quickAccessoryMultiSummary').children.length,0,id);
+    assert.equal(get('quickAccessoryMultiStatus').hidden,true,id);
+    assert.equal(get('quickAccessoryResult').hidden,!restarted,id);
+    assert.equal(calls.filter(call=>call.path===accessoryEndpoint).length,restarted?3:2,id);
+  }
+});
+
+test('accessory aggregate times out an uncooperative request and preserves the first result',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const {get,fire,state,calls}=await mount();
+  await fire('quickAccessoryRun');
+  let resolve,signal;
+  state.accessory=(body,options,index)=>{
+    signal=options.signal;
+    return new Promise(ok=>{resolve=()=>ok(accessoryReply(body,index));});
+  };
+  const running=fire('quickAccessoryMultiRun');
+  t.mock.timers.tick(14999);
+  assert.equal(signal.aborted,false);
+  t.mock.timers.tick(1);
+  await running;
+  assert.equal(signal.aborted,true);
+  resolve();
+  await nextTurn();
+  assert.equal(get('quickAccessoryMultiRun').disabled,true);
+  assert.equal(get('quickAccessoryMultiResult').hidden,true);
+  assert.match(get('quickAccessoryMultiStatus').textContent,/追加実験を完了できません/);
+  assert.equal(get('quickAccessoryResult').hidden,false);
+  assert.equal(calls.filter(call=>call.path===accessoryEndpoint).length,2);
 });

@@ -796,7 +796,8 @@ async function loadModels() {
     }
     modelField.value=next.some(x=>x.id===prior)?prior:'self';
     showLinkedZip();
-    if(prior!==modelField.value)resetAccessoryControl();
+    // A refreshed model may have different settings under the same ID.
+    resetAccessoryControl();
     if(prior && prior!==modelField.value)clearReplay();
     if(compareBase)refreshCompareModels();
     statusField.textContent=(next.length>1 ?
@@ -840,7 +841,7 @@ element('quickForm').addEventListener('submit',event=>{
 for(const [id,ratio] of [['quickTen',0.1],['quickHalf',0.5],['quickAll',1]]) {
   element(id).addEventListener('click',()=>{
     if(busy)return;
-    if(amountField.value!==String(BALANCE*ratio))resetAccessoryControl();
+    resetAccessoryControl();
     amountField.value=String(BALANCE*ratio);
     touched=true;
     resetReview();
@@ -913,7 +914,19 @@ const accessoryA=element('quickAccessoryA'),accessoryB=element('quickAccessoryB'
 const accessoryRun=element('quickAccessoryRun'),accessoryStatus=element('quickAccessoryStatus');
 const accessoryResult=element('quickAccessoryResult'),accessorySummary=element('quickAccessorySummary');
 const accessoryRows=element('quickAccessoryRows');
+const accessoryMultiRun=element('quickAccessoryMultiRun'),accessoryMultiStatus=element('quickAccessoryMultiStatus');
+const accessoryMultiResult=element('quickAccessoryMultiResult'),accessoryMultiRows=element('quickAccessoryMultiRows');
+const accessoryMultiSummary=element('quickAccessoryMultiSummary');
+const ACCESSORY_TRIAL_COUNT=4;
+const ACCESSORY_TRIAL_TIMEOUT_MS=15_000;
 let accessoryEpoch=0,accessoryController=null;
+let accessoryFirst=null,accessoryMultiEpoch=0,accessoryMultiController=null;
+
+function clearAccessoryMultiResult() {
+  accessoryMultiResult.hidden=true;
+  accessoryMultiRows.replaceChildren();
+  accessoryMultiSummary.replaceChildren();
+}
 
 function resetAccessoryControl() {
   accessoryEpoch++;
@@ -924,6 +937,15 @@ function resetAccessoryControl() {
   accessorySummary.replaceChildren();
   accessoryRows.replaceChildren();
   accessoryStatus.textContent='';
+  accessoryMultiEpoch++;
+  accessoryMultiController?.abort();
+  accessoryMultiController=null;
+  accessoryFirst=null;
+  accessoryMultiRun.hidden=true;
+  accessoryMultiRun.disabled=true;
+  accessoryMultiStatus.hidden=true;
+  accessoryMultiStatus.textContent='';
+  clearAccessoryMultiResult();
 }
 for(const select of [accessoryA,accessoryB]) {
   select.addEventListener('input',resetAccessoryControl);
@@ -951,6 +973,15 @@ function validAccessoryResponse(value,ordered) {
     Array.from(value.daily_synthetic_prices).every(price=>Number.isFinite(price)&&price>0&&price<=1e12) &&
     validArm(value.a,ordered.accessory_a) && validArm(value.b,ordered.accessory_b) &&
     value.a.model_effective_sha256!==value.b.model_effective_sha256;
+}
+
+function accessoryDifferences(value) {
+  return value.a.daily_ai_signals.filter((signal,index)=>signal!==value.b.daily_ai_signals[index]).length;
+}
+
+function accessoryOrderIsCurrent(ordered) {
+  return ordered.model_id===modelField.value && ordered.accessory_a===accessoryA.value &&
+    ordered.accessory_b===accessoryB.value && ordered.amount===validAmount() && ordered.leverage===validLeverage();
 }
 
 function renderAccessoryResult(value) {
@@ -982,7 +1013,7 @@ function renderAccessoryResult(value) {
     }
     accessoryRows.append(row);
   }
-  const differences=value.a.daily_ai_signals.filter((signal,index)=>signal!==value.b.daily_ai_signals[index]).length;
+  const differences=accessoryDifferences(value);
   const comparison=document.createElement('li');
   comparison.textContent='判断が違った日 '+differences+'/12日（強制終了後の判断も含む）。'+
     (differences===0?'この1例では判断が一致しました。手法自体の違いは残ります。':'');
@@ -992,11 +1023,68 @@ function renderAccessoryResult(value) {
     ' ／ 架空の開始価格 '+money(value.daily_synthetic_prices[0])+'。';
 }
 
+function accessoryTrialStats(value) {
+  return {aProfit:value.a.profit_coins,bProfit:value.b.profit_coins,
+    aDrawdown:value.a.max_drawdown_pct,bDrawdown:value.b.max_drawdown_pct,differences:accessoryDifferences(value)};
+}
+
+function renderAccessoryMultiResult(trials) {
+  const amountText=(value,unit)=>{
+    const formatted=money(value);
+    return (formatted==='-0'?'0':formatted)+unit;
+  };
+  const makeRow=(label,stats,days)=>{
+    const row=document.createElement('tr');
+    const header=document.createElement('th');
+    header.setAttribute('scope','row');
+    header.textContent=label;
+    row.append(header);
+    for(const [a,b,unit] of [[stats.aProfit,stats.bProfit,' C'],[stats.aDrawdown,stats.bDrawdown,'%']]) {
+      const cell=document.createElement('td');
+      for(const [arm,value] of [['A',a],['B',b]]) {
+        const line=document.createElement('span');
+        line.textContent=arm+' '+amountText(value,unit);
+        cell.append(line);
+      }
+      row.append(cell);
+    }
+    const differences=document.createElement('td');
+    differences.textContent=stats.differences+'/'+days+'日';
+    row.append(differences);
+    return row;
+  };
+  const total={aProfit:0,bProfit:0,aDrawdown:0,bDrawdown:0,differences:0};
+  for(const trial of trials)
+    for(const key of Object.keys(total))total[key]+=trial[key];
+  const mean={aProfit:total.aProfit/ACCESSORY_TRIAL_COUNT,bProfit:total.bProfit/ACCESSORY_TRIAL_COUNT,
+    aDrawdown:total.aDrawdown/ACCESSORY_TRIAL_COUNT,bDrawdown:total.bDrawdown/ACCESSORY_TRIAL_COUNT,
+    differences:total.differences};
+  accessoryMultiRows.replaceChildren(...trials.map((trial,index)=>makeRow(String(index+1),trial,12)));
+  accessoryMultiSummary.replaceChildren(makeRow('平均／合計',mean,12*ACCESSORY_TRIAL_COUNT));
+  accessoryMultiResult.hidden=false;
+}
+
+async function requestAccessoryTrial(ordered,controller) {
+  const {signal}=controller;
+  let onAbort;
+  const canceled=new Promise((_,reject)=>{
+    onAbort=()=>reject(Error('Accessory trial canceled'));
+    signal.addEventListener('abort',onAbort,{once:true});
+  });
+  const timeout=setTimeout(()=>controller.abort(),ACCESSORY_TRIAL_TIMEOUT_MS);
+  try {
+    return await Promise.race([request('/api/accessory-control',ordered,signal),canceled]);
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort',onAbort);
+  }
+}
+
 accessoryRun.addEventListener('click',async event=>{
   if(!event.isTrusted || accessoryController)return;
   resetAccessoryControl();
-  const ordered={model_id:modelField.value,accessory_a:accessoryA.value,accessory_b:accessoryB.value,
-    amount:validAmount(),leverage:validLeverage()};
+  const ordered=Object.freeze({model_id:modelField.value,accessory_a:accessoryA.value,accessory_b:accessoryB.value,
+    amount:validAmount(),leverage:validLeverage()});
   if(ordered.model_id!=='self' && !zipCharacters.some(zip=>zip.id===ordered.model_id)) {
     accessoryStatus.textContent='自分のAIまたは登録済みZIPのAIを選んでください。';
     return;
@@ -1015,14 +1103,17 @@ accessoryRun.addEventListener('click',async event=>{
   accessoryController=controller;
   accessoryRun.disabled=true;
   accessoryStatus.textContent='実験中…';
-  const isCurrent=()=>epoch===accessoryEpoch && ordered.model_id===modelField.value &&
-    ordered.accessory_a===accessoryA.value && ordered.accessory_b===accessoryB.value &&
-    ordered.amount===validAmount() && ordered.leverage===validLeverage();
+  const isCurrent=()=>epoch===accessoryEpoch && accessoryOrderIsCurrent(ordered);
   try {
     const value=await request('/api/accessory-control',ordered,controller.signal);
     if(!isCurrent())return;
     if(!validAccessoryResponse(value,ordered))throw Error('Invalid accessory result');
     renderAccessoryResult(value);
+    accessoryFirst=Object.freeze({ordered,stats:Object.freeze(accessoryTrialStats(value)),
+      scenarioToken:value.scenario_token,engine:value.engine_source_sha256,baseline:value.baseline_fingerprint,
+      aFingerprint:value.a.model_effective_sha256,bFingerprint:value.b.model_effective_sha256});
+    accessoryMultiRun.hidden=false;
+    accessoryMultiRun.disabled=false;
   } catch(error) {
     if(!isCurrent())return;
     resetAccessoryControl();
@@ -1036,6 +1127,45 @@ accessoryRun.addEventListener('click',async event=>{
         accessoryController=null;
         accessoryRun.disabled=false;
       }
+    }
+  }
+});
+
+accessoryMultiRun.addEventListener('click',async event=>{
+  if(!event.isTrusted || accessoryMultiRun.disabled || !accessoryFirst || accessoryController || accessoryMultiController)return;
+  const first=accessoryFirst;
+  if(!accessoryOrderIsCurrent(first.ordered)){resetAccessoryControl();return;}
+  accessoryFirst=null;
+  accessoryMultiRun.disabled=true;
+  accessoryMultiStatus.hidden=false;
+  accessoryMultiStatus.textContent='追加の架空相場3例を実験中…';
+  const epoch=++accessoryMultiEpoch;
+  const controller=new AbortController();
+  accessoryMultiController=controller;
+  const isCurrent=()=>epoch===accessoryMultiEpoch && accessoryOrderIsCurrent(first.ordered);
+  const tokens=new Set([first.scenarioToken]);
+  const trials=[first.stats];
+  try {
+    while(trials.length<ACCESSORY_TRIAL_COUNT) {
+      const value=await requestAccessoryTrial(first.ordered,controller);
+      if(!isCurrent())return;
+      if(controller.signal.aborted || !validAccessoryResponse(value,first.ordered) ||
+         value.engine_source_sha256!==first.engine || value.baseline_fingerprint!==first.baseline ||
+         value.a.model_effective_sha256!==first.aFingerprint || value.b.model_effective_sha256!==first.bFingerprint ||
+         tokens.has(value.scenario_token))throw Error('Invalid accessory trial');
+      tokens.add(value.scenario_token);
+      trials.push(accessoryTrialStats(value));
+    }
+    renderAccessoryMultiResult(trials);
+    accessoryMultiStatus.textContent='4例の結果を集計しました。再度試すには初回の実験から始めてください。';
+  } catch {
+    if(!isCurrent())return;
+    clearAccessoryMultiResult();
+    accessoryMultiStatus.textContent='追加実験を完了できませんでした。再度試すには初回の実験から始めてください。';
+  } finally {
+    if(epoch===accessoryMultiEpoch) {
+      if(!isCurrent())resetAccessoryControl();
+      else accessoryMultiController=null;
     }
   }
 });
