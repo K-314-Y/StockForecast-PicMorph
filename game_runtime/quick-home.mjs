@@ -647,7 +647,7 @@ function showLinkedZip() {
     '% ／ 資金使用率'+Math.round(record.model.risk_fraction*100)+'%。' : '';
   element('quickZipDetails').textContent=record ?
     record.name+' ／ '+traits+(primary?'主な分析：'+primary+' ／ ':'')+
-    (equipped?'装備名は画像に反映されません。':'')+strategy+
+    (equipped?'装備名だけでは外見は変わりません。重ね絵を付けた場合は画像に反映されます。':'')+strategy+
     '専用AI '+record.ai_id.slice(0,12)+'…。'+
     (appearance ? '外見の特徴から予測設定を作成。' : '以前の手動設定。')+
     '未学習・架空練習専用。':'';

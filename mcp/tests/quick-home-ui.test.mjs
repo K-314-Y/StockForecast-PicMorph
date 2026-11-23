@@ -1839,6 +1839,25 @@ test('a registered ZIP character selects its own AI and owns its result image an
   assert.equal(link.getAttribute('href'),null);
 });
 
+test('multi-accessory ZIP caption accurately distinguishes analysis equipment from optional drawn overlays',async()=>{
+  const id='zip_'+'a'.repeat(32);
+  const own={id,ai_id:id,name:'三装備テスト',image_url:'/api/imported-characters/image/'+id,
+    model_version:'appearance-v1_41_21_22_16_59',model_origin:'appearance_features',
+    accessory_analysis:{version:'accessory-combination-v1',equipped:[
+      {id:'star',name:'星',method:'bollinger_breakout'},
+      {id:'glasses',name:'眼鏡',method:'rsi_oversold'},
+      {id:'ribbon',name:'リボン',method:'macd_momentum'}]},
+    model:{plugin_weights:{trend:41,momentum:21,reversion:22,volatility:16},risk_fraction:.59}};
+  const {get,fire}=await mount([],false,[own]);
+  get('quickModel').value=id;
+  await fire('quickModel','change');
+  const description=get('quickZipDetails').textContent;
+  assert.match(description,/星.*眼鏡.*リボン/);
+  assert.match(description,/装備名だけでは外見は変わりません/);
+  assert.match(description,/重ね絵を付けた場合は画像に反映されます/);
+  assert.doesNotMatch(description,/装備名は画像に反映されません/);
+});
+
 test('ChatGPT is hidden by default and never requests on load, run or reflection submit',async()=>{
   for(const configured of [false,true]) {
     const {get,fire,calls,storageWrites}=await mount([],configured);
