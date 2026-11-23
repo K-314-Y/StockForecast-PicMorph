@@ -133,3 +133,60 @@ test('the offline accessory benchmark reproduces fixed scenarios without real ma
     assert.equal(result.tripleBetter+result.tied+result.tripleWorse,8);
   }
 });
+
+
+test('experimental strength weighting is order-independent and cannot see next synthetic price',async()=>{
+  const {execFileSync}=await import('node:child_process');
+  const runtime=fileURLToPath(new URL('../../',import.meta.url));
+  const script=[
+    'import sys,json',
+    'sys.path.insert(0,sys.argv[1])',
+    'from game_runtime.accessory_analysis import experimental_strength_weighted_signal as weighted,equipped_accessory_signal as equal',
+    'from engine import SYNTHETIC_PRICES',
+    'history=tuple(SYNTHETIC_PRICES)',
+    'methods=["bollinger_breakout","rsi_oversold","macd_momentum"]',
+    'assert weighted(methods,history,.35)==weighted(list(reversed(methods)),history,.35)',
+    'assert weighted(methods,history,.35)==weighted(methods,history,.35)',
+    'assert weighted(["rsi_oversold"],history,.35)==equal(["rsi_oversold"],history,.35)',
+    'assert weighted(["bollinger_breakout"],history,.35)==equal(["bollinger_breakout"],history,.35)',
+    'for bad in ([],["rsi_oversold","rsi_oversold"],["not_an_indicator"]):',
+    '  try: weighted(bad,history,.35); raise AssertionError("invalid method accepted")',
+    '  except ValueError: pass',
+    'for bad in (float("nan"),-1,2):',
+    '  try: weighted(methods,history,bad); raise AssertionError("invalid probability accepted")',
+    '  except ValueError: pass',
+    'print(json.dumps({"valid":True,"decision":weighted(methods,history,.35)}))',
+  ].join('\n');
+  const result=JSON.parse(execFileSync('python3',['-B','-c',script,runtime],
+    {encoding:'utf8',timeout:6000}));
+  assert.equal(result.valid,true);
+  assert.ok(['LONG','CASH'].includes(result.decision));
+});
+
+test('experimental benchmark uses disjoint reproducible offline scenario cohorts',async()=>{
+  const {execFileSync}=await import('node:child_process');
+  const script=fileURLToPath(new URL('../../scripts/benchmark-accessory-weighting.mjs',import.meta.url));
+  const run=set=>JSON.parse(execFileSync(process.execPath,[script,'--count','8','--set',set],
+    {encoding:'utf8',timeout:20000}));
+  const development=run('development'),same=run('development'),validation=run('validation');
+  assert.deepEqual(same,development);
+  for(const record of [development,validation]){
+    assert.equal(record.mode,'UNTRAINED_SYNTHETIC_ACCESSORY_EXPERIMENT');
+    assert.equal(record.version,'accessory-strength-experiment-v1');
+    assert.equal(record.scenarios,8);
+    assert.equal(record.plans,16);
+    assert.equal(record.samePrices,true);
+    assert.equal(record.sameBaseModel,true);
+    assert.equal(record.firstDecisionsIndependentOfFuture,true);
+    assert.equal(record.initialCoins,1000);
+    assert.equal(record.feeRate,.001);
+    assert.ok(Number.isFinite(record.strategies.equal.meanProfit));
+    assert.ok(Number.isFinite(record.strategies.strength.meanProfit));
+    const p=record.paired;
+    assert.equal(p.strengthBetter+p.equalBetter+p.tied,8);
+    assert.equal(p.changedCases,p.strengthBetter+p.equalBetter);
+    assert.equal(p.byBlock.length,4);
+  }
+  assert.notDeepEqual(development.strategies,validation.strategies,
+    'validation token cohort must be different from development');
+});

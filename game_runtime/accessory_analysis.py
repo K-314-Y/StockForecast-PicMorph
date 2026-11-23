@@ -92,3 +92,25 @@ def accessory_signal(accessory: str, history: tuple[float, ...], baseline_up: fl
 def equipped_accessory_signal(methods: list[str], history: tuple[float, ...], baseline_up: float = 0.5) -> str:
     """Give each equipped method equal weight in the primary analysis."""
     return _combined_signal(normalize_methods(methods), history, baseline_up)
+
+# Experimental research only. Not called by game prediction or its public API.
+# A signal's extremeness is a heuristic "strength", NOT validated reliability.
+EXPERIMENTAL_STRENGTH_VERSION = "accessory-strength-experiment-v1"
+
+
+def experimental_strength_weighted_signal(
+    methods: list[str], history: tuple[float, ...], baseline_up: float = 0.5
+) -> str:
+    """Weight only relative indicator signal magnitudes, before seeing future prices.
+
+    The ordinary multi-accessory strategy remains unchanged. Every indicator
+    keeps weight >= 0.5, so an apparently weak indicator is never discarded.
+    """
+    canonical = normalize_methods(methods)
+    # Reuse the production signal's strict input checks with no mutation.
+    _combined_signal(canonical, history, baseline_up)
+    supports = [_indicator_support(method, history) for method in canonical]
+    weights = [0.5 + abs(support - 0.5) / 0.45 for support in supports]
+    primary_support = sum(support * weight for support, weight in zip(supports, weights)) / sum(weights)
+    combined_support = 0.8 * primary_support + 0.2 * baseline_up
+    return "LONG" if combined_support > 0.54 else "CASH"
