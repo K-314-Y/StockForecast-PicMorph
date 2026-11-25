@@ -608,10 +608,26 @@ let busy = false;
 let touched = false;
 const amountField = element('quickAmount');
 const modelField = element('quickModel');
-const linkedModelIds=new URLSearchParams(location.search).getAll('model');
-const linkedModelId=linkedModelIds[0];
-let initialZipId=linkedModelIds.length===1 && linkedModelId.length===36 &&
-  /^zip_[a-f0-9]{32}$/.test(linkedModelId) ? linkedModelId : null;
+const linkedParams=new URLSearchParams(location.search);
+function linkedZipParam(key) {
+  const ids=linkedParams.getAll(key);
+  return ids.length===1 && ids[0].length===36 && /^zip_[a-f0-9]{32}$/.test(ids[0]) ? ids[0] : null;
+}
+let initialZipId=linkedZipParam('model');
+let initialCompareId=initialZipId ? linkedZipParam('compare') : null;
+if(initialCompareId===initialZipId)initialCompareId=null;
+let linkedComparePair=null;
+function showLinkedCompareHint() {
+  const hint=element('quickLinkedCompareHint');
+  const name=linkedComparePair && compareChoices.get(linkedComparePair.target);
+  hint.hidden=!name;
+  hint.textContent=name ? '比較相手：'+name+'。12日間の練習後、比較相手を選んだ状態にします。比較ボタンで実行してください。' : '';
+}
+function cancelLinkedComparison() {
+  initialCompareId=null;
+  linkedComparePair=null;
+  showLinkedCompareHint();
+}
 let zipCharacters = [];
 function showLinkedZip() {
   const record=zipCharacters.find(item=>item.id===modelField.value);
@@ -801,10 +817,20 @@ async function loadModels() {
     }
     // Only a successful ZIP listing can resolve the link.
     const requestedZipId=importedWarning ? null : initialZipId;
-    if(!importedWarning)initialZipId=null;
+    const requestedCompareId=importedWarning ? null : initialCompareId;
+    if(!importedWarning) {
+      initialZipId=null;
+      initialCompareId=null;
+      if(requestedZipId && requestedCompareId && registeredIds.has(requestedZipId) && registeredIds.has(requestedCompareId))
+        linkedComparePair={base:requestedZipId,target:requestedCompareId};
+      if(linkedComparePair && (!registeredIds.has(linkedComparePair.base) || !registeredIds.has(linkedComparePair.target)))
+        linkedComparePair=null;
+    }
     const linkedZipFound=registeredIds.has(requestedZipId);
     const preservedId=next.some(item=>item.id===prior) ? prior : 'self';
     modelField.value=linkedZipFound ? requestedZipId : preservedId;
+    if(linkedComparePair && modelField.value!==linkedComparePair.base)linkedComparePair=null;
+    showLinkedCompareHint();
     showLinkedZip();
     if(replay && replayZipId===modelField.value)syncMini();
     // A refreshed model may have different settings under the same ID.
@@ -815,6 +841,8 @@ async function loadModels() {
       statusField.textContent=linkedZipFound ?
         'リンク先のZIPキャラのAIを選びました。' :
         'リンク先のZIPキャラが見つかりません。練習に使うAIを選んでください。';
+      if(requestedCompareId && !linkedComparePair)
+        statusField.textContent+=' 比較相手のZIPキャラが見つかりません。';
     } else {
       statusField.textContent=(next.length>1 ?
         '自作AIと、登録済み・解放済みのAIから選べます。' :
@@ -845,6 +873,7 @@ element('quickForm').addEventListener('submit',event=>{
   const option=modelField.selectedOptions[0];
   if(!option) return;
   initialZipId=null;
+  initialCompareId=null;
   pending={amount,leverage,model_id:modelField.value,model_name:option.textContent};
   element('quickReviewText').textContent=
     'AI：'+pending.model_name+' ／ 試算額：'+money(amount)+' C ／ 損益倍率：×'+leverage+
@@ -874,12 +903,14 @@ amountField.addEventListener('change',()=>resetAccessoryControl());
 amountField.addEventListener('blur',()=>{touched=true;renderValidation(true);});
 modelField.addEventListener('change',()=>{
   initialZipId=null;
+  cancelLinkedComparison();
   resetAccessoryControl();
   resetReview();
   showLinkedZip();
 });
 modelField.addEventListener('input',()=>{
   initialZipId=null;
+  cancelLinkedComparison();
   resetAccessoryControl();
 });
 window.addEventListener('focus',()=>{if(!busy)void loadModels();});
@@ -1449,6 +1480,12 @@ function showCompare(value,ordered,modelName) {
     engine_source_sha256:value.engine_source_sha256,
     strategy:compareStrategy(value)};
   refreshCompareModels();
+  if(linkedComparePair?.base===ordered.model_id && compareChoices.has(linkedComparePair.target)) {
+    compareModel.value=linkedComparePair.target;
+    compareStatus.textContent='比較相手を選びました。「比較する」で同じ架空相場を試せます。';
+    updateCompareControls();
+  }
+  cancelLinkedComparison();
   element('quickCompare').hidden=false;
 }
 function compareCard(label,name,value) {

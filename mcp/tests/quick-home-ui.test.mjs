@@ -1834,6 +1834,46 @@ test('ZIP onboarding stays in the local character lab and deep-links only exact 
   assert.match(missing.get('quickStatus').textContent,/ZIPキャラが見つかりません/);
 });
 
+test('a duplicate comparison link selects two registered ZIP AIs once without automatically running practice',async()=>{
+  const a='zip_'+'a'.repeat(32),b='zip_'+'b'.repeat(32),missing='zip_'+'c'.repeat(32);
+  const records=[a,b].map((id,index)=>({id,ai_id:id,name:'相棒'+index,model_version:'v1'}));
+  const ui=await mount([],false,records,'?model='+a+'&compare='+b);
+  assert.equal(ui.get('quickModel').value,a);
+  assert.equal(ui.get('quickLinkedCompareHint').hidden,false);
+  assert.deepEqual(ui.calls.map(call=>call.path),['/api/model-shop']);
+  await runQuickPractice(ui);
+  assert.equal(ui.get('quickCompareModel').value,b);
+  assert.equal(ui.get('quickCompareRun').disabled,false);
+  assert.equal(ui.calls.filter(call=>call.path==='/api/quick-practice').length,1);
+  await ui.fire('quickCompareRun');
+  const calls=ui.calls.filter(call=>call.path==='/api/quick-practice');
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].body.model_id,a);
+  assert.equal(calls[1].body.model_id,b);
+  assert.equal(calls[1].body.scenario_token,'v1_0123456789abcdef');
+  assert.equal(calls[1].body.amount,calls[0].body.amount);
+  assert.equal(calls[1].body.leverage,calls[0].body.leverage);
+  await runQuickPractice(ui);
+  assert.equal(ui.get('quickCompareModel').value,'');
+  for(const search of ['?model='+a+'&compare='+a,'?model='+a+'&compare='+b+'&compare='+b,
+    '?model='+a+'&compare='+missing,'?model='+missing+'&compare='+b,'?compare='+b,
+    '?model='+a+'&compare=bad']) {
+    const invalid=await mount([],false,records,search);
+    assert.equal(invalid.get('quickLinkedCompareHint').hidden,true,search);
+    await runQuickPractice(invalid);
+    assert.equal(invalid.get('quickCompareModel').value,'',search);
+  }
+  const manual=await mount([],false,records,'?model='+a+'&compare='+b);
+  manual.get('quickModel').value='self';
+  await manual.fire('quickModel','change');
+  manual.focus();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(manual.get('quickLinkedCompareHint').hidden,true);
+  assert.equal(manual.get('quickModel').value,'self');
+  await runQuickPractice(manual);
+  assert.equal(manual.get('quickCompareModel').value,'');
+});
+
 test('a registered ZIP character selects its own AI and owns its result image and caption',async()=>{
   const id='zip_'+'a'.repeat(32);
   const own={id,ai_id:id,name:'ラベンダー',image_url:'/api/imported-characters/image/'+id,

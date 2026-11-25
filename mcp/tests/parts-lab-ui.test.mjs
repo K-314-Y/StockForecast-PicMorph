@@ -209,9 +209,12 @@ test('Chrome registers, re-edits and duplicates ZIP characters used in the 12-da
       const saved=()=>page.waitForResponse(response=>response.url()===origin+'/api/imported-characters/register');
       const waitEnabled=()=>page.waitForFunction(()=>!document.getElementById('registerZip').disabled);
       const gameLink=page.locator('#zipGameLink a');
+      const compareLink=page.locator('#zipCompareLink a');
       const assertGameLinkCleared=async()=>{
         assert.equal(await gameLink.isVisible(),false);
         assert.equal(await gameLink.getAttribute('href'),null);
+        assert.equal(await compareLink.isVisible(),false);
+        assert.equal(await compareLink.getAttribute('href'),null);
       };
       const registerNow=async()=>{
         const response=saved();
@@ -546,6 +549,8 @@ test('Chrome registers, re-edits and duplicates ZIP characters used in the 12-da
       const created=await result.json();
       await gameLink.waitFor();
       assert.equal(await gameLink.getAttribute('href'),'/game?model='+created.id);
+      assert.equal(await compareLink.isVisible(),false);
+      assert.equal(await compareLink.getAttribute('href'),null);
       assert.equal(created.accessory_analysis.equipped.length,3);
       const stored=JSON.parse(await readFile(join(importedRoot,created.id+'.json'),'utf8'));
       assert.equal(stored.visual.mood,'happy');
@@ -1050,15 +1055,46 @@ test('Chrome registers, re-edits and duplicates ZIP characters used in the 12-da
       assert.deepEqual(copiedPlan.daily_synthetic_prices,baseline.daily_synthetic_prices);
       assert.notEqual(copiedPlan.model_effective_sha256,baseline.model_effective_sha256);
       assert.notDeepEqual(copiedPlan.daily_ai_signals,baseline.daily_ai_signals);
-      await gameLink.click();
+      await compareLink.waitFor();
+      assert.equal(await compareLink.getAttribute('href'),'/game?model='+copied.id+'&compare='+created.id);
+      const beforeLinkWrites=writes.length;
+      await compareLink.click();
       await page.waitForFunction(id=>document.getElementById('quickModel')?.value===id,copied.id);
       assert.equal(new URL(page.url()).searchParams.get('model'),copied.id);
+      assert.equal(new URL(page.url()).searchParams.get('compare'),created.id);
+      await page.locator('#quickLinkedCompareHint').waitFor();
+      assert.match(await page.locator('#quickLinkedCompareHint').textContent(),/比較相手/);
+      assert.equal(writes.length,beforeLinkWrites);
       assert.equal(await page.locator('#quickZipPortrait').isVisible(),true);
       assert.equal(await page.locator('#quickReplay').isVisible(),false);
+      await page.locator('#quickAmount').fill('2750');
+      await page.locator('#quickLeverage').selectOption('3');
+      await page.locator('#quickConfirm').click();
+      const firstReply=postResponse('/api/quick-practice');
+      await page.locator('#quickRun').click();
+      const first=await firstReply;
+      assert.equal(first.status(),200,await first.text());
+      const firstResult=await first.json();
+      await page.locator('#quickCompare').waitFor();
+      assert.equal(await page.locator('#quickCompareModel').inputValue(),created.id);
+      assert.equal(await page.locator('#quickCompareRun').isEnabled(),true);
+      assert.equal(writes.length,beforeLinkWrites+1);
+      const secondReply=postResponse('/api/quick-practice');
+      await page.locator('#quickCompareRun').click();
+      const second=await secondReply;
+      assert.equal(second.status(),200,await second.text());
+      const secondResult=await second.json();
+      assert.equal(firstResult.model_id,copied.id);
+      assert.equal(secondResult.model_id,created.id);
+      assert.deepEqual(second.request().postDataJSON(),{model_id:created.id,amount:2750,leverage:3,scenario_token:firstResult.scenario_token});
+      assert.deepEqual(secondResult.daily_synthetic_prices,firstResult.daily_synthetic_prices);
+      await page.locator('#quickCompareDecisionDiff').waitFor();
+      assert.equal(await page.locator('#quickCompareDecisionRows tr').count(),12);
       assert.deepEqual(await readFile(portraitFile),originalBytes);
       assert.deepEqual(await getModel(),originalModel);
       assert.deepEqual(writes.slice(writesBeforeDuplicate),[
         '/api/imported-characters/register','/api/imported-characters/register',
+        '/api/quick-practice','/api/quick-practice',
       ]);
       assert.deepEqual(external,[]);
       assert.deepEqual(pageErrors,[]);

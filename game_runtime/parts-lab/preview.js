@@ -36,6 +36,8 @@ const mainTransferEndpoint='/api/main-character-transfer';
 const mainCharacterPicker=$('mainCharacter');
 const zipGameLink=$('zipGameLink');
 const zipGameAnchor=zipGameLink.querySelector('a');
+const zipCompareLink=$('zipCompareLink');
+const zipCompareAnchor=zipCompareLink.querySelector('a');
 const accessoryEndpoint=characterEndpoint+'/accessories';
 const methodLabels={
   bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',
@@ -79,6 +81,8 @@ function release(bundle) {
 function clearZipGameLink() {
   zipGameLink.hidden=true;
   zipGameAnchor.removeAttribute('href');
+  zipCompareLink.hidden=true;
+  zipCompareAnchor.removeAttribute('href');
 }
 function clearRegistrationDraft() {
   currentZipFiles=null;
@@ -1102,7 +1106,7 @@ async function loadSavedCharacter(id,myEpoch,{signal,duplicate=false}={}) {
     $('mood').value=Object.hasOwn(next.images,visual?.mood)?visual.mood:'ready';
     if(duplicate) {
       currentZipFiles=files;
-      duplicateDraft={useEquipmentList:Array.isArray(analysis?.equipped)};
+      duplicateDraft={sourceId:character.id,useEquipmentList:Array.isArray(analysis?.equipped)};
       // Creation in the shared accessory catalog writes immediately.
       $('zipAccessoryCreator').hidden=true;
       const suffix='別版';
@@ -1281,6 +1285,7 @@ $('registerZip').addEventListener('click',async()=>{
     return;
   }
   const files=currentZipFiles;
+  const sourceId=duplicateDraft?.sourceId;
   const chosenEpoch=epoch;
   const ids=[...equippedIds];
   // The legacy single-accessory format also changes the appearance model weights.
@@ -1335,6 +1340,10 @@ $('registerZip').addEventListener('click',async()=>{
     status('ZIPの外見と予測AI設定が同じIDで登録されました。表情・位置・重ね絵も保存しました。');
     zipGameAnchor.setAttribute('href','/game?'+new URLSearchParams({model:record.id}));
     zipGameLink.hidden=false;
+    if(validZipCharacterId(sourceId) && sourceId!==record.id) {
+      zipCompareAnchor.setAttribute('href','/game?'+new URLSearchParams({model:record.id,compare:sourceId}));
+      zipCompareLink.hidden=false;
+    }
     void loadEditPicker(record.id);
   }catch(error){
     if(chosenEpoch===epoch)$('zipRegisterStatus').textContent='登録に失敗しました：'+error.message;
