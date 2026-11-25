@@ -74,18 +74,19 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 <section class="panel" aria-labelledby="fileTitle">
 <h2 id="fileTitle">1. パーツ画像を選ぶ</h2>
 <section class="zip-import" aria-labelledby="editTitle">
-<h2 id="editTitle">登録済みZIPキャラの見た目を編集</h2>
+<h2 id="editTitle">登録済みZIPキャラ</h2>
 <div id="editChooser">
 <label for="editCharacter">登録済みキャラ
 <select id="editCharacter" disabled></select></label>
 <button id="openVisualEdit" type="button" disabled>見た目を編集</button>
+<button id="duplicateCharacter" type="button" disabled>複製して別のAIを作る</button>
 </div>
 <div id="visualEdit" hidden>
 <p><strong id="editName"></strong></p>
 <p class="metadata" id="editModel"></p>
 <p class="hint" id="editTraits"></p>
 <p id="legacyVisualWarning" class="caution" hidden>この見た目には編集情報がありません。保存済みの画像から表情やパーツ位置、重ね絵の元ファイルは復元できません。残したい重ね絵は再アップロードしてください。</p>
-<p class="hint">ZIPから読み込める素材は体と表情です。予測用の装備を変えるには、キャラを新規登録してください。</p>
+<p class="hint">予測用の装備を変えたいときは、編集を終了して「複製して別のAIを作る」を選んでください。</p>
 <p>保存済みの画像</p>
 <img id="editSavedPortrait" alt="現在保存されているキャラの画像">
 <div id="editEquipmentMount"></div>
@@ -99,6 +100,7 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 </section>
 <div id="registerParts">
 <div class="zip-import" aria-label="ZIP一括読み込み">
+<p id="duplicateNotice" role="status" hidden></p>
 <p><strong>おすすめ：ZIPを1回選ぶだけ</strong></p>
 <p class="hint">前に渡した「ラベンダーキャラ」のZIPを選ぶと、中の <code>body / ready / happy / cautious</code> を自動判別して再生します。展開や4枚の選択は不要です。</p>
 <label for="zipFrames">ZIP内の画像のコマ数
@@ -119,8 +121,8 @@ dialog::backdrop{background:#091019bf;overflow:hidden;overscroll-behavior:contai
 </div>
 <p id="mainTransferStatus" role="status"></p>
 </fieldset>
-<label for="zipName">登録するキャラの名前
-<input id="zipName" type="text" maxlength="16" value="新しい相棒" autocomplete="off"></label>
+<label for="zipName">登録するキャラの名前（16文字まで）
+<input id="zipName" type="text" maxlength="32" value="新しい相棒" autocomplete="off"></label>
 <p class="hint"><strong>外見の特徴からAIを作成</strong>：ZIPのmanifest.jsonに登録されたアクセサリー・髪色・服色を自動取得します。記録のない特徴は下の項目で指定してください。画像そのものをAI認識した結果ではありません。</p>
 <div id="zipEquipmentMount"><fieldset id="zipEquipment">
 <legend>予測用アクセサリー（最大3個）</legend>

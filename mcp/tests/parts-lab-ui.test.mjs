@@ -26,7 +26,7 @@ test('drag geometry projects a letterboxed frame and preserves fixed axes',()=>{
   assert.equal(overlayPosition(400,320,160,0),100);
 });
 
-test('Chrome registers and re-edits ZIP portraits used in the 12-day game and replay',
+test('Chrome registers, re-edits and duplicates ZIP characters used in the 12-day game and replay',
   {timeout:60_000},async t=>{
     let playwright;
     try {
@@ -157,6 +157,7 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
       const traits={hair_style:'bob',expression:'calm'};
       const legacyZip=await zip(1,fixture.one,{...traits,name:'従来キャラ',accessory:'star'});
       const multiZip=await zip(6,fixture.six,{...traits,name:'重ね絵テスト',
+        hair_color:'#234567',clothing_color:'#c3916a',
         accessories:['star',{name:'手作り眼鏡',method:'rsi_oversold'},
           {name:'<b>手作り</b>',method:'macd_momentum'}]});
       const row=index=>page.locator('#zipEquipped li').nth(index);
@@ -650,9 +651,9 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
 
       const getModel=()=>importedCharacterStore.model(created.id);
       const originalModel=await getModel();
-      const predictSameScenario=async()=>{
+      const predictSameScenario=async(id=created.id)=>{
         const response=await page.request.post(origin+'/api/quick-practice',{
-          data:{model_id:created.id,amount:1000,scenario_token:'v1_0123456789abcdef'},
+          data:{model_id:id,amount:1000,scenario_token:'v1_0000000000000001'},
         });
         assert.equal(response.status(),200,await response.text());
         return response.json();
@@ -933,6 +934,131 @@ test('Chrome registers and re-edits ZIP portraits used in the 12-day game and re
         '/api/imported-characters/register','/api/imported-characters/register',
         legacyPath,legacyPath+'/restore',editPath,editPath+'/restore',editPath+'/restore',
         editPath,'/api/quick-practice',editPath,
+      ]);
+
+      const originalPortrait=await pixels(gamePortrait,0,0,64,64);
+      const originalBytes=await readFile(portraitFile);
+      const original=JSON.parse(originalBytes);
+      const legacyImages=Object.fromEntries(Object.entries(legacyRecord.images).map(
+        ([part,{mime,base64}])=>[part,{mime,base64}]));
+      const singleton=await importedCharacterStore.register({name:'🐱'.repeat(16),
+        look:{...legacy.appearance.look,accessory:'none'},colors:legacy.appearance.colors,
+        accessories:['star'],images:legacyImages});
+      const manual=await importedCharacterStore.register({name:'外見情報なし',
+        approach:'trend',risk_percent:35,images:legacyImages});
+      const alternate=await importedCharacterStore.addAccessory({name:'移動平均のお守り',method:'moving_average_trend'});
+      const singletonFile=join(importedRoot,singleton.id+'.json');
+      const singletonBytes=await readFile(singletonFile);
+      const duplicate=page.locator('#duplicateCharacter');
+      const notice=page.locator('#duplicateNotice');
+      const confirmDraft=async id=>{
+        await chooser.selectOption(id);
+        await duplicate.click();
+        await notice.waitFor();
+        await assertGameLinkCleared();
+      };
+      const clearDraft=()=>page.locator('#clear').click();
+      const writesBeforeDuplicate=writes.length;
+      await page.goto(previewUrl);
+      await chooser.locator('option[value="'+created.id+'"]').waitFor({state:'attached'});
+      assert.equal(await duplicate.isDisabled(),true);
+      await confirmDraft(manual.id);
+      assert.match(await notice.textContent(),/以前の見た目を再現できない/);
+      assert.equal(await page.locator('#zipHairStyle').inputValue(),'');
+      assert.equal(await page.locator('#zipExpression').inputValue(),'');
+      assert.equal(await register.isDisabled(),true);
+      await page.locator('#zipHairStyle').selectOption('long');
+      await page.locator('#zipExpression').selectOption('calm');
+      await waitEnabled();
+      await clearDraft();
+      assert.equal(await notice.isVisible(),false);
+      await confirmDraft(legacy.id);
+      await waitEnabled();
+      assert.match(await row(0).textContent(),/星（ボリンジャーバンド）/);
+      assert.equal(await page.locator('#frames').inputValue(),'1');
+      await clearDraft();
+
+      await confirmDraft(singleton.id);
+      assert.equal(await page.locator('#zipName').inputValue(),'🐱'.repeat(14)+'別版');
+      assert.equal(writes.length,writesBeforeDuplicate);
+      const same=await registerNow();
+      assert.notEqual(same.id,singleton.id);
+      assert.deepEqual(same.accessory_analysis,singleton.accessory_analysis);
+      assert.equal(same.model_version,singleton.model_version);
+      assert.deepEqual(same.model,singleton.model);
+      const [samePlan,singletonPlan]=await Promise.all([
+        predictSameScenario(same.id),predictSameScenario(singleton.id),
+      ]);
+      for(const key of ['model_effective_sha256','daily_ai_signals','daily_balances'])
+        assert.deepEqual(samePlan[key],singletonPlan[key],key);
+      assert.deepEqual(await readFile(singletonFile),singletonBytes);
+
+      await page.route(origin+editPath,route=>route.fulfill({status:503,json:{error:'読み込めません'}}),{times:1});
+      await chooser.selectOption(created.id);
+      await duplicate.click();
+      await page.getByText('複製の下書きを開けませんでした。元のキャラは変更されていません。').waitFor();
+      await assertGameLinkCleared();
+      assert.equal(await notice.isVisible(),false);
+      assert.equal(await register.isDisabled(),true);
+      await page.evaluate(()=>{window.holdRestoredOverlay=true;});
+      await duplicate.click();
+      await page.waitForFunction(()=>window.finishRestoredOverlay);
+      await clearDraft();
+      await page.evaluate(()=>{
+        window.holdRestoredOverlay=false;
+        window.finishRestoredOverlay();
+      });
+      await page.waitForFunction(()=>window.closedOverlays.includes('restored-webp'));
+      assert.match(await page.locator('#editStatus').textContent(),/中止/);
+      assert.equal(await notice.isVisible(),false);
+      assert.equal(await register.isDisabled(),true);
+      assert.equal(await row(0).count(),0);
+      assert.equal(writes.length,writesBeforeDuplicate+1);
+
+      await confirmDraft(created.id);
+      await waitEnabled();
+      assert.match(await notice.textContent(),/元のキャラは変更されません/);
+      assert.equal(await page.locator('#visualEdit').isVisible(),false);
+      assert.equal(await page.locator('#zipAccessoryCreator').isVisible(),false);
+      assert.equal(await page.locator('#zipName').inputValue(),created.name+'別版');
+      for(const [id,value] of Object.entries({zipHairStyle:created.appearance.look.hair_style,
+        zipExpression:created.appearance.look.expression,zipHairColor:created.appearance.colors.hair_color,
+        zipClothingColor:created.appearance.colors.clothing_color,mood:original.visual.mood,frames:'6'}))
+        assert.equal(await page.locator('#'+id).inputValue(),value,id);
+      assert.deepEqual(await pixels('#previewCanvas',0,0,64,64),originalPortrait);
+      for(const [index,overlay] of original.visual.overlays.entries()) {
+        assert.deepEqual(await position(index),[overlay.x,overlay.y]);
+        assert.equal(Number(await adjustment(index,'scale').inputValue()),overlay.scale);
+      }
+      await row(0).getByRole('button',{name:'分析装備を外す'}).click();
+      await page.locator('#zipAccessory').selectOption(alternate.id);
+      await page.locator('#zipEquip').click();
+      await adjustment(0,'x').fill('25');
+      await page.locator('#zipName').fill('分析を変えた相棒');
+      assert.equal(writes.length,writesBeforeDuplicate+1);
+      const copied=await registerNow();
+      assert.notEqual(copied.id,created.id);
+      assert.equal(copied.ai_id,copied.id);
+      assert.equal(copied.name,'分析を変えた相棒');
+      assert.deepEqual(copied.accessory_analysis.equipped,[...original.equipped.slice(1),alternate]);
+      const copiedRecord=JSON.parse(await readFile(join(importedRoot,copied.id+'.json')));
+      const [,firstOverlay,secondOverlay]=original.visual.overlays;
+      assert.deepEqual(copiedRecord.visual,{...original.visual,overlays:[{...firstOverlay,x:25},secondOverlay]});
+      for(const part of ['body','ready','happy'])assert.deepEqual(copiedRecord.images[part],original.images[part]);
+      const copiedPlan=await predictSameScenario(copied.id);
+      assert.equal(copiedPlan.model_id,copied.id);
+      assert.deepEqual(copiedPlan.daily_synthetic_prices,baseline.daily_synthetic_prices);
+      assert.notEqual(copiedPlan.model_effective_sha256,baseline.model_effective_sha256);
+      assert.notDeepEqual(copiedPlan.daily_ai_signals,baseline.daily_ai_signals);
+      await gameLink.click();
+      await page.waitForFunction(id=>document.getElementById('quickModel')?.value===id,copied.id);
+      assert.equal(new URL(page.url()).searchParams.get('model'),copied.id);
+      assert.equal(await page.locator('#quickZipPortrait').isVisible(),true);
+      assert.equal(await page.locator('#quickReplay').isVisible(),false);
+      assert.deepEqual(await readFile(portraitFile),originalBytes);
+      assert.deepEqual(await getModel(),originalModel);
+      assert.deepEqual(writes.slice(writesBeforeDuplicate),[
+        '/api/imported-characters/register','/api/imported-characters/register',
       ]);
       assert.deepEqual(external,[]);
       assert.deepEqual(pageErrors,[]);

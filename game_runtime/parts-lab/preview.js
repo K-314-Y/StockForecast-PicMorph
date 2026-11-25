@@ -20,8 +20,10 @@ const sampleUrls = Object.freeze({
 });
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_FRAME_SIDE = 1024;
+const NO_REGISTRATION_DRAFT='画像を読み込んで、必要な特徴を指定してください。';
 let pack = null;
 let currentZipFiles = null;
+let duplicateDraft = null;
 let visualEdit = null;
 let editLoad = null;
 let mainCatalogLoad = null;
@@ -77,6 +79,14 @@ function release(bundle) {
 function clearZipGameLink() {
   zipGameLink.hidden=true;
   zipGameAnchor.removeAttribute('href');
+}
+function clearRegistrationDraft() {
+  currentZipFiles=null;
+  if(!duplicateDraft)return;
+  duplicateDraft=null;
+  $('duplicateNotice').hidden=true;
+  $('zipAccessoryCreator').hidden=false;
+  $('zipRegisterStatus').textContent=NO_REGISTRATION_DRAFT;
 }
 function resetPack() {
   clearZipGameLink();
@@ -397,7 +407,7 @@ function inspect(images, frames) {
 async function loadPack(isSample) {
   if (busy || visualEdit) return;
   clearZipGameLink();
-  currentZipFiles = null;
+  clearRegistrationDraft();
   clearZipEquipment();
   $('registerZip').disabled = true;
   const myEpoch=++epoch;
@@ -496,7 +506,7 @@ function displayLoaded(next,frames,offsets){
 async function loadGeneratedSheets(){
   if(busy||visualEdit)return;
   clearZipGameLink();
-  currentZipFiles=null;
+  clearRegistrationDraft();
   clearZipEquipment();
   $('registerZip').disabled=true;
   const myEpoch=++epoch;
@@ -721,7 +731,7 @@ $('zipEquip').addEventListener('click',()=>{
   feedback.textContent=accessoryLabel(item)+'を装備しました。';
 });
 $('zipAddAccessory').addEventListener('click',async()=>{
-  if(busy||visualEdit||savingAccessory)return;
+  if(busy||visualEdit||savingAccessory||duplicateDraft)return;
   const nameField=$('zipAccessoryName');
   const methodField=$('zipAccessoryMethod');
   const feedback=$('zipEquipmentStatus');
@@ -770,8 +780,16 @@ function refreshZipTraitStatus() {
   $('registerZip').disabled=busy || !currentZipFiles || missing.length>0 || pending;
   if(!currentZipFiles)return;
   $('zipTraitsStatus').textContent=pending ? '重ね絵を確認しています。' : missing.length ?
-    '未指定：'+missing.join('・')+'。ZIPの情報にない特徴は選択してください。' :
+    '未指定：'+missing.join('・')+'。記録にない特徴は選択してください。' :
     '登録できます。髪型・色は補助分析、表情は資金使用率に反映します。';
+}
+function setRegistrationAppearance(name,traits) {
+  for(const [field,id] of [
+    ['hair_style','zipHairStyle'],['expression','zipExpression'],
+    ['hair_color','zipHairColor'],['clothing_color','zipClothingColor']]) {
+    $(id).value=traits[field]??(field.endsWith('_color')?'#808080':'');
+  }
+  $('zipName').value=name;
 }
 function applyZipAppearance(files) {
   const traits=files.appearance ?? {};
@@ -782,13 +800,7 @@ function applyZipAppearance(files) {
     return id;
   })??(builtinAccessories.has(traits.accessory)?[traits.accessory]:[]);
   renderEquipment('');
-  for(const [field,id] of [
-    ['hair_style','zipHairStyle'],
-    ['expression','zipExpression'],['hair_color','zipHairColor'],
-    ['clothing_color','zipClothingColor']]) {
-    $(id).value=traits[field]??(field.endsWith('_color')?'#808080':'');
-  }
-  $('zipName').value=traits.name??'新しい相棒';
+  setRegistrationAppearance(traits.name??'新しい相棒',traits);
   const fromZip=['accessory','accessories','hair_style','expression','hair_color','clothing_color']
     .filter(key=>Object.hasOwn(traits,key));
   $('zipTraitsStatus').textContent=fromZip.length ?
@@ -805,7 +817,7 @@ async function importCharacterZip(file){
   const frames=Number($('zipFrames').value);
   // A failed replacement must never leave the previous character on screen.
   resetPack();
-  currentZipFiles=null;
+  clearRegistrationDraft();
   clearZipEquipment();
   $('registerZip').disabled=true;
   $('zipRegisterStatus').textContent='新しいZIPを確認しています。登録はまだしていません。';
@@ -983,10 +995,15 @@ async function composedPortrait() {
   return new File([blob],'portrait.png',{type:'image/png'});
 }
 
+function validZipCharacterId(id) {
+  return typeof id==='string' && id.length===36 && /^zip_[a-f0-9]{32}$/.test(id);
+}
 function refreshEditPicker() {
   const picker=$('editCharacter');
   picker.disabled=busy || loadingEditPicker || Boolean(visualEdit) || picker.options.length<=1;
-  $('openVisualEdit').disabled=picker.disabled || savingAccessory || !picker.value;
+  const unavailable=picker.disabled || savingAccessory || !validZipCharacterId(picker.value);
+  $('openVisualEdit').disabled=unavailable;
+  $('duplicateCharacter').disabled=unavailable;
 }
 async function loadEditPicker(selected=$('editCharacter').value, autoOpen=false) {
   const pickerEpoch=++editPickerEpoch;
@@ -1037,14 +1054,7 @@ function showSavedPortrait() {
   $('editSavedPortrait').src=url.href;
 }
 function showSavedSettings(character) {
-  const {appearance,accessory_analysis:analysis,model}=character;
-  const equipment=analysis?.equipped ??
-    (builtinAccessories.has(analysis?.accessory)?[builtinAccessories.get(analysis.accessory)]:[]);
-  for(const item of equipment)manifestAccessories.set(item.id,item);
-  equippedIds=equipment.map(item=>item.id);
-  renderEquipment('');
-  $('zipEquipmentStatus').textContent=equipment.length?'保存済みの予測用装備です。':
-    appearance?'装備なし（移動平均）':'予測用装備なし';
+  const {appearance,model}=character;
   $('editName').textContent=character.name;
   const w=model.plugin_weights;
   $('editModel').textContent='キャラID・AI ID '+character.id+' ／ モデル '+character.model_version+
@@ -1057,15 +1067,22 @@ function showSavedSettings(character) {
       ' ／ 髪色 '+appearance.colors.hair_color+' ／ 服色 '+appearance.colors.clothing_color;
   }else $('editTraits').textContent='登録時に指定した予測設定を使用します。';
 }
-async function loadSavedEdit(id,myEpoch,signal) {
+async function loadSavedCharacter(id,myEpoch,{signal,duplicate=false}={}) {
+  const files={};
   const images={};
   const overlays=new Map();
   try {
     const {character,sources,portrait,visual,edit_token,can_restore_previous}=
       await editRequest(characterEndpoint+'/visual-edit/'+id,{signal});
     if(myEpoch!==epoch)return;
+    if(character.id!==id)throw Error('選んだキャラの素材を確認できませんでした。');
+    const analysis=character.accessory_analysis;
+    const legacyAccessory=builtinAccessories.get(analysis?.accessory);
+    const equipment=analysis?.equipped ?? (legacyAccessory?[legacyAccessory]:[]);
+    const availableOverlayIds=new Set(equipment.map(item=>item.id));
     for(const [part,source] of Object.entries(sources)) {
-      images[part==='body'?'base':part]=await decodeFile(savedImageBlob(source),part);
+      files[part]=savedImageBlob(source);
+      images[part==='body'?'base':part]=await decodeFile(files[part],part);
       if(myEpoch!==epoch)return;
     }
     // Registration bakes exactly one frame at its source size. The portrait
@@ -1074,18 +1091,39 @@ async function loadSavedEdit(id,myEpoch,signal) {
     const next=inspect({...images},frames);
     if(next.height!==portrait.height)throw Error('元の画像と保存画像のコマ寸法が一致しません。');
     for(const {id,image,x,y,scale} of visual?.overlays??[]) {
+      if(!availableOverlayIds.delete(id))throw Error('保存済みの装備と重ね絵が一致しません。');
       const file=savedImageBlob(image);
       const bitmap=await decodeFile(file,'保存済みの重ね絵');
       overlays.set(id,{file,bitmap,x,y,scale});
       if(myEpoch!==epoch)return;
     }
-    // Keep the current draft until the replacement can be displayed.
+    // Only replace the preview after every saved image has decoded.
     clearZipEquipment();
-    visualEdit={character,portrait,edit_token,can_restore_previous};
     $('mood').value=Object.hasOwn(next.images,visual?.mood)?visual.mood:'ready';
-    $('legacyVisualWarning').hidden=Boolean(visual);
-    showVisualEdit(true);
-    showSavedSettings(character);
+    if(duplicate) {
+      currentZipFiles=files;
+      duplicateDraft={useEquipmentList:Array.isArray(analysis?.equipped)};
+      // Creation in the shared accessory catalog writes immediately.
+      $('zipAccessoryCreator').hidden=true;
+      const suffix='別版';
+      const name=[...character.name].slice(0,16-[...suffix].length).join('')+suffix;
+      setRegistrationAppearance(name,{...character.appearance?.look,...character.appearance?.colors});
+      $('zipRegisterStatus').textContent='名前や装備を確認して登録できます。';
+      $('duplicateNotice').textContent='複製の下書きです。元のZIPは不要です。元のキャラは変更されません。登録ボタンを押すと別のAIとして保存します。'+
+        (visual?'':' 保存済みの表情・位置・重ね絵の記録がないため、以前の見た目を再現できない場合があります。');
+      $('duplicateNotice').hidden=false;
+    }else{
+      visualEdit={character,portrait,edit_token,can_restore_previous};
+      $('legacyVisualWarning').hidden=Boolean(visual);
+      showVisualEdit(true);
+      showSavedSettings(character);
+      showSavedPortrait();
+    }
+    for(const item of equipment)manifestAccessories.set(item.id,item);
+    equippedIds=equipment.map(item=>item.id);
+    renderEquipment('');
+    $('zipEquipmentStatus').textContent=equipment.length?'保存済みの予測用装備です。':
+      character.appearance?'装備なし（移動平均）':'予測用装備なし';
     for(const [id,saved] of overlays) {
       const overlay=accessoryOverlays.get(id);
       Object.assign(overlay,saved);
@@ -1093,40 +1131,50 @@ async function loadSavedEdit(id,myEpoch,signal) {
       overlayStatus(overlay,'保存済みの重ね絵を表示中です。');
       overlays.delete(id);
     }
-    showSavedPortrait();
-    displayLoaded(next,frames,visual?.offsets);
     for(const part of Object.keys(images))delete images[part];
-    status('見た目編集のプレビューを表示しています。');
+    displayLoaded(next,frames,visual?.offsets);
+    status(duplicate?'複製したキャラのプレビューを表示しています。':'見た目編集のプレビューを表示しています。');
     return {hasVisual:Boolean(visual)};
   }finally{
     release({images});
     for(const {bitmap} of overlays.values())bitmap.close();
   }
 }
-async function openVisualEdit() {
-  if($('openVisualEdit').disabled)return;
+async function openSavedCharacter(duplicate=false) {
+  if($(duplicate?'duplicateCharacter':'openVisualEdit').disabled)return;
   const id=$('editCharacter').value;
   const myEpoch=++epoch;
   resetPack();
-  currentZipFiles=null;
+  clearRegistrationDraft();
   clearZipEquipment();
   const controller=new AbortController();
   editLoad=controller;
   setBusy(true);
   $('editStatus').textContent='保存済みの素材を読み込んでいます…';
+  if(duplicate){
+    $('zipRegisterStatus').textContent=NO_REGISTRATION_DRAFT;
+    status('保存済みの素材を読み込んでいます…');
+  }
   try {
-    const loaded=await loadSavedEdit(id,myEpoch,controller.signal);
-    if(loaded)$('editStatus').textContent=loaded.hasVisual?'保存済みの表情・位置・重ね絵を復元しました。':
+    const loaded=await loadSavedCharacter(id,myEpoch,{signal:controller.signal,duplicate});
+    if(myEpoch!==epoch || !loaded)return;
+    $('editStatus').textContent=duplicate?'':loaded.hasVisual?
+      '保存済みの表情・位置・重ね絵を復元しました。':
       '元の素材を初期位置で読み込みました。確認して保存するまで、保存画像は保持されます。';
   }catch(error){
-    if(myEpoch===epoch)$('editStatus').textContent=error.message;
+    if(myEpoch!==epoch)return;
+    $('editStatus').textContent=duplicate?
+      '複製の下書きを開けませんでした。元のキャラは変更されていません。':error.message;
+    if(duplicate)status('保存済みの素材を読み込めませんでした。',true);
   }finally{
     if(editLoad===controller)editLoad=null;
     if(myEpoch===epoch)setBusy(false);
   }
 }
+const openVisualEdit=()=>openSavedCharacter();
 $('editCharacter').addEventListener('change',refreshEditPicker);
 $('openVisualEdit').addEventListener('click',openVisualEdit);
+$('duplicateCharacter').addEventListener('click',()=>openSavedCharacter(true));
 $('cancelVisualEdit').addEventListener('click',()=>{
   if(busy||!visualEdit)return;
   ++epoch;
@@ -1207,7 +1255,7 @@ $('confirmPortraitRestore').addEventListener('click',async()=>{
     });
     restored=true;
     if(myEpoch!==epoch)return;
-    const loaded=await loadSavedEdit(id,myEpoch);
+    const loaded=await loadSavedCharacter(id,myEpoch);
     if(loaded)$('editStatus').textContent=loaded.hasVisual?'1つ前の見た目に戻しました。':
       '1つ前の保存画像に戻しました。プレビューには元の素材を初期位置で表示しています。';
   }catch(error){
@@ -1220,7 +1268,7 @@ $('confirmPortraitRestore').addEventListener('click',async()=>{
 });
 const editIds=new URLSearchParams(location.search).getAll('edit');
 const editId=editIds[0];
-const openLinkedEdit=editIds.length===1 && editId.length===36 && /^zip_[a-f0-9]{32}$/.test(editId);
+const openLinkedEdit=editIds.length===1 && validZipCharacterId(editId);
 void loadEditPicker(openLinkedEdit?editId:undefined,openLinkedEdit);
 
 $('registerZip').addEventListener('click',async()=>{
@@ -1235,7 +1283,9 @@ $('registerZip').addEventListener('click',async()=>{
   const files=currentZipFiles;
   const chosenEpoch=epoch;
   const ids=[...equippedIds];
-  const legacyAccessory=ids.length===1&&builtinAccessories.has(ids[0])?ids[0]:'none';
+  // The legacy single-accessory format also changes the appearance model weights.
+  const legacyAccessory=!duplicateDraft?.useEquipmentList && ids.length===1 &&
+    builtinAccessories.has(ids[0])?ids[0]:'none';
   const equipment=ids.length>0&&legacyAccessory==='none'?{
     accessories:ids.map(id=>{
       if(builtinAccessories.has(id))return id;
@@ -1268,7 +1318,7 @@ $('registerZip').addEventListener('click',async()=>{
        record.trained!==false||!/^appearance-v1_/.test(record.model_version)||
        !record.model?.plugin_weights||!Number.isFinite(record.model.risk_fraction))
       throw Error(record.error||'外見からのAI作成結果を確認できません。');
-    currentZipFiles=null; // one explicit registration per ZIP selection
+    clearRegistrationDraft(); // one explicit registration per draft
     renderEquipment('');
     const w=record.model.plugin_weights;
     const analysis=record.accessory_analysis;
@@ -1300,7 +1350,7 @@ $('clear').addEventListener('click',()=>{
   ++epoch;
   setBusy(false);
   resetPack();
-  currentZipFiles=null;
+  clearRegistrationDraft();
   clearZipEquipment();
   $('registerZip').disabled=true;
   for (const [,input] of [...keys,...generatedKeys]) $(input).value='';
@@ -1347,7 +1397,7 @@ refreshPartControls();
 $('frames').addEventListener('change',()=>{
   if (registering || visualEdit) return;
   if (pack || busy) {
-    ++epoch;currentZipFiles=null;setBusy(false);resetPack();
+    ++epoch;clearRegistrationDraft();setBusy(false);resetPack();
     clearZipEquipment();
     $('registerZip').disabled=true;
     status('コマ数が変わりました。画像をもう一度読み込んでください。');
@@ -1366,6 +1416,6 @@ window.addEventListener('pagehide',()=>{
   mainCatalogLoad?.abort();
   if(mainCatalogLoad)$('mainTransferStatus').textContent='';
   mainCatalogLoad=null;
-  ++epoch;currentZipFiles=null;visualEdit=null;resetPack();clearZipEquipment();
+  ++epoch;clearRegistrationDraft();visualEdit=null;resetPack();clearZipEquipment();
   showVisualEdit(false);setRegistering(false);
 });
