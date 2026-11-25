@@ -104,6 +104,9 @@ private local Creature Lab Node game. It has no real-trading capability.
    入手可能性、企業行動の処理は未確認。取得時点の調整値を用いるため、後半を未見
    データでの検証と呼ばない。株価や日別結果を共有しない。
    比較結果は保存せず、ローカルデータがないときは利用できない旨を伝える。
+   将来の検証用の設定固定は、本人がプレビューを確認し、明示的に保存したときだけ実行する。
+   固定記録は設定と検証手順のコピーで、すべて「評価待ち（データ未取得・未検証）」と伝える。
+   時刻は端末の時計による。最短日はJSTの翌日で、取引日・時刻証明・検証結果には当たらない。
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

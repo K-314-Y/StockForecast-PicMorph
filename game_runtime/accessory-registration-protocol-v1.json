@@ -1,0 +1,21 @@
+{
+  "id": "ACCESSORY_FUTURE_SESSION_REPLAY_V1",
+  "timezone": "Asia/Tokyo",
+  "start_rule": "first_verified_exchange_session_strictly_after_registration_jst_day",
+  "history_rule": "24_verified_exchange_sessions_immediately_preceding_the_first_evaluation_session",
+  "lookback_sessions": 24,
+  "evaluation_sessions_per_code": 12,
+  "codes": ["40050", "46890", "47550", "50200", "72010", "84100", "85930", "86040", "94320", "95010"],
+  "price_basis": "verified_point_in_time_adjusted_close_with_documented_corporate_actions",
+  "execution_order": "predict_before_next_close_from_observed_only_then_simulate_at_previous_close",
+  "initial_virtual_coins_per_model_and_code": 10000,
+  "trade_fee_bps": 10,
+  "flat_return_threshold_bps": 30,
+  "long_threshold_percent_exclusive": 52,
+  "long_advantage_points_exclusive": 5,
+  "metrics": ["multiclass_brier", "virtual_profit_coins", "max_drawdown_pct", "different_signal_days"],
+  "aggregation": "paired_same_sessions_equal_weight_per_code",
+  "future_return_filter": false,
+  "missing_data_or_unverified_rights_pit_adjustment_or_code": "pending_no_score_no_substitution",
+  "source_files": ["engine.py", "indicators.py", "game_runtime/predict_bridge.py", "game_runtime/market_replay.py", "game_runtime/practice.mjs", "game_runtime/historical-market.mjs", "game_runtime/adjusted-split.mjs", "game_runtime/accessory-analysis.mjs", "game_runtime/companion.mjs", "game_runtime/model-lab.mjs", "game_runtime/accessory-registration-protocol-v1.json"]
+}

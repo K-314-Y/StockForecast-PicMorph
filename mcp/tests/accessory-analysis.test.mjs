@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {copyFile,mkdir,mkdtemp,readFile,readdir,rm,stat,writeFile} from 'node:fs/promises';
 import {request} from 'node:http';
@@ -13,6 +14,7 @@ import {createIndependentPartReader} from '../../game_runtime/independent-part-r
 import {createGameServer,pythonPredict} from '../../game_runtime/server.mjs';
 import {compareLocalAccessoryBatch} from '../../game_runtime/historical-market.mjs';
 import {compareAdjustedSplit} from '../../game_runtime/adjusted-split.mjs';
+import {canonicalPreview,createAccessoryRegistrationStore,createRegistrationReview,registrationDays,readRegistrationFingerprints} from '../../game_runtime/accessory-registration.mjs';
 import {validateLabModel} from '../../game_runtime/model-lab.mjs';
 
 const run=promisify(execFile);
@@ -75,7 +77,10 @@ async function fixture(t) {
     await rm(root,{recursive:true,force:true});
   });
   await mkdir(mcp);
-  for(const name of ['accessory_analysis_store.py','character_equipment.py','character_parts.py',
+  await mkdir(join(root,'game_runtime'));
+  await copyFile(new URL('../../game_runtime/accessory-registration-protocol-v1.json',import.meta.url),
+    join(root,'game_runtime','accessory-registration-protocol-v1.json'));
+  for(const name of ['accessory_analysis_store.py','accessory_registration_store.py','character_equipment.py','character_parts.py',
     'independent_parts.py','independent_parts_catalog.py','import_png_character.py']) {
     await copyFile(new URL('../'+name,import.meta.url),join(mcp,name));
   }
@@ -133,6 +138,7 @@ print(json.dumps(view(model,7)))
     const server=createGameServer({
       catalogRoot:join(local,'character_parts'),equipmentStore:equipment,
       accessoryAnalysisStore:analysisStore,
+      accessoryRegistrationStore:createAccessoryRegistrationStore({script:join(mcp,'accessory_registration_store.py')}),
       independentPartReader:{list:reader.list,image(){throw Error('Comparison must not serve an image');}},
       activeCharacterStore:{read:()=>({...active}),save(){throw Error('Unexpected write');}},
       companionStore:{read:()=>({...companion}),save(){throw Error('Unexpected write');}},
@@ -1035,4 +1041,166 @@ await assert.rejects(pythonAdjustedSplitPredict({probe:'x'.repeat(16*1024)}),{st
     PYTHONPATH:'fixture-python',CREATURE_MARKET_HISTORY_PATH:'fixture-market-path',CREATURE_ADJUSTED_SPLIT_ROOT:'fixture-archive',
     CREATURE_MARKET_SOURCE:'jquants'},timeout:5000,maxBuffer:4096});
   assert.deepEqual(await readdir(root),['python3']);
+});
+
+const REGISTER=API+'/registration';
+const PREVIEW=REGISTER+'/preview';
+const REGISTRATIONS=API+'/registrations';
+
+test('registration preview signs canonical content, expires and rejects JST rollover and clock rewind',()=>{
+  const review=createRegistrationReview();
+  const issued=Date.parse('2026-11-24T14:59:59.000Z');
+  assert.deepEqual(registrationDays(issued),{registered_jst_day:'2026-11-24',earliest_possible_day:'2026-11-25'});
+  assert.deepEqual(registrationDays(issued+1000),{registered_jst_day:'2026-11-25',earliest_possible_day:'2026-11-26'});
+  const content={...registrationDays(issued),source_sha256:{engine:'a'},baseline:{fast:4,slow:10},rules:['momentum']};
+  const reordered={...content,baseline:{slow:10,fast:4}};
+  assert.equal(canonicalPreview(content),canonicalPreview(reordered));
+  const preview=review.issue(content,issued);
+  assert.equal(preview.valid_for_seconds,300);
+  assert.equal(Object.hasOwn(preview.review,'source_sha256'),false);
+  assert.equal(review.check(preview.preview_token,reordered,issued+500),issued+300000);
+  assert.throws(()=>review.check(preview.preview_token,reordered,issued+1000),{status:409});
+  assert.throws(()=>review.check(preview.preview_token,reordered,issued-1),{status:409});
+  assert.throws(()=>review.check(preview.preview_token,{...content,source_sha256:{engine:'b'}},issued),{status:409});
+  assert.throws(()=>review.check(preview.preview_token,content,issued+300000),{status:409});
+  const ordinary=Date.parse('2026-11-24T02:00:00.000Z');
+  const earlier=review.issue(content,ordinary);
+  assert.throws(()=>review.check(earlier.preview_token,content,ordinary+300000),{status:409});
+  assert.throws(()=>createRegistrationReview().check(earlier.preview_token,content,ordinary+500),{status:409});
+  assert.throws(()=>review.check('forged',content,ordinary),{status:400});
+  assert.throws(()=>canonicalPreview({model:{risk:NaN}}),{status:503});
+});
+
+test('registration HTTP previews without writes, stores one real canonical record on confirmation and returns metadata only',async t=>{
+  const {start,local,snapshot,baselineSnapshot,calls}=await fixture(t);
+  const folder=join(local,'accessory_registrations');
+  const api=await start({historicalPredict:()=>assert.fail('not historical evaluation'),
+    historicalBatchPredict:()=>assert.fail('not historical evaluation'),
+    adjustedSplitPredict:()=>assert.fail('not adjusted evaluation')});
+  const context=await practiceContext(api);
+  assert.deepEqual(await api.get(REGISTRATIONS).then(r=>r.json()),{registrations:[]});
+  await assert.rejects(readdir(folder),{code:'ENOENT'});
+  const preview=await api.post(context,PREVIEW);
+  const body=await preview.json();
+  assert.equal(preview.status,200,JSON.stringify(body));
+  assert.equal(preview.headers.get('cache-control'),'no-store');
+  assert.equal(preview.headers.get('cross-origin-resource-policy'),'same-origin');
+  assert.deepEqual(body.review.context,context);
+  assert.deepEqual(body.review.base_model,base);
+  assert.deepEqual(body.review.baseline,base);
+  assert.deepEqual(body.review.candidate,{...base,plugin_weights:target});
+  assert.deepEqual(body.review.applied_rules,[pin]);
+  assert.deepEqual(body.review.visible_kinds,[pin.kind_id]);
+  assert.equal(body.review.protocol.codes.length,10);
+  assert.equal(body.review.protocol.lookback_sessions,24);
+  assert.equal(body.review.protocol.evaluation_sessions_per_code,12);
+  assert.equal(body.review.protocol.future_return_filter,false);
+  await assert.rejects(readdir(folder),{code:'ENOENT'});
+  const confirmation={...context,preview_token:body.preview_token};
+  const pair=await Promise.all([api.post(confirmation,REGISTER),api.post(confirmation,REGISTER)]);
+  assert.deepEqual(pair.map(r=>r.status).sort(),[201,409]);
+  const found=await pair.find(r=>r.status===201).json();
+  const {registration}=found;
+  const file=join(folder,registration.id+'.json');
+  const data=await readFile(file);
+  assert.equal(createHash('sha256').update(data).digest('hex'),registration.id);
+  const record=JSON.parse(data);
+  assert.deepEqual(record,{...body.review,created_at:registration.created_at,source_sha256:await readRegistrationFingerprints()});
+  assert.equal((await stat(folder)).mode&0o777,0o700);
+  assert.equal((await stat(file)).mode&0o777,0o600);
+  const list=await api.get(REGISTRATIONS);
+  assert.equal(list.headers.get('access-control-allow-origin'),null);
+  assert.deepEqual(await list.json(),{registrations:[registration]});
+  assert.deepEqual(Object.keys(registration).sort(),
+    ['created_at','earliest_possible_day','id','registered_jst_day','status','timestamp_basis']);
+  assert.deepEqual(await readdir(folder),[registration.id+'.json']);
+  assert.equal(JSON.stringify(snapshot),baselineSnapshot);
+  assert.equal(calls.length,0);
+  await writeFile(file,Buffer.concat([data,Buffer.from('\n')]));
+  assert.equal((await api.get(REGISTRATIONS)).status,503);
+});
+
+test('registration rejects forged origin, host, backdating or model inputs before any reads',async t=>{
+  const {start,local,snapshot}=await fixture(t);
+  let loads=0;
+  const api=await start({loadSnapshot:async()=>{loads++;return snapshot;}});
+  const context=await practiceContext(api);
+  const junk='1'.repeat(13)+'.'+'a'.repeat(64);
+  for(const path of [PREVIEW,REGISTER]) {
+    const payload=path===REGISTER?{...context,preview_token:junk}:context;
+    for(const bad of [null,[],{}, {...payload,created_at:'2024-01-01T00:00:00.000Z'},
+      {...payload,registered_jst_day:'2024-01-01'},{...payload,candidate:base},{...payload,code:'94320'}]) {
+      assert.equal((await api.post(bad,path)).status,400);
+    }
+    for(const headers of [{Origin:'https://outside.invalid'},{Origin:api.origin.replace('127.0.0.1','localhost')},{'Sec-Fetch-Site':'cross-site'}])
+      assert.equal((await api.post(payload,path,headers)).status,403);
+    const noOrigin=await fetch(api.origin+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    assert.equal(noOrigin.status,403);
+    assert.equal((await api.post(payload,path+'?date=2024-01-01')).status,404);
+  }
+  const wrongHost=await new Promise((resolve,reject)=>{
+    const outbound=request(api.origin+REGISTRATIONS,{headers:{Host:'outside.invalid'}},res=>{
+      res.resume();resolve(res.statusCode);
+    });
+    outbound.once('error',reject);
+    outbound.end();
+  });
+  assert.equal(wrongHost,403);
+  assert.equal((await api.get(REGISTRATIONS,{headers:{Origin:'https://outside.invalid'}})).status,403);
+  assert.equal((await api.get(PREVIEW)).status,404);
+  assert.equal(loads,0);
+  assert.deepEqual(await api.get(REGISTRATIONS).then(r=>r.json()),{registrations:[]});
+  assert.equal(loads,0);
+  await assert.rejects(readdir(join(local,'accessory_registrations')),{code:'ENOENT'});
+});
+
+test('registration rejects expired, cross-day or changed code, model, companion, gear, policy and active context',async t=>{
+  const {start,cp,part,active,companion,equipment,local,snapshot}=await fixture(t);
+  const fingerprints=await readRegistrationFingerprints();
+  let clock=Date.parse('2026-11-24T12:00:00.000Z');
+  const api=await start({registrationClock:()=>clock,registrationFingerprints:async()=>({...fingerprints}),
+    loadSnapshot:async()=>structuredClone(snapshot)});
+  let context=await practiceContext(api);
+  const getPreview=async()=>{
+    const response=await api.post(context,PREVIEW);
+    assert.equal(response.status,200);
+    return (await response.json()).preview_token;
+  };
+  for(const change of [
+    ()=>{clock+=300000;},
+    ()=>{clock=Date.parse('2026-11-24T15:00:00.000Z');},
+    ()=>{fingerprints['engine.py']='a'.repeat(64);},
+    ()=>{snapshot.source_revision++;},
+    ()=>{snapshot.state.model.risk_fraction=.25;},
+    ()=>{companion.revision++;},
+    ()=>equipment.save(cp,{expected_revision:1,parts:[{...part,x:1}]}),
+    async()=>assert.equal((await api.post({expected_revision:1,policies:[{...pin,intensity:2}]})).status,200),
+    ()=>{active.revision++;},
+  ]) {
+    clock=Date.parse('2026-11-24T14:50:00.000Z');
+    const token=await getPreview();
+    await change();
+    const rejected=await api.post({...context,preview_token:token},REGISTER);
+    assert.equal(rejected.status,409,await rejected.text());
+    context=compareInput(await api.get().then(r=>r.json()));
+  }
+  await assert.rejects(readdir(join(local,'accessory_registrations')),{code:'ENOENT'});
+});
+
+test('registration does not publish when executable fingerprints change during the confirmation read',async t=>{
+  const {start,local}=await fixture(t);
+  const hashes=await readRegistrationFingerprints();
+  let calls=0,mutate=false;
+  const api=await start({registrationFingerprints:async()=>{
+    calls++;
+    return mutate && calls===4 ? {...hashes,'engine.py':'c'.repeat(64)} : hashes;
+  }});
+  const context=await practiceContext(api);
+  const preview=await api.post(context,PREVIEW);
+  assert.equal(preview.status,200);
+  const {preview_token}=await preview.json();
+  mutate=true;
+  assert.equal((await api.post({...context,preview_token},REGISTER)).status,409);
+  assert.equal(calls,4);
+  await assert.rejects(readdir(join(local,'accessory_registrations')),{code:'ENOENT'});
 });

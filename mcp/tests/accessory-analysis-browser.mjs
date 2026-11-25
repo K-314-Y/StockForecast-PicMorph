@@ -17,6 +17,10 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
   let historicalStatus=200;
   let batchStatus=200;
   let adjustedStatus=200;
+  let fixedRecord;
+  let registrationConflict=false;
+  const previewToken='1795477200000.'+'a'.repeat(64);
+  const registrationPaths=[api+'/registration/preview',api+'/registration',api+'/registrations'];
   function check(value,message) {
     if(!value)throw Error(message);
   }
@@ -31,7 +35,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
         if(pathname==='/accessory-analysis-ui.mjs')return route.fulfill({contentType:'text/javascript; charset=utf-8',body:script});
         if(pathname==='/favicon.ico')return route.fulfill({status:204});
       }
-      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split'].includes(pathname)) {
+      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split',...registrationPaths].includes(pathname)) {
         unexpected.push(method+' '+url);
         return route.abort();
       }
@@ -40,6 +44,26 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
       if(method==='GET' && pathname===api) {
         return route.fulfill({json:{...record,kinds:empty?[]:[{kind_id:kind,part_count:1}],
           equipped:{character_id:empty?null:character_id,active_revision:2,equipment_revision:3,visible_kinds:empty?[]:[kind]},stale_kinds:[]}});
+      }
+      if(method==='GET' && pathname===registrationPaths[2])return route.fulfill({json:{registrations:fixedRecord?[fixedRecord]:[]}});
+      if(method==='POST' && registrationPaths.slice(0,2).includes(pathname)) {
+        const context={character_id,active_revision:2,equipment_revision:3,expected_revision:record.revision};
+        if(pathname===registrationPaths[1]) {
+          check(JSON.stringify(input)===JSON.stringify({...context,preview_token:previewToken}),'Unexpected registration write fields');
+          if(registrationConflict)return route.fulfill({status:409,json:{error:'固定する設定を再読込してください。'}});
+          fixedRecord={id:'a'.repeat(64),created_at:'2026-11-23T15:01:00.000Z',earliest_possible_day:'2026-11-25',
+            registered_jst_day:'2026-11-24',status:'pending_no_verified_data',timestamp_basis:'local_system_clock'};
+          return route.fulfill({status:201,json:{registration:fixedRecord}});
+        }
+        check(JSON.stringify(input)===JSON.stringify(context),'Preview may receive only revisions and character');
+        const model={fast_window:4,slow_window:10,risk_fraction:.35,plugin_weights:baseline.parameters.plugin_weights,
+          plugin_strengths:{trend:100,momentum:100,reversion:100,volatility:100}};
+        return route.fulfill({json:{preview_token:previewToken,valid_for_seconds:300,review:{context,
+          applied_rules:record.policies,source_revisions:{source_revision:5,companion_revision:6,lineup_revision:1,growth_revision:0},
+          earliest_possible_day:'2026-11-25',base_model:model,baseline:model,candidate:model,
+          protocol:{evaluation_sessions_per_code:12,lookback_sessions:24,
+            codes:['40050','46890','47550','50200','72010','84100','85930','86040','94320','95010'],
+            initial_virtual_coins_per_model_and_code:10000,trade_fee_bps:10}}}});
       }
       if(method==='POST' && pathname===api && input.expected_revision===record.revision) {
         record={...record,revision:record.revision+1,policies:input.policies};
@@ -111,6 +135,9 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     const history=fixture.getByRole('button',{name:'過去の株価（2024年）で比較する'});
     const batch=fixture.getByRole('button',{name:'重ならない複数期間でまとめて比較する'});
     const adjusted=fixture.getByRole('button',{name:'調整済み株価で前半・後半を比較（研究用）'});
+    const reviewRegistration=fixture.getByRole('button',{name:'固定する内容を確認する'});
+    const confirmRegistration=fixture.getByRole('button',{name:'この設定を固定する'});
+    const listRegistrations=fixture.getByRole('button',{name:'固定記録の一覧を表示する'});
     const focus=fixture.getByRole('combobox',{name:'分析の焦点'});
     const strength=fixture.getByRole('combobox',{name:'強度'});
     await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
@@ -119,12 +146,14 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     check(await history.isDisabled(),'History requires an applied saved policy');
     check(await batch.isDisabled(),'Batch requires an applied saved policy');
     check(await adjusted.isDisabled(),'Adjusted chronology requires an applied saved policy');
+    check(await reviewRegistration.isDisabled(),'Registration requires an applied saved policy');
     await focus.selectOption({label:'直近の勢い'});
     await strength.selectOption('3');
     check(await compare.isDisabled(),'Unsaved changes must not be compared');
     check(await history.isDisabled(),'Unsaved policies must not run historical analysis');
     check(await batch.isDisabled(),'Unsaved policies must not run a batch');
     check(await adjusted.isDisabled(),'Unsaved policies must not run adjusted chronology');
+    check(await reviewRegistration.isDisabled(),'Unsaved policies must not be registered');
     fixture.once('dialog',dialog=>dialog.dismiss());
     await save.click();
     check(calls.length===1,'Dismissing confirmation must not save');
@@ -222,6 +251,40 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     await adjusted.click();
     await fixture.getByText('調整済み比較の設定を再読込してください',{exact:true}).waitFor();
     check(await adjusted.isDisabled(),'Stale adjusted results require reload');
+    check(!calls.some(call=>registrationPaths.includes(call.path)),'Registrations must wait for an explicit action');
+    await fixture.getByRole('button',{name:'設定を再読込する'}).click();
+    await fixture.getByText('設定を読み込みました。',{exact:true}).waitFor();
+    await listRegistrations.click();
+    await fixture.getByText('固定記録はまだありません。',{exact:true}).waitFor();
+    await reviewRegistration.click();
+    const previewRegion=fixture.getByRole('region',{name:'固定する内容のプレビュー'});
+    await previewRegion.getByText(/今回の最短日は2026-11-25/).waitFor();
+    await previewRegion.getByText(/対象10銘柄.*94320/).waitFor();
+    await previewRegion.getByText(/指標はBrierスコア.*売買手数料は0.1%/).waitFor();
+    await previewRegion.getByText(/権利.*評価待ち（データ未取得・未検証）/).waitFor();
+    check(!calls.some(call=>call.path===registrationPaths[1]),'Preview must not register');
+    fixture.once('dialog',dialog=>dialog.dismiss());
+    await confirmRegistration.click();
+    check(!calls.some(call=>call.path===registrationPaths[1]),'Cancelled confirmation must not register');
+    await strength.selectOption('2');
+    check(!await previewRegion.isVisible() && await reviewRegistration.isDisabled(),'Edits must clear registration preview');
+    await strength.selectOption('3');
+    await reviewRegistration.click();
+    await previewRegion.waitFor();
+    check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Registration preview must fit 320px');
+    fixture.once('dialog',dialog=>dialog.accept());
+    await confirmRegistration.click();
+    await fixture.getByText(/設定を固定しました。評価待ち/).waitFor();
+    check(!await previewRegion.isVisible() && calls.at(-1).path===registrationPaths[1],'Save must consume preview without auto-list');
+    await listRegistrations.click();
+    await fixture.getByRole('region',{name:'固定記録',exact:true}).getByText(/最短日 2026-11-25 ／ 評価待ち/).waitFor();
+    registrationConflict=true;
+    await reviewRegistration.click();
+    await previewRegion.waitFor();
+    fixture.once('dialog',dialog=>dialog.accept());
+    await confirmRegistration.click();
+    await fixture.getByText('固定する設定を再読込してください。',{exact:true}).waitFor();
+    check(!await previewRegion.isVisible() && await reviewRegistration.isDisabled(),'Stale registration requires reload');
     empty=true;
     record={schema:1,revision:0,policies:[]};
     await fixture.reload();

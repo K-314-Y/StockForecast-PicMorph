@@ -13,6 +13,7 @@
   button, select { font:inherit; min-height:2.75rem; max-width:100%; padding:.3rem .55rem; }
   :focus-visible { outline:3px solid #ffcf78; outline-offset:3px; }
   .comparison { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr)); gap:1rem; }
+  #registration-context, #registration-records { overflow-wrap:anywhere; }
 </style>
 <main>
   <a href="/game">ゲームへ戻る</a>
@@ -80,6 +81,30 @@
       <div id="adjusted-split-phases" class="comparison"></div>
       <h4>前半と後半の差の方向</h4>
       <ul id="adjusted-split-directions"></ul>
+    </section>
+  </section>
+  <section aria-labelledby="registration-title">
+    <h2 id="registration-title">将来の検証用に設定を固定</h2>
+    <p>いまの設定と検証手順をローカルに記録します。時刻はこの端末の時計によるもので、第三者による時刻証明や改ざん防止の仕組みはありません。記録後もゲームや装備は編集できます。</p>
+    <div class="controls">
+      <button id="registration-review" type="button" disabled>固定する内容を確認する</button>
+      <button id="registration-list" type="button">固定記録の一覧を表示する</button>
+    </div>
+    <p id="registration-status" role="status"></p>
+    <section id="registration-preview" aria-labelledby="registration-preview-title" hidden>
+      <h3 id="registration-preview-title">固定する内容のプレビュー</h3>
+      <p id="registration-context"></p>
+      <p id="registration-rules"></p>
+      <p id="registration-schedule"></p>
+      <p id="registration-codes"></p>
+      <p id="registration-metrics"></p>
+      <div id="registration-models" class="comparison"></div>
+      <p>権利、当時の入手可能性、調整の妥当性、実行コードが確認できるまで評価待ち（データ未取得・未検証）。不足や変更があれば採点せず、代替しません。</p>
+      <button id="registration-confirm" type="button" disabled>この設定を固定する</button>
+    </section>
+    <section id="registration-history" aria-labelledby="registration-history-title" hidden>
+      <h3 id="registration-history-title">固定記録</h3>
+      <ul id="registration-records"></ul>
     </section>
   </section>
 </main>

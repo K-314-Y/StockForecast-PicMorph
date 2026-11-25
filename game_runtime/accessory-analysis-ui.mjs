@@ -16,6 +16,11 @@ const batchResult=$('batch-result');
 const adjustedSplit=$('adjusted-split-compare');
 const adjustedSplitStatus=$('adjusted-split-status');
 const adjustedSplitResult=$('adjusted-split-result');
+const registrationReview=$('registration-review');
+const registrationConfirm=$('registration-confirm');
+const registrationList=$('registration-list');
+const registrationStatus=$('registration-status');
+const registrationPreview=$('registration-preview');
 const formatMetric=new Intl.NumberFormat('ja-JP',{maximumFractionDigits:6});
 let state;
 let controls=[];
@@ -24,10 +29,14 @@ let refreshRequired=false;
 let batchEpoch=0;
 let batchPending=false;
 let batchNeedsReload=false;
+let registrationRequest;
+let reviewedRegistration;
+let registrationExpiry;
 
-async function request(path='',input) {
+async function request(path='',input,signal) {
+  const timeout=AbortSignal.timeout(['/historical','/batch-history','/adjusted-split'].includes(path)?40000:20000);
   const response=await fetch(API+path,{mode:'same-origin',credentials:'same-origin',cache:'no-store',redirect:'error',
-    signal:AbortSignal.timeout(['/historical','/batch-history','/adjusted-split'].includes(path)?40000:20000),
+    signal:signal ? AbortSignal.any([signal,timeout]) : timeout,
     ...(input===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})});
   const body=await response.json();
   if(!response.ok)throw Object.assign(new Error(body.error || '分析実験を実行できませんでした'),{status:response.status});
@@ -45,6 +54,9 @@ function updateControls() {
   historical.disabled=compare.disabled || !state.policies.some(rule=>state.equipped.visible_kinds.includes(rule.kind_id));
   batch.disabled=historical.disabled || batchNeedsReload;
   adjustedSplit.disabled=batch.disabled;
+  registrationReview.disabled=batch.disabled;
+  registrationConfirm.disabled=registrationReview.disabled || !reviewedRegistration;
+  registrationList.disabled=busy;
   reload.disabled=busy;
   for(const {focus,intensity} of controls) {
     focus.disabled=busy || refreshRequired;
@@ -241,6 +253,51 @@ function clearResults() {
   batchStatus.textContent='';
   adjustedSplitResult.hidden=true;
   adjustedSplitStatus.textContent='';
+  clearRegistrationPreview();
+}
+
+function clearRegistrationPreview() {
+  registrationRequest?.abort();
+  registrationRequest=undefined;
+  reviewedRegistration=undefined;
+  clearTimeout(registrationExpiry);
+  registrationPreview.hidden=true;
+}
+
+function renderRegistrationReview({review}) {
+  const {context,source_revisions:sources,protocol}=review;
+  $('registration-context').textContent=`登録キャラ ${context.character_id}。版数はキャラ ${context.active_revision}、装備 ${context.equipment_revision}、ルール ${context.expected_revision}、元モデル ${sources.source_revision}、相棒 ${sources.companion_revision}、編成 ${sources.lineup_revision}、育成 ${sources.growth_revision}。`;
+  $('registration-rules').textContent=appliedRules({provenance:review});
+  $('registration-schedule').textContent=`固定したJST日付の翌日以降にある、検証済みの最初の${protocol.evaluation_sessions_per_code}営業日を再現し、その直前${protocol.lookback_sessions}営業日を履歴に使います。今回の最短日は${review.earliest_possible_day}です。実際の営業日は後から確認し、値動きで期間を選別しません。`;
+  $('registration-codes').textContent=`対象${protocol.codes.length}銘柄　${protocol.codes.join('、')}`;
+  $('registration-metrics').textContent=`指標はBrierスコア、仮想損益、最大下落率、シグナルが異なった日数。各モデル・銘柄の仮想資金は${protocol.initial_virtual_coins_per_model_and_code.toLocaleString('ja-JP')}コイン、売買手数料は${protocol.trade_fee_bps/100}%です。`;
+  const models=$('registration-models');
+  models.replaceChildren();
+  for(const [key,label] of [['base_model','元モデル'],['baseline','基準'],['candidate','候補']]) {
+    const model=review[key];
+    const article=document.createElement('article');
+    const heading=document.createElement('h4');
+    heading.textContent=label;
+    const summary=document.createElement('p');
+    summary.textContent=`期間 ${model.fast_window}／${model.slow_window}。仮想投資比率 ${formatMetric.format(model.risk_fraction*100)}%。`;
+    const weights=document.createElement('p');
+    weights.textContent=Object.entries(FOCUS).map(([kind,name])=>`${name} ${model.plugin_weights[kind]}%（感度${model.plugin_strengths[kind]}）`).join('、');
+    article.append(heading,summary,weights);
+    models.append(article);
+  }
+  registrationPreview.hidden=false;
+}
+
+const JST_TIME=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',dateStyle:'medium',timeStyle:'medium'});
+function renderRegistrationList(records) {
+  const list=$('registration-records');
+  list.replaceChildren();
+  for(const record of records) {
+    const item=document.createElement('li');
+    item.textContent=`固定 ${JST_TIME.format(new Date(record.created_at))}（JST） ／ 最短日 ${record.earliest_possible_day} ／ 評価待ち（データ未取得・未検証） ／ ID ${record.id}`;
+    list.append(item);
+  }
+  $('registration-history').hidden=false;
 }
 
 function comparisonContext() {
@@ -325,6 +382,47 @@ batch.addEventListener('click',()=>runMultipleWindows({button:batch,section:batc
 adjustedSplit.addEventListener('click',()=>runMultipleWindows({button:adjustedSplit,section:adjustedSplitResult,output:adjustedSplitStatus,
   path:'/adjusted-split',render:renderAdjustedSplit,message:'ローカルの調整済み研究データで前半・後半を比較しています…',done:'調整済み株価の前半・後半の比較が完了しました。'}));
 
+registrationReview.addEventListener('click',()=>{
+  if(registrationReview.disabled)return;
+  clearRegistrationPreview();
+  const controller=new AbortController();
+  registrationRequest=controller;
+  void run('固定する設定を確認しています…',async()=>{
+    try {
+      const response=await request('/registration/preview',comparisonContext(),controller.signal);
+      if(controller.signal.aborted)return;
+      renderRegistrationReview(response);
+      reviewedRegistration=response;
+      registrationStatus.textContent='5分以内に内容を確認して固定してください。';
+      registrationExpiry=setTimeout(()=>{
+        clearRegistrationPreview();
+        registrationStatus.textContent='プレビューの有効期限が切れました。固定する内容を確認し直してください。';
+        updateControls();
+      },1000*response.valid_for_seconds);
+    } catch(error) {if(!controller.signal.aborted)throw error;}
+    finally {if(registrationRequest===controller)registrationRequest=undefined;}
+  },registrationStatus);
+});
+registrationConfirm.addEventListener('click',()=>{
+  if(registrationConfirm.disabled || !reviewedRegistration || !window.confirm('この設定と検証手順を固定しますか？ 同じ内容は同じ日に一度だけ記録でき、固定記録は上書きできません。'))return;
+  const {preview_token,review}=reviewedRegistration;
+  clearRegistrationPreview();
+  $('registration-history').hidden=true;
+  void run('設定をローカルに固定しています…',async()=>{
+    const {registration}=await request('/registration',{...review.context,preview_token});
+    registrationStatus.textContent=`設定を固定しました。評価待ち（データ未取得・未検証）。最短日は${registration.earliest_possible_day}です。`;
+  },registrationStatus);
+});
+registrationList.addEventListener('click',()=>{
+  if(registrationList.disabled)return;
+  $('registration-history').hidden=true;
+  void run('固定記録を読み込んでいます…',async()=>{
+    const {registrations}=await request('/registrations');
+    renderRegistrationList(registrations);
+    registrationStatus.textContent=registrations.length?`${registrations.length}件の固定記録を表示しました。`:'固定記録はまだありません。';
+  },registrationStatus);
+});
+
 function clearBatchOnDeparture() {
   if(!batchPending && batchResult.hidden && adjustedSplitResult.hidden)return;
   batchEpoch++;
@@ -337,4 +435,12 @@ function clearBatchOnDeparture() {
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearBatchOnDeparture();});
 window.addEventListener('pagehide',clearBatchOnDeparture);
+function clearRegistrationOnDeparture() {
+  if(!registrationRequest && !reviewedRegistration)return;
+  clearRegistrationPreview();
+  registrationStatus.textContent='画面を離れたため、固定する内容を確認し直してください。';
+  updateControls();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearRegistrationOnDeparture();});
+window.addEventListener('pagehide',clearRegistrationOnDeparture);
 void load();

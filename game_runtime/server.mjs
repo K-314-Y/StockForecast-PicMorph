@@ -29,6 +29,8 @@ import {CHARACTER_EQUIPMENT_API,MAX_EQUIPMENT_BYTES,createCharacterEquipmentStor
 import {analysisCatalog,deriveAccessoryAnalysis,equippedAnalysisKinds,stalePolicyKinds,validateAnalysisContext} from './accessory-analysis.mjs';
 import {ACCESSORY_ANALYSIS_API,MAX_ANALYSIS_REQUEST,analysisRecord,createAccessoryAnalysisStore,
   validateAnalysisSave} from './accessory-analysis-store.mjs';
+import {canonicalPreview,createAccessoryRegistrationStore,createRegistrationReview,readRegistrationFingerprints,
+  registrationContent,registrationResponse} from './accessory-registration.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
@@ -369,6 +371,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   independentPartReader = process.platform==='linux' ? createIndependentPartReader() : null,
                                   equipmentStore = process.platform==='linux' ? createCharacterEquipmentStore() : null,
                                   accessoryAnalysisStore = process.platform==='linux' ? createAccessoryAnalysisStore() : null,
+                                  accessoryRegistrationStore = process.platform==='linux' ? createAccessoryRegistrationStore() : null,
+                                  registrationClock = Date.now, registrationFingerprints = readRegistrationFingerprints,
                                   characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
                                   userPngImporter = process.platform==='linux' ? createUserPngImporter() : null,
                                   appearanceCatalog = readAppearanceCatalog,
@@ -387,6 +391,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
   let independentPartBusy=false;
   let equipmentInFlight=0;
   let accessoryAnalysisInFlight=0;
+  const registrationReview=createRegistrationReview();
   let demoRegistrationBusy=false;
   let userPngImportBusy=false;
   let dialogueBusy = false;
@@ -416,6 +421,13 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
     const derived=deriveAccessoryAnalysis(baseline,record.policies,equipped.parts,catalog);
     if(!derived.applied.length)throw failure('表示中の装備に使える保存済み分析設定がありません。装備と分析設定を確認してください',422);
     return derived;
+  }
+  async function readRegistrationContent(context,timestamp,signal) {
+    const [snapshot,companion,fingerprints]=await Promise.all([loadSnapshot(),companionStore.read(),registrationFingerprints()]);
+    const original=modelPlanFromSnapshot(snapshot,null);
+    const baseline=validateLabModel(applyCompanion(original,companion).models.mine);
+    const analysis=await readPracticeAnalysis(context,baseline,signal);
+    return registrationContent({timestamp,context,revisions:labRevisions(snapshot,companion),original,baseline,analysis,fingerprints});
   }
   loadSnapshot ??= () => loadLocalSnapshot(store);
   let inFlight = 0;
@@ -474,10 +486,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const historical=write && path===ACCESSORY_ANALYSIS_API+'/historical';
       const batchHistory=write && path===ACCESSORY_ANALYSIS_API+'/batch-history';
       const adjustedSplit=write && path===ACCESSORY_ANALYSIS_API+'/adjusted-split';
+      const registrationPreview=write && path===ACCESSORY_ANALYSIS_API+'/registration/preview';
+      const registrationSave=write && path===ACCESSORY_ANALYSIS_API+'/registration';
+      const registrationList=req.method==='GET' && path===ACCESSORY_ANALYSIS_API+'/registrations';
+      const registration=registrationPreview || registrationSave || registrationList;
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info) || req.url!==path || process.platform!=='linux' ||
-          !accessoryAnalysisStore || !independentPartReader || !equipmentStore) {
+      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info && !registration) ||
+          req.url!==path || process.platform!=='linux' || (registration && !accessoryRegistrationStore) ||
+          (!registrationList && (!accessoryAnalysisStore || !independentPartReader || !equipmentStore))) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
       if(accessoryAnalysisInFlight>=2)return json(res,429,{error:'分析実験を処理中です'});
@@ -495,6 +512,36 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
+        if(registration) {
+          if(registrationList) {
+            const result=registrationResponse(await accessoryRegistrationStore.list(signal),true);
+            if(!res.destroyed)json(res,200,result);
+            return;
+          }
+          if(!input || typeof input!=='object' || Array.isArray(input))throw failure('固定する登録キャラと版数を指定してください。',400);
+          let context=input,token;
+          if(registrationSave) {
+            const {preview_token,...versions}=input;
+            if(typeof preview_token!=='string' || !/^\d{13}\.[a-f0-9]{64}$/.test(preview_token) || preview_token.length!==78)
+              throw failure('有効なプレビューを指定してください。',400);
+            context=versions;
+            token=preview_token;
+          }
+          validateAnalysisContext(context);
+          const timestamp=registrationClock();
+          const first=await readRegistrationContent(context,timestamp,signal);
+          if(registrationSave)registrationReview.check(token,first,registrationClock());
+          const current=await readRegistrationContent(context,timestamp,signal);
+          if(canonicalPreview(first)!==canonicalPreview(current))throw analysisChanged();
+          if(res.destroyed)return;
+          if(registrationPreview) {
+            return json(res,200,registrationReview.issue(current,registrationClock()));
+          }
+          const expires=registrationReview.check(token,current,registrationClock());
+          const result=registrationResponse(await accessoryRegistrationStore.save(current,expires,signal),false);
+          if(!res.destroyed)json(res,201,result);
+          return;
+        }
         if(historical || batchHistory || adjustedSplit) {
           if(!input || typeof input!=='object' || Array.isArray(input))throw failure('比較する登録キャラと版数を指定してください',400);
           const selection={};
