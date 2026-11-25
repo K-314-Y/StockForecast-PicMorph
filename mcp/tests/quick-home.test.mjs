@@ -522,6 +522,34 @@ test('P9s ZIP fingerprints reflect the equipped analysis even with identical pre
   assert.notEqual(await run('v1_0123456789abcdef'),original);
 });
 
+test('quick practice omits missing or malformed trace and preserves the recorded signals',async()=>{
+  let alter=()=>{};
+  const methods=['rsi_oversold'];
+  await withServer(async({base})=>{
+    const body={model_id:'zip_'+'1'.repeat(32),amount:1000,scenario_token:'v1_0123456789abcdef'};
+    const first=await post(base,body);
+    assert.equal(first.status,200);
+    const {mine_decision_trace,...legacy}=first.data;
+    assert.equal(mine_decision_trace.length,12);
+    for (alter of [
+      plan=>delete plan.mine_decision_trace,
+      plan=>plan.mine_decision_trace.pop(),
+      plan=>{plan.mine_decision_trace[1].baseline_up=NaN;},
+      plan=>{plan.mine_decision_trace[2].method_supports.rsi_oversold=1.1;},
+      plan=>{plan.mine_decision_trace[3].combined_support=0.5;},
+      plan=>{plan.mine_decision_trace[4].threshold=0.55;},
+      plan=>{plan.mine_decision_trace[5].method_supports={unknown:0.5};},
+      plan=>{const row=plan.mine_decision_trace[6];row.signal=row.signal==='LONG'?'CASH':'LONG';},
+      plan=>{for(const row of plan.mine_decision_trace) row.method_supports={macd_momentum:row.method_supports.rsi_oversold};},
+    ]) {
+      const reply=await post(base,body);
+      assert.equal(reply.status,200);
+      assert.deepEqual(reply.data,legacy);
+    }
+  },{importedCharacterStore:{model:async()=>({name:'テスト',model:MODEL,accessory_methods:methods})},
+    inspectPlan:(_,plan)=>alter(plan)});
+});
+
 const accessoryPath='/api/accessory-control';
 const fixedAccessoryPath=accessoryPath+'/fixed';
 const accessoryBody={model_id:'self',accessory_a:'star',accessory_b:'glasses',amount:1000,leverage:5};

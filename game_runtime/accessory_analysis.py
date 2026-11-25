@@ -42,16 +42,23 @@ def normalize_methods(methods: list[str]) -> tuple[str, ...]:
     return tuple(sorted(methods))
 
 
-def _combined_signal(methods: tuple[str, ...], history: tuple[float, ...], baseline_up: float) -> str:
+def accessory_decision(methods: tuple[str, ...], history: tuple[float, ...], baseline_up: float) -> dict:
+    """Evaluate the canonical methods once and retain the inputs to this decision."""
     if not isinstance(history, tuple) or not 20 <= len(history) <= 1000:
         raise ValueError("insufficient_accessory_history")
     if any(type(p) not in (int, float) or not math.isfinite(p) or p <= 0 for p in history):
         raise ValueError("invalid_accessory_history")
     if type(baseline_up) not in (int, float) or not math.isfinite(baseline_up) or not 0 <= baseline_up <= 1:
         raise ValueError("invalid_baseline_probability")
-    primary_support = _average([_indicator_support(method, history) for method in methods])
+    supports = {method: _indicator_support(method, history) for method in methods}
+    primary_support = _average(list(supports.values()))
     combined_support = .8 * primary_support + .2 * baseline_up
-    return "LONG" if combined_support > .54 else "CASH"
+    threshold = .54
+    return {
+        "method_supports": supports, "baseline_up": baseline_up,
+        "combined_support": combined_support, "threshold": threshold,
+        "signal": "LONG" if combined_support > threshold else "CASH",
+    }
 
 
 def _indicator_support(method: str, history: tuple[float, ...]) -> float:
@@ -86,12 +93,12 @@ def accessory_signal(accessory: str, history: tuple[float, ...], baseline_up: fl
     """Run the original single-accessory rule before revealing the next close."""
     if type(accessory) is not str or accessory not in METHODS:
         raise ValueError("unsupported_accessory_analysis")
-    return _combined_signal((METHODS[accessory],), history, baseline_up)
+    return accessory_decision((METHODS[accessory],), history, baseline_up)["signal"]
 
 
 def equipped_accessory_signal(methods: list[str], history: tuple[float, ...], baseline_up: float = 0.5) -> str:
     """Give each equipped method equal weight in the primary analysis."""
-    return _combined_signal(normalize_methods(methods), history, baseline_up)
+    return accessory_decision(normalize_methods(methods), history, baseline_up)["signal"]
 
 # Experimental research only. Not called by game prediction or its public API.
 # A signal's extremeness is a heuristic "strength", NOT validated reliability.
@@ -108,8 +115,7 @@ def experimental_strength_weighted_signal(
     """
     canonical = normalize_methods(methods)
     # Reuse the production signal's strict input checks with no mutation.
-    _combined_signal(canonical, history, baseline_up)
-    supports = [_indicator_support(method, history) for method in canonical]
+    supports = accessory_decision(canonical, history, baseline_up)["method_supports"].values()
     weights = [0.5 + abs(support - 0.5) / 0.45 for support in supports]
     primary_support = sum(support * weight for support, weight in zip(supports, weights)) / sum(weights)
     combined_support = 0.8 * primary_support + 0.2 * baseline_up

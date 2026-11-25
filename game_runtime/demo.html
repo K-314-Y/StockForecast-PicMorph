@@ -492,6 +492,11 @@ select{max-width:100%;background:#111c31;border:1px solid #6c809c;color:#fff;bor
     <thead><tr><th scope="col">日</th><th scope="col">Aの判断</th><th scope="col">Bの判断</th><th scope="col">比較</th></tr></thead>
     <tbody id="quickCompareDecisionRows"></tbody>
    </table>
+   <details id="quickCompareTrace">
+    <summary>判断が違った日の計算内訳</summary>
+    <p class="simple-hint">装備スコアの平均を80%、基礎モデルのUPを20%として合成し、基準を超えると株を持ちます。スコアは校正された上昇確率ではありません。表示は概数です。</p>
+    <div id="quickCompareTraceDays"></div>
+   </details>
   </section>
   <div id="quickCompareMulti" hidden>
    <button id="quickCompareMultiRun" type="button" aria-controls="quickCompareMultiResults" aria-describedby="quickCompareMultiNote" disabled>別の3つの架空相場でも比較</button>

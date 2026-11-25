@@ -5,6 +5,7 @@ import json
 import unittest
 from unittest.mock import patch
 from engine import SYNTHETIC_PRICES, prediction
+from game_runtime.accessory_analysis import METHODS, _indicator_support
 from game_runtime.predict_bridge import (FUTURE, SLOTS, create_prediction_plan,
                                         model_from_record, scenario_prices)
 MODEL = dict(fast_window=3, slow_window=9, risk_fraction=.35,
@@ -66,6 +67,33 @@ class ScenarioTests(unittest.TestCase):
             with patch("game_runtime.predict_bridge.scenario_prices", return_value=altered):
                 result = create_prediction_plan(request())
             self.assertEqual(result["signals"][:day+1], original["signals"][:day+1])
+
+    def test_accessory_trace_matches_prior_inputs_and_recorded_decision(self):
+        for options in ({}, {"accessory_strategy": "none"}):
+            self.assertNotIn("mine_decision_trace", create_prediction_plan({**request(), **options}))
+        for options, methods in [
+            ({"accessory_strategy": "star"}, [METHODS["star"]]),
+            ({"accessory_methods": [METHODS["none"]]}, [METHODS["none"]]),
+            ({"accessory_methods": list(METHODS.values())[:3]}, sorted(list(METHODS.values())[:3])),
+        ]:
+            data = {**request(), **options}
+            plan = create_prediction_plan(data)
+            trace = plan["mine_decision_trace"]
+            self.assertEqual(len(trace), 12)
+            history = tuple(SYNTHETIC_PRICES)
+            model = model_from_record(data["models"]["mine"])
+            for day, row in enumerate(trace):
+                supports = {method: _indicator_support(method, history) for method in methods}
+                up = prediction(model, history)["UP"]
+                combined = .8 * (sum(supports.values()) / len(methods)) + .2 * up
+                signal = "LONG" if combined > .54 else "CASH"
+                self.assertEqual(row, dict(method_supports=supports, baseline_up=up,
+                                           combined_support=combined, threshold=.54, signal=signal))
+                self.assertEqual(row["signal"], plan["signals"][day]["mine"])
+                altered = plan["future_prices"][:day] + [900] * (12-day)
+                with patch("game_runtime.predict_bridge.scenario_prices", return_value=altered):
+                    self.assertEqual(create_prediction_plan(data)["mine_decision_trace"][:day+1], trace[:day+1])
+                history += (plan["future_prices"][day],)
 
     def test_reject_malformed_and_extra(self):
         for token in (None, 1, [], {}, "", TOKEN+"\n", TOKEN+"0", TOKEN.upper(), "v2_"+TOKEN[3:]):

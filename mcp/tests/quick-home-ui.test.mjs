@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {validDecisionTrace} from '../../game_runtime/parts-lab/accessory-options.mjs';
 import {readFile} from 'node:fs/promises';
 import {createContext,runInContext} from 'node:vm';
 
@@ -151,7 +152,7 @@ async function mount(models=[],chatgpt=false,imported=[],search='') {
   };
   state.copy=async text=>{copies.push(text);};
   state.navigator={clipboard:{writeText:text=>state.copy(text)}};
-  const context={document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
+  const context={validDecisionTrace,document,fetch,AbortController,setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage,
     Blob,URLSearchParams,location:{origin:'http://localhost',search},URL:class extends URL {
       static createObjectURL(blob){
         assert.ok(blob instanceof Blob);
@@ -176,7 +177,7 @@ async function mount(models=[],chatgpt=false,imported=[],search='') {
   context.window=context;
   createContext(context);
   const parseJson=runInContext('source=>JSON.parse(source)',context);
-  runInContext(script,context);
+  runInContext(script.replace("import {validDecisionTrace} from './parts-lab/accessory-options.mjs';",""),context);
   await new Promise(resolve=>setImmediate(resolve));
   const get=id=>nodes.get(id);
   return {get,calls,scrolls,storageWrites,copies,downloads,revokedUrls,document,state,sourceChanged:()=>observeSource(),
@@ -3160,6 +3161,7 @@ test('A then ZIP B shares the exact scenario, amount and leverage without changi
     ['B：'+zipName+'（ZIP専用AI・未学習）','架空の損益：-1,250 C','最大下落率：100%','強制終了：第3日'],
   ]);
   assert.equal(get('quickCompareDecisionDiff').hidden,false);
+  assert.equal(get('quickCompareTraceDays').textContent,'A・Bともに計算内訳なし。');
   assert.equal(get('quickCompareDecisionSummary').textContent,'判断が違う日：6/12日 ／ シグナル上で株を持つ日：A 6日・B 4日');
   const rows=get('quickCompareDecisionRows').children;
   assert.deepEqual(rows.map(row=>row.children.map(cell=>cell.textContent)),[
@@ -3196,6 +3198,39 @@ test('A then ZIP B shares the exact scenario, amount and leverage without changi
     {path:'/api/quick-practice',body:{model_id:zipId,amount:1250,leverage:7,scenario_token:'v1_0123456789abcdef'}},
   ]);
   assert.deepEqual(storageWrites,[]);
+});
+
+test('comparison shows recorded inputs only on differing days and omits an invalid or absent arm trace',async()=>{
+  const [a,b]=['a','b'].map(letter=>'zip_'+letter.repeat(32));
+  const imported=[a,b].map(id=>({id,ai_id:id,name:id.slice(-1),model_version:'v1'}));
+  const ui=await mount([],false,imported,'?model='+a);
+  const {get,fire,state}=ui;
+  const practice=state.practice;
+  let variant='valid';
+  state.practice=async body=>{
+    const value=await practice(body);
+    const trace=Array.from({length:12},(_,i)=>{
+      const long=body.model_id===b && i===3;
+      return {method_supports:body.model_id===a?{macd_momentum:.5,moving_average_trend:.5}:{rsi_oversold:long ? .8 : .5},
+        baseline_up:.7,threshold:.54,combined_support:long ? .78 : .54,signal:long?'LONG':'CASH'};
+    });
+    value.daily_ai_signals=trace.map(row=>row.signal);
+    if (body.model_id===b && variant==='missing') return value;
+    if (body.model_id===b && variant==='malformed') trace[11].method_supports={'<img onerror=1>':.5};
+    return {...value,mine_decision_trace:trace};
+  };
+  await runQuickPractice(ui);
+  await chooseCompareModel(ui,b);
+  for (variant of ['valid','malformed','missing']) {
+    await fire('quickCompareRun');
+    assert.equal(get('quickCompareDecisionRows').children.length,12);
+    const entries=get('quickCompareTraceDays').children;
+    assert.equal(entries.length,1);
+    assert.deepEqual(entries[0].children.map(node=>node.textContent),[
+      '第4日','A：MACD 0.500・移動平均 0.500 ／ 基礎モデルUP 0.700 ／ 合成 0.54 ≦ 基準 0.54',
+      variant==='valid'?'B：RSI 0.800 ／ 基礎モデルUP 0.700 ／ 合成 0.780 ＞ 基準 0.54':'B：計算内訳なし',
+    ]);
+  }
 });
 
 test('identical decisions show 0/12 and retain independent liquidation notes',async()=>{

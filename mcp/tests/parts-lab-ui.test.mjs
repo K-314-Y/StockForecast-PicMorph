@@ -1090,6 +1090,30 @@ test('Chrome registers, re-edits and duplicates ZIP characters used in the 12-da
       assert.deepEqual(secondResult.daily_synthetic_prices,firstResult.daily_synthetic_prices);
       await page.locator('#quickCompareDecisionDiff').waitFor();
       assert.equal(await page.locator('#quickCompareDecisionRows tr').count(),12);
+      assert.equal(firstResult.mine_decision_trace.length,12);
+      assert.equal(secondResult.mine_decision_trace.length,12);
+      const details=page.locator('#quickCompareTrace');
+      assert.equal(await details.evaluate(node=>node.open),false);
+      await details.locator('summary').click();
+      const days=page.locator('#quickCompareTraceDays > div');
+      const different=firstResult.daily_ai_signals.flatMap((signal,i)=>signal!==secondResult.daily_ai_signals[i]?[i]:[]);
+      assert.equal(await days.count(),different.length);
+      const names={bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',macd_momentum:'MACD',moving_average_trend:'移動平均'};
+      for (const [i,day] of different.entries()) {
+        const entry=days.nth(i);
+        assert.equal(await entry.locator('strong').textContent(),'第'+(day+1)+'日');
+        for (const [side,result] of [firstResult,secondResult].entries()) {
+          const row=result.mine_decision_trace[day];
+          const text=await entry.locator('div').nth(side).textContent();
+          assert.equal(text[0],side===0?'A':'B');
+          for (const [key,value] of Object.entries(row.method_supports))
+            assert.ok(text.includes(names[key]+' '+value.toFixed(3)));
+          assert.ok(text.includes('基礎モデルUP '+row.baseline_up.toFixed(3)));
+          const rounded=row.combined_support.toFixed(3);
+          assert.ok(text.includes('合成 '+(Number(rounded)===row.threshold?row.combined_support:rounded)));
+          assert.ok(text.includes((row.signal==='LONG'?'＞':'≦')+' 基準 0.54'));
+        }
+      }
       assert.deepEqual(await readFile(portraitFile),originalBytes);
       assert.deepEqual(await getModel(),originalModel);
       assert.deepEqual(writes.slice(writesBeforeDuplicate),[

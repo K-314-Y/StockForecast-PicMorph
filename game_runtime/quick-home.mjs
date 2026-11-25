@@ -1,4 +1,5 @@
 /** Beginner-only flow. Uses 12 synthetic days; never places real orders. */
+import {validDecisionTrace} from './parts-lab/accessory-options.mjs';
 const element = id => document.getElementById(id);
 const BALANCE = 10000;
 const money = value => Number(value).toLocaleString('ja-JP',{maximumFractionDigits:2});
@@ -1395,6 +1396,8 @@ function resetCompareResult() {
   compareDecisionDiff.hidden=true;
   compareDecisionSummary.textContent='';
   compareDecisionRows.replaceChildren();
+  element('quickCompareTrace').open=false;
+  element('quickCompareTraceDays').replaceChildren();
   compareStatus.textContent='';
   compareAnnouncement.textContent='';
 }
@@ -1475,6 +1478,7 @@ function showCompare(value,ordered,modelName) {
     amount:ordered.amount,leverage:ordered.leverage,scenario_token:value.scenario_token,scenario_kind:value.scenario_kind,
     daily_synthetic_prices:[...value.daily_synthetic_prices],profit_coins:value.profit_coins,
     daily_ai_signals:Object.freeze([...value.daily_ai_signals]),
+    mine_decision_trace:value.mine_decision_trace,
     max_drawdown_pct:value.max_drawdown_pct,liquidated_at_step:value.liquidated_at_step,
     model_effective_sha256:value.model_effective_sha256,
     engine_source_sha256:value.engine_source_sha256,
@@ -1518,12 +1522,44 @@ function compareDecisionCell(value,day) {
   }
   return cell;
 }
+const traceMethodNames={
+  bollinger_breakout:'ボリンジャーバンド',rsi_oversold:'RSI',macd_momentum:'MACD',moving_average_trend:'移動平均',
+};
+function comparisonTrace(value) {
+  return /^zip_[a-f0-9]{32}$/.test(value.model_id) &&
+    validDecisionTrace(value.mine_decision_trace,value.daily_ai_signals) ? value.mine_decision_trace : null;
+}
+function traceLine(label,row) {
+  const line=document.createElement('div');
+  if (!row) {
+    line.textContent=label+'：計算内訳なし';
+    return line;
+  }
+  const methods=Object.entries(row.method_supports).map(([key,value])=>traceMethodNames[key]+' '+value.toFixed(3));
+  // Keep the side of the cutoff visible even when three decimals round to 0.540.
+  const combined=row.combined_support.toFixed(3);
+  line.textContent=label+'：'+methods.join('・')+' ／ 基礎モデルUP '+row.baseline_up.toFixed(3)+
+    ' ／ 合成 '+(Number(combined)===row.threshold ? row.combined_support : combined)+
+    (row.signal==='LONG'?' ＞ ':' ≦ ')+'基準 '+row.threshold;
+  return line;
+}
 function renderCompareDecisions(a,b) {
   const signals=a.daily_ai_signals;
+  const traceA=comparisonTrace(a),traceB=comparisonTrace(b);
+  const traceDays=[];
   let different=0;
   const rows=signals.map((signal,index)=>{
     const day=index+1, differs=signal!==b.daily_ai_signals[index];
-    if(differs)different++;
+    if(differs) {
+      different++;
+      if (traceA || traceB) {
+        const entry=document.createElement('div');
+        const heading=document.createElement('strong');
+        heading.textContent='第'+day+'日';
+        entry.append(heading,traceLine('A',traceA?.[index]),traceLine('B',traceB?.[index]));
+        traceDays.push(entry);
+      }
+    }
     const row=document.createElement('tr');
     const dayHeader=document.createElement('th');
     const comparison=document.createElement('td');
@@ -1537,6 +1573,10 @@ function renderCompareDecisions(a,b) {
   const aLong=signals.filter(signal=>signal==='LONG').length;
   const bLong=b.daily_ai_signals.filter(signal=>signal==='LONG').length;
   compareDecisionSummary.textContent='判断が違う日：'+different+'/12日 ／ シグナル上で株を持つ日：A '+aLong+'日・B '+bLong+'日';
+  const detail=element('quickCompareTraceDays');
+  detail.replaceChildren(...traceDays);
+  if (!traceDays.length) detail.textContent=(!different?'判断が違った日はありません。':'')+
+    (!traceA && !traceB?'A・Bともに計算内訳なし。':'');
   compareDecisionRows.replaceChildren(...rows);
   compareDecisionDiff.hidden=false;
 }

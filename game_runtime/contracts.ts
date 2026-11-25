@@ -20,6 +20,13 @@ export interface PracticePlan {
   initial_price: number;
   future_prices: number[];
   signals: StepSignals[];
+  mine_decision_trace?: Array<{
+    method_supports: Partial<Record<'bollinger_breakout' | 'rsi_oversold' | 'macd_momentum' | 'moving_average_trend', number>>;
+    baseline_up: number;
+    combined_support: number;
+    threshold: 0.54;
+    signal: TradingSignal;
+  }>;
   models: Record<CharacterSlot, CharacterModel>;
   model_sha256: string;
 }

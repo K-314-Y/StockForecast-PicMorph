@@ -15,8 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine import Model, PLUGIN_IDS, SYNTHETIC_PRICES, prediction, python_source
 from game_runtime.accessory_analysis import (
-    COMBINATION_VERSION, METHODS, RULE_VERSION, accessory_signal,
-    equipped_accessory_signal, normalize_methods,
+    COMBINATION_VERSION, METHODS, RULE_VERSION, accessory_decision, normalize_methods,
 )
 
 SLOTS = ("mine", "owl", "turtle")
@@ -72,24 +71,27 @@ def create_prediction_plan(data: dict) -> dict:
     if "accessory_methods" in data:
         if "accessory_strategy" in data:
             raise ValueError("conflicting_accessory_strategies")
-        methods = data["accessory_methods"]
-        strategy_identity = "\n" + COMBINATION_VERSION + ":" + ",".join(normalize_methods(methods))
+        methods = normalize_methods(data["accessory_methods"])
+        strategy_identity = "\n" + COMBINATION_VERSION + ":" + ",".join(methods)
     elif accessory is not None:
+        methods = (METHODS[accessory],)
         strategy_identity = "\n" + RULE_VERSION + ":" + accessory
     base = model_from_record(data["base_model"])
     models = {key: model_from_record(data["models"][key]) for key in SLOTS}
     future = scenario_prices(data["scenario_token"]) if "scenario_token" in data else FUTURE
     history = list(SYNTHETIC_PRICES)
     signals = []
+    mine_trace = []
     for next_price in future:
         step = {}
         past = tuple(history)
         for key in SLOTS:
             p = prediction(models[key], past)
             if key == "mine" and methods is not None:
-                step[key] = equipped_accessory_signal(methods, past, p["UP"])
-            elif key == "mine" and accessory is not None:
-                step[key] = accessory_signal(accessory, past, p["UP"])
+                decision = accessory_decision(methods, past, p["UP"])
+                step[key] = decision["signal"]
+                if accessory != "none":
+                    mine_trace.append(decision)
             else:
                 step[key] = "LONG" if p["UP"] > .52 and p["UP"] > p["DOWN"] + .05 else "CASH"
         signals.append(step)
@@ -101,6 +103,7 @@ def create_prediction_plan(data: dict) -> dict:
         "initial_price": SYNTHETIC_PRICES[-1],
         "future_prices": list(future),
         "signals": signals,
+        **({"mine_decision_trace": mine_trace} if mine_trace else {}),
         "models": {k: {
             "risk_fraction": m.risk_fraction,
             "plugin_weights": dict(zip(PLUGIN_IDS, m.plugin_weights)),

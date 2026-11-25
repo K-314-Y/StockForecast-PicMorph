@@ -23,6 +23,7 @@ import {createModelShopStore} from './model-shop.mjs';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
+import {ACCESSORY_METHODS,validDecisionTrace} from './parts-lab/accessory-options.mjs';
 import {runSyntheticGame, validateAllocations} from './practice.mjs';
 import {settleLeveragedPractice} from './leverage-practice.mjs';
 import {makeFairComparison, validateContenders} from './arena.mjs';
@@ -978,6 +979,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         const normal = settleLeveragedPractice({
           equityPath:result.raw_equity_path,amount:payload.amount,leverage:1,
         });
+        const signals=result.decisions.map(decision=>decision.signals.mine);
+        const traceMethods=predictionInput.accessory_methods ?? (predictionInput.accessory_strategy &&
+          predictionInput.accessory_strategy!=='none' ? [ACCESSORY_METHODS[predictionInput.accessory_strategy]] : []);
+        const hasTrace=validDecisionTrace(plan.mine_decision_trace,signals,traceMethods);
         await verifyPracticeEngineSource();
         return json(res,200,{
           mode:'SIMPLE_SYNTHETIC_PRACTICE_ONLY',
@@ -999,7 +1004,8 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           daily_balances:settled.allocated_equity_path.map((capital,day,path)=>
             day===0 ? 10000 : day===path.length-1 ? settled.final_balance :
               Math.round((settled.cash_held+capital+Number.EPSILON)*100)/100),
-          daily_ai_signals:result.decisions.map(decision=>decision.signals.mine),
+          daily_ai_signals:signals,
+          ...(hasTrace ? {mine_decision_trace:plan.mine_decision_trace} : {}),
           daily_synthetic_prices:[plan.initial_price,...result.decisions.map(decision=>decision.price)],
           max_drawdown_pct:settled.max_drawdown_pct,
           normal_profit_coins:normal.profit_coins,

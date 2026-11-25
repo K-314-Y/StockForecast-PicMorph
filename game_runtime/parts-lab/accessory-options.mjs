@@ -46,3 +46,25 @@ export function requireDistinctMethods(methods) {
   if (new Set(methods).size !== methods.length)
     throw fail('同じ分析方法のアクセサリーは1個だけ装備できます');
 }
+
+// A trace is optional. Keep the recorded decisions usable when its detail is unavailable.
+export function validDecisionTrace(trace,signals,expectedMethods) {
+  if (!Array.isArray(trace) || trace.length!==12 || signals?.length!==12) return false;
+  const score=value=>Number.isFinite(value) && value>=0 && value<=1;
+  const allowed=Object.values(ACCESSORY_METHODS);
+  let methods=expectedMethods;
+  for (const [day,row] of trace.entries()) {
+    if (!row || Object.keys(row).sort().join('|')!=='baseline_up|combined_support|method_supports|signal|threshold' ||
+        !score(row.baseline_up) || !score(row.combined_support) || row.threshold!==0.54 ||
+        row.signal!==signals[day] || row.signal!==(row.combined_support>row.threshold?'LONG':'CASH')) return false;
+    const supports=row.method_supports;
+    if (!supports || typeof supports!=='object' || Array.isArray(supports)) return false;
+    const keys=Object.keys(supports);
+    methods ??= keys;
+    if (keys.length<1 || keys.length>MAX_EQUIPPED_ACCESSORIES || keys.length!==methods.length ||
+        !keys.every(key=>allowed.includes(key) && methods.includes(key) && score(supports[key]))) return false;
+    const average=keys.reduce((sum,key)=>sum+supports[key],0)/keys.length;
+    if (Math.abs(row.combined_support-(0.8*average+0.2*row.baseline_up))>Number.EPSILON) return false;
+  }
+  return true;
+}
