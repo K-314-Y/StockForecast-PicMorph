@@ -31,6 +31,8 @@ import {ACCESSORY_ANALYSIS_API,MAX_ANALYSIS_REQUEST,analysisRecord,createAccesso
   validateAnalysisSave} from './accessory-analysis-store.mjs';
 import {canonicalPreview,createAccessoryRegistrationStore,createRegistrationReview,readRegistrationFingerprints,
   registrationContent,registrationResponse} from './accessory-registration.mjs';
+import {createAccessoryEvaluationReadiness,evaluationReadinessResponse,parseEvaluationReadinessRequest,
+  validateEvaluationReadinessRequest} from './accessory-evaluation-readiness.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
 import {readAppearanceCatalog, readAppearanceImage, isValidAppearanceId} from './appearance.mjs';
@@ -334,7 +336,7 @@ function safeLocal(req, port) {
     !['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'].some(k => req.headers[k]);
 }
 
-async function getBody(req, limit = MAX_REQUEST) {
+async function getBody(req, limit = MAX_REQUEST, parse = JSON.parse) {
   if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') {
     throw failure('JSON形式のみ対応します', 415);
   }
@@ -354,7 +356,7 @@ async function getBody(req, limit = MAX_REQUEST) {
   if (size !== Number(req.headers['content-length'])) {
     throw failure('入力が途中で切れています', 400);
   }
-  try {return JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks)));}
+  try {return parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks)));}
   catch {throw failure('JSONが不正です', 400);}
 }
 
@@ -372,6 +374,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
                                   equipmentStore = process.platform==='linux' ? createCharacterEquipmentStore() : null,
                                   accessoryAnalysisStore = process.platform==='linux' ? createAccessoryAnalysisStore() : null,
                                   accessoryRegistrationStore = process.platform==='linux' ? createAccessoryRegistrationStore() : null,
+                                  accessoryEvaluationReadiness = process.platform==='linux' ? createAccessoryEvaluationReadiness() : null,
                                   registrationClock = Date.now, registrationFingerprints = readRegistrationFingerprints,
                                   characterCreator = process.platform==='linux' ? createLocalCharacterCreator() : null,
                                   userPngImporter = process.platform==='linux' ? createUserPngImporter() : null,
@@ -489,12 +492,14 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const registrationPreview=write && path===ACCESSORY_ANALYSIS_API+'/registration/preview';
       const registrationSave=write && path===ACCESSORY_ANALYSIS_API+'/registration';
       const registrationList=req.method==='GET' && path===ACCESSORY_ANALYSIS_API+'/registrations';
+      const readiness=write && path===ACCESSORY_ANALYSIS_API+'/registration/readiness';
       const registration=registrationPreview || registrationSave || registrationList;
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info && !registration) ||
+      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info && !registration && !readiness) ||
           req.url!==path || process.platform!=='linux' || (registration && !accessoryRegistrationStore) ||
-          (!registrationList && (!accessoryAnalysisStore || !independentPartReader || !equipmentStore))) {
+          (readiness && !accessoryEvaluationReadiness) ||
+          (!registrationList && !readiness && (!accessoryAnalysisStore || !independentPartReader || !equipmentStore))) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
       if(accessoryAnalysisInFlight>=2)return json(res,429,{error:'分析実験を処理中です'});
@@ -507,11 +512,17 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         let input=null;
         if(write) {
           const deadline=setTimeout(()=>req.destroy(),6000);
-          try {input=await getBody(req,MAX_ANALYSIS_REQUEST);}
+          try {input=await getBody(req,MAX_ANALYSIS_REQUEST,readiness ? parseEvaluationReadinessRequest : undefined);}
           finally {clearTimeout(deadline);}
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
+        if(readiness) {
+          const id=validateEvaluationReadinessRequest(input);
+          const result=evaluationReadinessResponse(await accessoryEvaluationReadiness(id,{signal}));
+          if(!res.destroyed)json(res,200,result);
+          return;
+        }
         if(registration) {
           if(registrationList) {
             const result=registrationResponse(await accessoryRegistrationStore.list(signal),true);
@@ -629,6 +640,10 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           weights_changed:Object.keys(baseline.plugin_weights).some(key=>baseline.plugin_weights[key]!==candidate.plugin_weights[key]),
           effective_hash_changed:report.baseline.effective_sha256!==report.candidate.effective_sha256});
       } catch(error) {
+        if(readiness && error?.status===404) {
+          if(!res.destroyed)json(res,404,{error:'指定された固定記録が見つかりません。'});
+          return;
+        }
         const code=[400,409,413,415,422].includes(error?.status)?error.status:503;
         if(!res.destroyed)return json(res,code,{error:code===503?'分析実験を安全に実行できませんでした':error.message});
       } finally {

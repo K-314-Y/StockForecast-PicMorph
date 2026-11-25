@@ -289,12 +289,46 @@ function renderRegistrationReview({review}) {
 }
 
 const JST_TIME=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',dateStyle:'medium',timeStyle:'medium'});
+const READINESS_TEXT=new Map([
+  ['pending_input','入力待ち。対象の入力パッケージがありません。'],
+  ['pending_code_mismatch','確認待ち。実行コードが固定時の指紋と一致しません。'],
+  ['pending_invalid_input','確認待ち。入力の形式または安全性を確認できませんでした。'],
+  ['pending_evidence_review','根拠の確認待ち。入力の構造は一致しました。'],
+]);
+
+async function showReadiness(button,output,registration_id) {
+  button.disabled=true;
+  output.textContent='入力の準備状況を確認しています…';
+  try {
+    const result=await request('/registration/readiness',{registration_id});
+    const message=READINESS_TEXT.get(result.status);
+    if(!message || result.score_allowed!==false)throw Error('Unexpected readiness response');
+    const counts=result.actual;
+    output.textContent=message+(counts ?
+      ` 申告された履歴 ${counts.history_first}〜${counts.history_last}（${counts.history_sessions}日）、評価対象 ${counts.evaluation_first}〜${counts.evaluation_last}（${counts.evaluation_sessions}日）。${counts.codes}銘柄・${counts.rows}行。営業日、権利、当時の入手可能性、価格調整と時刻の根拠は未確認です。` : '')+
+      ' 採点は保留です。';
+  } catch(error) {
+    output.textContent=error.status===404 ? '固定記録が見つかりません。一覧を表示し直してください。' :
+      '固定記録または入力を安全に確認できませんでした。';
+  } finally {button.disabled=false;}
+}
+
 function renderRegistrationList(records) {
   const list=$('registration-records');
   list.replaceChildren();
   for(const record of records) {
     const item=document.createElement('li');
-    item.textContent=`固定 ${JST_TIME.format(new Date(record.created_at))}（JST） ／ 最短日 ${record.earliest_possible_day} ／ 評価待ち（データ未取得・未検証） ／ ID ${record.id}`;
+    const summary=document.createElement('p');
+    summary.id='registration-summary-'+record.id;
+    summary.textContent=`固定 ${JST_TIME.format(new Date(record.created_at))}（JST） ／ 最短日 ${record.earliest_possible_day} ／ 評価待ち（未検証） ／ ID ${record.id}`;
+    const button=document.createElement('button');
+    button.type='button';
+    button.textContent='データの準備状況を確認';
+    button.setAttribute('aria-describedby',summary.id);
+    const output=document.createElement('p');
+    output.setAttribute('role','status');
+    button.addEventListener('click',()=>void showReadiness(button,output,record.id));
+    item.append(summary,button,output);
     list.append(item);
   }
   $('registration-history').hidden=false;

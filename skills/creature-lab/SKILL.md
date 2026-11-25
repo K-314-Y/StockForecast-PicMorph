@@ -107,6 +107,8 @@ private local Creature Lab Node game. It has no real-trading capability.
    将来の検証用の設定固定は、本人がプレビューを確認し、明示的に保存したときだけ実行する。
    固定記録は設定と検証手順のコピーで、すべて「評価待ち（データ未取得・未検証）」と伝える。
    時刻は端末の時計による。最短日はJSTの翌日で、取引日・時刻証明・検証結果には当たらない。
+   固定記録の準備状況は、本人が一覧から点検を実行したときだけ確認する。構造が一致しても、
+   営業日の網羅性、権利、当時の入手可能性、価格調整と時刻の根拠は未確認で、採点は保留と伝える。
 9. Never expose private images publicly, automate account approvals, modify
    V6 forecast freeze, or place real stock orders.
 

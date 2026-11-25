@@ -21,6 +21,8 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
   let registrationConflict=false;
   const previewToken='1795477200000.'+'a'.repeat(64);
   const registrationPaths=[api+'/registration/preview',api+'/registration',api+'/registrations'];
+  const readinessPath=api+'/registration/readiness';
+  let readinessStatus='pending_input';
   function check(value,message) {
     if(!value)throw Error(message);
   }
@@ -35,7 +37,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
         if(pathname==='/accessory-analysis-ui.mjs')return route.fulfill({contentType:'text/javascript; charset=utf-8',body:script});
         if(pathname==='/favicon.ico')return route.fulfill({status:204});
       }
-      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split',...registrationPaths].includes(pathname)) {
+      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split',...registrationPaths,readinessPath].includes(pathname)) {
         unexpected.push(method+' '+url);
         return route.abort();
       }
@@ -46,6 +48,12 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
           equipped:{character_id:empty?null:character_id,active_revision:2,equipment_revision:3,visible_kinds:empty?[]:[kind]},stale_kinds:[]}});
       }
       if(method==='GET' && pathname===registrationPaths[2])return route.fulfill({json:{registrations:fixedRecord?[fixedRecord]:[]}});
+      if(method==='POST' && pathname===readinessPath) {
+        check(JSON.stringify(input)===JSON.stringify({registration_id:fixedRecord.id}),'Readiness may receive only the selected registration ID');
+        const actual=readinessStatus==='pending_evidence_review' ? {codes:10,history_sessions:24,evaluation_sessions:12,rows:360,
+          history_first:'2026-10-21',history_last:'2026-11-24',evaluation_first:'2026-11-25',evaluation_last:'2026-12-10'} : null;
+        return route.fulfill({json:{status:readinessStatus,actual,score_allowed:false,holdout_evaluated:false}});
+      }
       if(method==='POST' && registrationPaths.slice(0,2).includes(pathname)) {
         const context={character_id,active_revision:2,equipment_revision:3,expected_revision:record.revision};
         if(pathname===registrationPaths[1]) {
@@ -277,7 +285,22 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     await fixture.getByText(/設定を固定しました。評価待ち/).waitFor();
     check(!await previewRegion.isVisible() && calls.at(-1).path===registrationPaths[1],'Save must consume preview without auto-list');
     await listRegistrations.click();
-    await fixture.getByRole('region',{name:'固定記録',exact:true}).getByText(/最短日 2026-11-25 ／ 評価待ち/).waitFor();
+    const entry=fixture.getByRole('region',{name:'固定記録',exact:true});
+    await entry.getByText(/最短日 2026-11-25 ／ 評価待ち（未検証）/).waitFor();
+    check(!calls.some(call=>call.path===readinessPath),'Listing must not read evidence');
+    const readinessButton=entry.getByRole('button',{name:'データの準備状況を確認'});
+    await readinessButton.click();
+    await entry.getByText(/入力パッケージがありません.*採点は保留/).waitFor();
+    readinessStatus='pending_code_mismatch';
+    await readinessButton.click();
+    await entry.getByText(/実行コードが固定時の指紋と一致しません/).waitFor();
+    readinessStatus='pending_invalid_input';
+    await readinessButton.click();
+    await entry.getByText(/入力の形式または安全性を確認できませんでした/).waitFor();
+    readinessStatus='pending_evidence_review';
+    await readinessButton.click();
+    await entry.getByText(/根拠の確認待ち.*10銘柄・360行.*未確認.*採点は保留/).waitFor();
+    check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Readiness status must fit 320px');
     registrationConflict=true;
     await reviewRegistration.click();
     await previewRegion.waitFor();

@@ -660,3 +660,21 @@ APIでは任意で `replay_id` または `exclude_id` を指定できます。�
 `local_state/accessory_registrations/` に最大50件まで保存します。同日同内容は409になり、上書きできません。
 IDは時刻を含む正規化JSONのSHA-256です。この端末の時刻とファイルの照合に使うもので、第三者による
 時刻証明や改ざん防止の仕組みではありません。
+
+### 評価データの準備状況を点検（S105・Linux）
+
+固定記録一覧の「データの準備状況を確認」から、その記録に対応する入力を点検します。`POST /api/accessory-analysis/v1/registration/readiness` は同一オリジンで `{"registration_id":"<小文字の64桁SHA-256>"}` だけを受け付けます。現在の装備やキャラ選択は使いません。記録のハッシュと、入力が存在する場合は固定時の全実行コードの指紋を照合します。APIは状態・理由、予定件数、構造一致時のみ入力の日付範囲と件数を返します。
+
+入力形式V1の保存場所は `local_state/accessory_evaluation_inputs/<registration_id>.json` です。上限は512 KiB、専用ディレクトリは0700、通常ファイルは0600とし、リンクや重複キーを拒否します。これは将来の入力用の形式定義です。ファイルの取得・登録・アップロード機能はありません。最上位のフィールドと入れ子は次のとおりで、余分なキーは許可しません。
+
+| フィールド | V1の内容 |
+| --- | --- |
+| `schema`, `registration_id` | 整数 `1` と、固定記録の小文字64桁SHA-256。ファイル名と一致すること |
+| `source` | `type` は `session_adjusted_close_evidence_v1`、`id` は取得元の参照用ID、`retrieved_at` は取得時刻 |
+| `evidence` | `source`, `retrieval`, `calendar`, `adjustment`, `rights`, `point_in_time` の各項目に `{ "ref": "参照用ID", "sha256": "小文字64桁" }`。参照用IDは英数字で始まる96文字以内の英数字・点・下線・ハイフン。参照先のファイルやネットワークは開かない |
+| `calendar` | `coverage_start`, `coverage_end` は申告された最初と最後の日。`registration_jst_day` は固定記録と一致する日。`sessions` は36件の `{ "date": "YYYY-MM-DD", "close_at": "UTC時刻" }` を昇順で並べた配列。重複と土日は不可。履歴24日は固定日以前、評価12日は固定日より後 |
+| `rows` | 固定された10銘柄をキーとし、各配列に `{ "date": "YYYY-MM-DD", "adjusted_close": 数値, "available_at": "UTC時刻", "observed_at": "UTC時刻" }` をカレンダーと同じ順で36件。終値は有限の正数 |
+
+時刻は `YYYY-MM-DDTHH:MM:SS.sssZ` です。`available_at` は取得元で利用可能になった時刻、`observed_at` は観測を記録した時刻、`retrieved_at` はパッケージの取得時刻として申告します。申告された終値時刻からこの順に並び、端末の現在時刻を超えないことを点検します。終値時刻は当日のJSTで15:30以降を形式上の下限とします。評価対象の観測が固定後なのは正常です。値動きの大きさで行を除外することはありません。
+
+正式な営業日カレンダーで、履歴の先頭から評価の末尾までの網羅性と、固定日後の最初の12営業日であることを確認する必要があります。この点検は祝日・取得元・権利・当時の入手可能性・価格調整・時刻の根拠を検証しません。自己申告の参照やハッシュ、S103の遡及比較データで採点可能になることはありません。構造が一致しても状態は `pending_evidence_review` で、すべての点検結果で `score_allowed` と `holdout_evaluated` は `false` です。入力なしは `pending_input`、実際に計算した実行コードの指紋相違は `pending_code_mismatch`、入力不正は `pending_invalid_input` です。コードを安全に読み取れない場合は503で、相違とは区別します。
