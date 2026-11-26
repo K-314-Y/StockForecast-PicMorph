@@ -53,11 +53,36 @@ export function evaluationReadinessResponse(value) {
     ...Object.fromEntries(FLAGS.map(flag=>[flag,false]))};
 }
 
+const EVIDENCE_KEYS=['source','retrieval','calendar','adjustment','rights','point_in_time'];
+const EVIDENCE_STATES=new Set(['missing','unsafe','hash_mismatch','hash_match']);
+
+export function evaluationEvidenceResponse(value) {
+  const report=evaluationReadinessResponse(value);
+  const audit=value.evidence_audit;
+  if(report.status!=='pending_evidence_review') {
+    if(audit!==null)throw unavailable();
+    return {...report,evidence_audit:null};
+  }
+  if(audit?.expected!==EVIDENCE_KEYS.length || audit.authenticity_verified!==false || audit.content_reviewed!==false ||
+     !audit.categories || Object.keys(audit.categories).length!==EVIDENCE_KEYS.length)throw unavailable();
+  const categories={};
+  let matches=0;
+  for(const key of EVIDENCE_KEYS) {
+    const state=audit.categories[key];
+    if(!Object.hasOwn(audit.categories,key) || !EVIDENCE_STATES.has(state))throw unavailable();
+    categories[key]=state;
+    if(state==='hash_match')matches++;
+  }
+  if(audit.hash_matches!==matches)throw unavailable();
+  return {...report,evidence_audit:{categories,hash_matches:matches,expected:EVIDENCE_KEYS.length,
+    authenticity_verified:false,content_reviewed:false}};
+}
+
 export function createAccessoryEvaluationReadiness({script=HELPER}={}) {
-  return function check(registration_id,{signal}={}) {
+  return function check(registration_id,{signal,evidence=false}={}) {
     if(process.platform!=='linux')return Promise.reject(unavailable());
     return new Promise((resolve,reject)=>{
-      const child=execFile('python3',['-B','-E',script],{
+      const child=execFile('python3',['-B','-E',script,...(evidence?['--evidence']:[])],{
         env:{PATH:process.env.PATH??'/usr/bin:/bin',LANG:'C.UTF-8'},signal,
         timeout:6000,maxBuffer:4096,killSignal:'SIGKILL',
       },(error,stdout)=>{

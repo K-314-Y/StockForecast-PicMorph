@@ -313,6 +313,37 @@ async function showReadiness(button,output,registration_id) {
   } finally {button.disabled=false;}
 }
 
+const EVIDENCE_LABELS={source:'取得元',retrieval:'取得記録',calendar:'営業日',adjustment:'価格調整',
+  rights:'利用権限',point_in_time:'当時の利用可能性'};
+const EVIDENCE_STATES=new Map([['missing','未添付'],['unsafe','安全に読取不可'],
+  ['hash_mismatch','不一致'],['hash_match','一致']]);
+
+async function showEvidence(button,output,registration_id) {
+  button.disabled=true;
+  output.textContent='証拠ファイルを照合しています…';
+  try {
+    const result=await request('/registration/evidence',{registration_id});
+    const audit=result.evidence_audit;
+    const message=READINESS_TEXT.get(result.status);
+    if(!message || result.score_allowed!==false)throw Error();
+    if(result.status!=='pending_evidence_review') {
+      if(audit!==null)throw Error();
+      output.textContent=message+' 証拠ファイルの照合と採点は保留です。';
+      return;
+    }
+    const lines=Object.entries(EVIDENCE_LABELS).map(([key,label])=>{
+      const state=EVIDENCE_STATES.get(audit.categories[key]);
+      if(!state)throw Error();
+      return label+'：'+state;
+    });
+    output.textContent=[`ハッシュ一致 ${audit.hash_matches}／6件`,...lines,
+      'ハッシュが一致しても、資料の真正性や利用権限は証明されません。採点は行いません。'].join('\n');
+  } catch(error) {
+    output.textContent=error.status===404 ? '固定記録が見つかりません。一覧を表示し直してください。' :
+      '証拠ファイルを安全に照合できませんでした。';
+  } finally {button.disabled=false;}
+}
+
 function renderRegistrationList(records) {
   const list=$('registration-records');
   list.replaceChildren();
@@ -328,7 +359,15 @@ function renderRegistrationList(records) {
     const output=document.createElement('p');
     output.setAttribute('role','status');
     button.addEventListener('click',()=>void showReadiness(button,output,record.id));
-    item.append(summary,button,output);
+    const evidenceButton=document.createElement('button');
+    evidenceButton.type='button';
+    evidenceButton.textContent='証拠ファイルを照合する';
+    evidenceButton.setAttribute('aria-describedby',summary.id);
+    const audit=document.createElement('p');
+    audit.className='evidence-result';
+    audit.setAttribute('role','status');
+    evidenceButton.addEventListener('click',()=>void showEvidence(evidenceButton,audit,record.id));
+    item.append(summary,button,output,evidenceButton,audit);
     list.append(item);
   }
   $('registration-history').hidden=false;

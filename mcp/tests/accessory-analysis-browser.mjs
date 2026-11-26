@@ -22,6 +22,8 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
   const previewToken='1795477200000.'+'a'.repeat(64);
   const registrationPaths=[api+'/registration/preview',api+'/registration',api+'/registrations'];
   const readinessPath=api+'/registration/readiness';
+  const evidencePath=api+'/registration/evidence';
+  let evidenceMode='mixed';
   let readinessStatus='pending_input';
   function check(value,message) {
     if(!value)throw Error(message);
@@ -37,7 +39,7 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
         if(pathname==='/accessory-analysis-ui.mjs')return route.fulfill({contentType:'text/javascript; charset=utf-8',body:script});
         if(pathname==='/favicon.ico')return route.fulfill({status:204});
       }
-      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split',...registrationPaths,readinessPath].includes(pathname)) {
+      if(url.origin!==origin || ![api,api+'/compare',api+'/historical',api+'/batch-history',api+'/adjusted-split',...registrationPaths,readinessPath,evidencePath].includes(pathname)) {
         unexpected.push(method+' '+url);
         return route.abort();
       }
@@ -48,6 +50,15 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
           equipped:{character_id:empty?null:character_id,active_revision:2,equipment_revision:3,visible_kinds:empty?[]:[kind]},stale_kinds:[]}});
       }
       if(method==='GET' && pathname===registrationPaths[2])return route.fulfill({json:{registrations:fixedRecord?[fixedRecord]:[]}});
+      if(method==='POST' && pathname===evidencePath) {
+        check(JSON.stringify(input)===JSON.stringify({registration_id:fixedRecord.id}),'Evidence receives only the fixed record ID');
+        const categories={source:'hash_match',retrieval:'missing',calendar:'unsafe',adjustment:'hash_mismatch',rights:'missing',point_in_time:'hash_match'};
+        if(evidenceMode==='all')for(const key of Object.keys(categories))categories[key]='hash_match';
+        const audit=evidenceMode==='pending'?null:{categories,hash_matches:evidenceMode==='all'?6:2,expected:6,
+          authenticity_verified:false,content_reviewed:false};
+        return route.fulfill({json:{status:evidenceMode==='pending'?'pending_input':'pending_evidence_review',
+          score_allowed:false,holdout_evaluated:false,evidence_audit:audit}});
+      }
       if(method==='POST' && pathname===readinessPath) {
         check(JSON.stringify(input)===JSON.stringify({registration_id:fixedRecord.id}),'Readiness may receive only the selected registration ID');
         const actual=readinessStatus==='pending_evidence_review' ? {codes:10,history_sessions:24,evaluation_sessions:12,rows:360,
@@ -301,6 +312,21 @@ export default async function testAccessoryAnalysisPage(page,{html,script}) {
     await readinessButton.click();
     await entry.getByText(/根拠の確認待ち.*10銘柄・360行.*未確認.*採点は保留/).waitFor();
     check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Readiness status must fit 320px');
+    check(!calls.some(call=>call.path===evidencePath),'Evidence must wait for its own click');
+    const evidenceButton=entry.getByRole('button',{name:'証拠ファイルを照合する'});
+    await evidenceButton.click();
+    await entry.getByText(/ハッシュ一致 2／6件/).waitFor();
+    const evidenceResult=entry.locator('.evidence-result');
+    for(const label of ['取得元：一致','取得記録：未添付','営業日：安全に読取不可','価格調整：不一致','利用権限：未添付','当時の利用可能性：一致'])
+      check((await evidenceResult.innerText()).includes(label),'Missing evidence label '+label);
+    check(await fixture.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Evidence status must fit 320px');
+    evidenceMode='all';
+    await evidenceButton.click();
+    await entry.getByText(/ハッシュ一致 6／6件/).waitFor();
+    check((await evidenceResult.innerText()).includes('利用権限は証明されません。採点は行いません。'),'All matching evidence must remain unapproved');
+    evidenceMode='pending';
+    await evidenceButton.click();
+    await entry.getByText(/証拠ファイルの照合と採点は保留/).waitFor();
     registrationConflict=true;
     await reviewRegistration.click();
     await previewRegion.waitFor();

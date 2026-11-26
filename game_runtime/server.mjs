@@ -31,7 +31,7 @@ import {ACCESSORY_ANALYSIS_API,MAX_ANALYSIS_REQUEST,analysisRecord,createAccesso
   validateAnalysisSave} from './accessory-analysis-store.mjs';
 import {canonicalPreview,createAccessoryRegistrationStore,createRegistrationReview,readRegistrationFingerprints,
   registrationContent,registrationResponse} from './accessory-registration.mjs';
-import {createAccessoryEvaluationReadiness,evaluationReadinessResponse,parseEvaluationReadinessRequest,
+import {createAccessoryEvaluationReadiness,evaluationEvidenceResponse,evaluationReadinessResponse,parseEvaluationReadinessRequest,
   validateEvaluationReadinessRequest} from './accessory-evaluation-readiness.mjs';
 import {createLocalCharacterCreator,validateRegistration} from './character-demo-creator.mjs';
 import {createUserPngImporter,validateUserPngPayload} from './user-png-import.mjs';
@@ -494,13 +494,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       const registrationSave=write && path===ACCESSORY_ANALYSIS_API+'/registration';
       const registrationList=req.method==='GET' && path===ACCESSORY_ANALYSIS_API+'/registrations';
       const readiness=write && path===ACCESSORY_ANALYSIS_API+'/registration/readiness';
+      const evidence=write && path===ACCESSORY_ANALYSIS_API+'/registration/evidence';
+      const inspectRegistration=readiness || evidence;
       const registration=registrationPreview || registrationSave || registrationList;
       const save=write && path===ACCESSORY_ANALYSIS_API;
       const info=req.method==='GET' && path===ACCESSORY_ANALYSIS_API;
-      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info && !registration && !readiness) ||
+      if ((!compare && !historical && !batchHistory && !adjustedSplit && !save && !info && !registration && !inspectRegistration) ||
           req.url!==path || process.platform!=='linux' || (registration && !accessoryRegistrationStore) ||
-          (readiness && !accessoryEvaluationReadiness) ||
-          (!registrationList && !readiness && (!accessoryAnalysisStore || !independentPartReader || !equipmentStore))) {
+          (inspectRegistration && !accessoryEvaluationReadiness) ||
+          (!registrationList && !inspectRegistration && (!accessoryAnalysisStore || !independentPartReader || !equipmentStore))) {
         return json(res,404,{error:'装飾品の分析実験を利用できません'});
       }
       if(accessoryAnalysisInFlight>=2)return json(res,429,{error:'分析実験を処理中です'});
@@ -513,14 +515,15 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
         let input=null;
         if(write) {
           const deadline=setTimeout(()=>req.destroy(),6000);
-          try {input=await getBody(req,MAX_ANALYSIS_REQUEST,readiness ? parseEvaluationReadinessRequest : undefined);}
+          try {input=await getBody(req,MAX_ANALYSIS_REQUEST,inspectRegistration ? parseEvaluationReadinessRequest : undefined);}
           finally {clearTimeout(deadline);}
         }
         const changes=save ? validateAnalysisSave(input) : null;
         if(compare)validateAnalysisContext(input);
-        if(readiness) {
+        if(inspectRegistration) {
           const id=validateEvaluationReadinessRequest(input);
-          const result=evaluationReadinessResponse(await accessoryEvaluationReadiness(id,{signal}));
+          const raw=await accessoryEvaluationReadiness(id,{signal,evidence});
+          const result=evidence ? evaluationEvidenceResponse(raw) : evaluationReadinessResponse(raw);
           if(!res.destroyed)json(res,200,result);
           return;
         }
@@ -641,7 +644,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
           weights_changed:Object.keys(baseline.plugin_weights).some(key=>baseline.plugin_weights[key]!==candidate.plugin_weights[key]),
           effective_hash_changed:report.baseline.effective_sha256!==report.candidate.effective_sha256});
       } catch(error) {
-        if(readiness && error?.status===404) {
+        if(inspectRegistration && error?.status===404) {
           if(!res.destroyed)json(res,404,{error:'指定された固定記録が見つかりません。'});
           return;
         }
