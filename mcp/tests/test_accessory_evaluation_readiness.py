@@ -245,5 +245,118 @@ class EvaluationReadinessTests(unittest.TestCase):
         self.assertEqual(self.inspect()["reason"], "unsafe_input")
 
 
+class EvidenceAttachmentTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory(prefix="eval-evidence-")))
+        self.id, self.record, self.package = fixture(self.root)
+        self.state = self.root / "local_state"
+        self.inputs = self.state / readiness.INPUT_FOLDER
+        self.inputs.mkdir(mode=0o700)
+        self.input = self.inputs / (self.id + ".json")
+        self.collection = self.state / readiness.EVIDENCE_FOLDER
+        self.folder = self.collection / self.id
+
+    def put(self):
+        private_write(self.input, self.package)
+
+    def audit(self):
+        result = readiness.inspect(self.id, root=self.root, now=NOW, audit=True)
+        for flag in ("score_allowed", "holdout_evaluated", "calendar_verified", "source_verified",
+                     "rights_verified", "point_in_time_verified", "adjustments_verified", "timestamps_verified"):
+            self.assertIs(result[flag], False)
+        return result
+
+    def attach(self, key, raw):
+        self.collection.mkdir(mode=0o700, exist_ok=True)
+        self.folder.mkdir(mode=0o700, exist_ok=True)
+        self.package["evidence"][key]["sha256"] = readiness.digest(raw)
+        private_write(self.folder / (key + ".bin"), raw)
+        self.put()
+
+    def test_missing_attachments_and_default_readiness_are_read_only(self):
+        self.put()
+        normal = readiness.inspect(self.id, root=self.root, now=NOW)
+        self.assertNotIn("evidence_audit", normal)
+        report = self.audit()
+        self.assertEqual(report["status"], "pending_evidence_review")
+        audit = report["evidence_audit"]
+        self.assertEqual(audit["categories"], dict.fromkeys(readiness.EVIDENCE, "missing"))
+        self.assertEqual((audit["hash_matches"], audit["expected"]), (0, 6))
+        self.assertFalse(self.collection.exists())
+
+    def test_all_six_matching_files_do_not_grant_approval(self):
+        for category in readiness.EVIDENCE:
+            self.attach(category, ("fictional private proof for " + category).encode())
+        original = {p.name: p.read_bytes() for p in self.folder.iterdir()}
+        report = self.audit()
+        audit = report["evidence_audit"]
+        self.assertEqual(audit["categories"], dict.fromkeys(readiness.EVIDENCE, "hash_match"))
+        self.assertEqual(audit["hash_matches"], 6)
+        self.assertIs(audit["content_reviewed"], False)
+        self.assertIs(audit["authenticity_verified"], False)
+        self.assertEqual(report["status"], "pending_evidence_review")
+        serialized = json.dumps(report)
+        self.assertNotIn("fictional private proof", serialized)
+        self.assertNotIn("fixture-rights", serialized)
+        self.assertNotIn(self.package["evidence"]["rights"]["sha256"], serialized)
+        self.assertEqual({p.name: p.read_bytes() for p in self.folder.iterdir()}, original)
+
+    def test_mismatch_and_file_privacy_fail_closed(self):
+        self.attach("rights", b"expected")
+        private_write(self.folder / "rights.bin", b"changed")
+        self.attach("source", b"source")
+        (self.folder / "source.bin").chmod(0o644)
+        self.attach("calendar", b"calendar")
+        (self.folder / "calendar.bin").unlink()
+        (self.folder / "calendar.bin").symlink_to(self.input)
+        self.attach("retrieval", b"retrieval")
+        (self.folder / "retrieval.bin").unlink()
+        private_write(self.root / "synthetic-attachment.bin", b"retrieval")
+        os.link(self.root / "synthetic-attachment.bin", self.folder / "retrieval.bin")
+        self.attach("point_in_time", b"oversize")
+        private_write(self.folder / "point_in_time.bin", b"x" * (readiness.EVIDENCE_LIMIT + 1))
+        audit = self.audit()["evidence_audit"]
+        self.assertEqual(audit["categories"], {"rights":"hash_mismatch", "source":"unsafe",
+            "calendar":"unsafe", "retrieval":"unsafe", "point_in_time":"unsafe", "adjustment":"missing"})
+        self.assertEqual(audit["hash_matches"], 0)
+
+    def test_reference_is_not_path_and_other_registration_is_not_read(self):
+        self.attach("rights", b"expected")
+        (self.folder / "rights.bin").unlink()
+        ref = self.package["evidence"]["rights"]["ref"]
+        private_write(self.folder / ref, b"expected")
+        other = self.collection / ("0"*64)
+        other.mkdir(mode=0o700)
+        private_write(other / "rights.bin", b"expected")
+        self.assertEqual(self.audit()["evidence_audit"]["categories"]["rights"], "missing")
+
+    def test_invalid_package_or_changed_code_never_reads_evidence(self):
+        with patch.object(readiness, "audit_evidence", side_effect=AssertionError("unexpected audit")):
+            self.assertIsNone(self.audit()["evidence_audit"])
+            self.package["rows"].pop("40050")
+            self.put()
+            self.assertEqual(self.audit()["status"], "pending_invalid_input")
+            self.assertIsNone(self.audit()["evidence_audit"])
+            (self.root / "engine.py").write_bytes(b"changed")
+            self.assertEqual(self.audit()["status"], "pending_code_mismatch")
+            self.assertIsNone(self.audit()["evidence_audit"])
+
+    def test_symlink_directory_and_changed_attachment_fail_closed(self):
+        self.put()
+        self.collection.symlink_to(self.root, target_is_directory=True)
+        self.assertEqual(self.audit()["evidence_audit"]["categories"],
+                         dict.fromkeys(readiness.EVIDENCE, "unsafe"))
+        self.collection.unlink()
+        self.attach("rights", b"original")
+        original = readiness.recheck
+        def change(paths, snapshots):
+            if any(name == "rights.bin" for _, name, _ in snapshots):
+                private_write(self.folder / "rights.bin", b"changed after read")
+            return original(paths, snapshots)
+        with patch.object(readiness, "recheck", side_effect=change):
+            with self.assertRaises(PartValidationError):
+                self.audit()
+
+
 if __name__ == "__main__":
     unittest.main()

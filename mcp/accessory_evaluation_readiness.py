@@ -17,6 +17,8 @@ from independent_parts_catalog import file_version, json_object, private_directo
 
 INPUT_FOLDER = "accessory_evaluation_inputs"
 INPUT_LIMIT = 512 * 1024
+EVIDENCE_FOLDER = "accessory_evaluation_evidence"
+EVIDENCE_LIMIT = 256 * 1024
 # Canonical digest of the S104 V1 protocol. Validate frozen records even if the executable copy drifts.
 PROTOCOL_V1_SHA = "365c8e6e85aa0f168738742ebd4d0a802ef5720ef0da80e22c26e63f56317777"
 SOURCE_TYPE = "session_adjusted_close_evidence_v1"
@@ -142,7 +144,33 @@ def report(record, status, reason, actual=None):
             "adjustments_verified": False, "timestamps_verified": False}
 
 
-def inspect(registration_id, *, root=ROOT, now=None):
+def audit_evidence(state, opened, paths, snapshots, registration_id, evidence):
+    """Compare six bounded private attachments to declared digests; never trust contents."""
+    statuses = {}
+    try:
+        collection = opened.enter_context(private_directory(state, EVIDENCE_FOLDER, paths))
+        folder = opened.enter_context(private_directory(collection, registration_id, paths))
+    except FileNotFoundError:
+        statuses = dict.fromkeys(sorted(EVIDENCE), "missing")
+    except UNAVAILABLE:
+        statuses = dict.fromkeys(sorted(EVIDENCE), "unsafe")
+    else:
+        for category in sorted(EVIDENCE):
+            # The reference ID is metadata, NEVER a pathname.
+            try:
+                raw = private_file(folder, category + ".bin", EVIDENCE_LIMIT, snapshots)
+            except FileNotFoundError:
+                statuses[category] = "missing"
+            except UNAVAILABLE:
+                statuses[category] = "unsafe"
+            else:
+                statuses[category] = ("hash_match" if digest(raw) == evidence[category]["sha256"]
+                                      else "hash_mismatch")
+    return {"categories": statuses, "hash_matches": sum(v == "hash_match" for v in statuses.values()),
+            "expected": len(EVIDENCE), "content_reviewed": False, "authenticity_verified": False}
+
+
+def inspect(registration_id, *, root=ROOT, now=None, audit=False):
     require(sys.platform == "linux" and matches(ID, registration_id), "Invalid registration ID.")
     filename = registration_id + ".json"
     paths, snapshots = [], []
@@ -177,6 +205,11 @@ def inspect(registration_id, *, root=ROOT, now=None):
                     result = report(record, "pending_invalid_input", str(error))
                 except UNAVAILABLE:
                     result = report(record, "pending_invalid_input", "manifest_shape")
+        if audit:
+            # Audit attachments only after validating the bound package and frozen code.
+            result["evidence_audit"] = (audit_evidence(state, opened, paths, snapshots, registration_id,
+                                                       data["evidence"])
+                                        if result["status"] == "pending_evidence_review" else None)
         recheck(paths, snapshots)
         return result
 
@@ -184,10 +217,10 @@ def inspect(registration_id, *, root=ROOT, now=None):
 if __name__ == "__main__":
     try:
         raw = sys.stdin.buffer.read(4097)
-        require(len(raw) <= 4096 and len(sys.argv) == 1, "Invalid check request.")
+        require(len(raw) <= 4096 and sys.argv[1:] in ([], ["--evidence"]), "Invalid check request.")
         request = json_object(raw)
         require(shape(request, {"registration_id"}), "Invalid check request.")
-        print(json.dumps({"result": inspect(request["registration_id"])}))
+        print(json.dumps({"result": inspect(request["registration_id"], audit=sys.argv[1:] == ["--evidence"])}))
     except RecordNotFound:
         print('{"code":"not_found"}')
     except UNAVAILABLE:
