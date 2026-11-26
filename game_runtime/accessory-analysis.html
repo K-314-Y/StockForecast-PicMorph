@@ -107,6 +107,21 @@
       <ul id="registration-records"></ul>
     </section>
   </section>
+  <section aria-labelledby="synthetic-snapshot-title">
+    <h2 id="synthetic-snapshot-title">固定AIの比較サンプル（合成テスト）</h2>
+    <p id="synthetic-snapshot-help">S106で保存したテスト用AIの比較例です。実際の登録キャラ、株価、将来の評価結果ではありません。表示しても採点・学習・コイン更新は行いません。</p>
+    <button id="synthetic-snapshot-show" type="button" aria-describedby="synthetic-snapshot-help">保存済みの合成テスト結果を見る</button>
+    <p id="synthetic-snapshot-status" role="status"></p>
+    <section id="synthetic-snapshot-result" aria-labelledby="synthetic-snapshot-result-title" hidden>
+      <h3 id="synthetic-snapshot-result-title">架空データの比較結果</h3>
+      <p id="synthetic-snapshot-coverage"></p>
+      <div id="synthetic-snapshot-models" class="comparison"></div>
+      <div id="synthetic-snapshot-metrics" class="comparison"></div>
+      <p id="synthetic-snapshot-signals"></p>
+      <p>各テスト用銘柄に同額の仮想資金を割り当てた比較です。成績は独立した予測性能の証明ではありません。</p>
+      <details><summary>保存されたテストの識別情報</summary><article id="synthetic-snapshot-provenance"></article></details>
+    </section>
+  </section>
 </main>
 <script type="module" src="/accessory-analysis-ui.mjs"></script>
 </html>

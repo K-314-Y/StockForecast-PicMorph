@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "kind": "SYNTHETIC_TEST_SNAPSHOT_ONLY",
+  "source_commit": "a76115b7e9ca17b118eac086769b76e16b029fa8",
+  "scenario": "S106_PAIRED_V1",
+  "fixture_sha256": "f907b7be29647c4c163ecb60b0cd083dc47a0e0864879d8b1cb3bfdf559116f1",
+  "models": {
+    "base_model": {
+      "fast_window": 4,
+      "plugin_strengths": {
+        "momentum": 90,
+        "reversion": 105,
+        "trend": 110,
+        "volatility": 100
+      },
+      "plugin_weights": {
+        "momentum": 20,
+        "reversion": 25,
+        "trend": 40,
+        "volatility": 15
+      },
+      "risk_fraction": 0.35,
+      "slow_window": 10
+    },
+    "baseline": {
+      "fast_window": 4,
+      "plugin_strengths": {
+        "momentum": 90,
+        "reversion": 105,
+        "trend": 110,
+        "volatility": 100
+      },
+      "plugin_weights": {
+        "momentum": 20,
+        "reversion": 25,
+        "trend": 40,
+        "volatility": 15
+      },
+      "risk_fraction": 0.35,
+      "slow_window": 10
+    },
+    "candidate": {
+      "fast_window": 4,
+      "plugin_strengths": {
+        "momentum": 90,
+        "reversion": 105,
+        "trend": 110,
+        "volatility": 100
+      },
+      "plugin_weights": {
+        "momentum": 38,
+        "reversion": 19,
+        "trend": 31,
+        "volatility": 12
+      },
+      "risk_fraction": 0.35,
+      "slow_window": 10
+    }
+  },
+  "summary": {
+    "scope": "SYNTHETIC_FROZEN_COMPARISON_ONLY",
+    "real_market_history": false,
+    "holdout_evaluated": false,
+    "score_allowed": false,
+    "codes": 10,
+    "history_sessions_per_code": 24,
+    "replay_sessions_per_code": 12,
+    "metrics": {
+      "brier": {
+        "baseline_mean": 0.531696,
+        "candidate_mean": 0.468629,
+        "wins": 10,
+        "ties": 0,
+        "losses": 0
+      },
+      "profit_coins": {
+        "baseline_mean": 221.324,
+        "candidate_mean": 269.617,
+        "wins": 4,
+        "ties": 6,
+        "losses": 0
+      },
+      "max_drawdown_pct": {
+        "baseline_mean": 1.3128,
+        "candidate_mean": 1.3128,
+        "wins": 0,
+        "ties": 10,
+        "losses": 0
+      }
+    },
+    "different_signals": 4,
+    "signal_comparisons": 120
+  }
+}

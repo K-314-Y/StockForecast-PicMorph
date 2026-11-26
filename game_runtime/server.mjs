@@ -64,6 +64,7 @@ const CROP_JS = new URL('./crop-editor.mjs', import.meta.url);
 const ACCESSORY_ANALYSIS_ASSETS=new Map([
   ['/accessory-analysis.html',new URL('./accessory-analysis.html',import.meta.url)],
   ['/accessory-analysis-ui.mjs',new URL('./accessory-analysis-ui.mjs',import.meta.url)],
+  ['/synthetic-frozen-report-v1.json',new URL('./synthetic-frozen-report-v1.json',import.meta.url)],
 ]);
 // Fixed read-only assets only: never resolve a request path on the filesystem.
 const ARTWORK_LAB = new Map([
@@ -471,7 +472,7 @@ export function createGameServer({store = createGrowthStore(), loadSnapshot,
       }
       try {
         const body=await readFile(ACCESSORY_ANALYSIS_ASSETS.get(path));
-        res.writeHead(200,{'Content-Type':path.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8',
+        res.writeHead(200,{'Content-Type':path.endsWith('.html')?'text/html; charset=utf-8':path.endsWith('.json')?'application/json; charset=utf-8':'text/javascript; charset=utf-8',
           'Content-Length':body.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
           'X-Frame-Options':'DENY','Cross-Origin-Resource-Policy':'same-origin','Referrer-Policy':'no-referrer',
           'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"});

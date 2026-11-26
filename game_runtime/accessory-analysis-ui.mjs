@@ -477,4 +477,79 @@ function clearRegistrationOnDeparture() {
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearRegistrationOnDeparture();});
 window.addEventListener('pagehide',clearRegistrationOnDeparture);
+// S107: read-only, checked-in aggregate sample. Never associated with a real registration.
+const snapshotButton=$('synthetic-snapshot-show');
+const snapshotResult=$('synthetic-snapshot-result');
+const snapshotStatus=$('synthetic-snapshot-status');
+const metricLabels=[
+  ['brier','確率予測の誤差（Brier・低いほど良い）',''],
+  ['profit_coins','平均仮想損益（大きいほど良い）',' コイン'],
+  ['max_drawdown_pct','平均最大下落率（低いほど良い）','%'],
+];
+function snapshotArticle(title,lines) {
+  const article=document.createElement('article'), heading=document.createElement('h4');
+  heading.textContent=title;
+  article.append(heading);
+  for(const line of lines) {
+    const text=document.createElement('p');
+    text.textContent=line;
+    article.append(text);
+  }
+  return article;
+}
+function renderSyntheticSnapshot(report) {
+  const data=report?.summary;
+  if(report?.schema!==1 || report.kind!=='SYNTHETIC_TEST_SNAPSHOT_ONLY' ||
+     report.scenario!=='S106_PAIRED_V1' || typeof report.source_commit!=='string' ||
+     !/^[a-f0-9]{40}$/.test(report.source_commit) || typeof report.fixture_sha256!=='string' ||
+     !/^[a-f0-9]{64}$/.test(report.fixture_sha256) || data?.scope!=='SYNTHETIC_FROZEN_COMPARISON_ONLY' ||
+     data.real_market_history!==false || data.holdout_evaluated!==false || data.score_allowed!==false ||
+     data.codes!==10 || data.history_sessions_per_code!==24 || data.replay_sessions_per_code!==12 ||
+     data.signal_comparisons!==120 || !Number.isInteger(data.different_signals) ||
+     data.different_signals<0 || data.different_signals>120)throw Error('Invalid sample');
+  const models=['baseline','candidate'].map((slot,index)=>{
+    const model=report.models?.[slot], weights=model?.plugin_weights;
+    if(!weights || !Object.keys(FOCUS).every(key=>Number.isInteger(weights[key]) && weights[key]>=0 && weights[key]<=100) ||
+       Object.keys(FOCUS).reduce((sum,key)=>sum+weights[key],0)!==100)throw Error('Invalid model');
+    return snapshotArticle(index?'テスト用候補（装備ルールあり）':'テスト用基準',[
+      Object.entries(FOCUS).map(([key,label])=>label+' '+weights[key]+'%').join('、'),
+    ]);
+  });
+  const cards=metricLabels.map(([key,label,unit])=>{
+    const metric=data.metrics?.[key];
+    if(!metric || ![metric.baseline_mean,metric.candidate_mean].every(Number.isFinite) ||
+       ![metric.wins,metric.ties,metric.losses].every(n=>Number.isInteger(n)&&n>=0&&n<=10) ||
+       metric.wins+metric.ties+metric.losses!==10 ||
+       (key==='brier' && ![metric.baseline_mean,metric.candidate_mean].every(n=>n>=0&&n<=2)) ||
+       (key==='max_drawdown_pct' && ![metric.baseline_mean,metric.candidate_mean].every(n=>n>=0&&n<=100)))
+      throw Error('Invalid metric');
+    return snapshotArticle(label,[
+      '基準 '+formatMetric.format(metric.baseline_mean)+unit,
+      '候補 '+formatMetric.format(metric.candidate_mean)+unit,
+      '候補 − 基準 '+formatMetric.format(metric.candidate_mean-metric.baseline_mean)+unit,
+      '候補が良い '+metric.wins+' / 同じ '+metric.ties+' / 悪い '+metric.losses+'（テスト用銘柄数）',
+    ]);
+  });
+  $('synthetic-snapshot-models').replaceChildren(...models);
+  $('synthetic-snapshot-metrics').replaceChildren(...cards);
+  $('synthetic-snapshot-coverage').textContent='10銘柄分の架空価格、履歴24日・再現12日。各モデル10,000仮想コイン、手数料0.1%。';
+  $('synthetic-snapshot-signals').textContent='売買判断の違い '+data.different_signals+' / '+data.signal_comparisons+' 回';
+  $('synthetic-snapshot-provenance').textContent='S106 / '+report.scenario+' / ソースコミット '+report.source_commit+' / テスト用固定設定SHA-256 '+report.fixture_sha256;
+  snapshotResult.hidden=false;
+}
+snapshotButton.addEventListener('click',async()=>{
+  if(snapshotButton.disabled)return;
+  snapshotButton.disabled=true;
+  snapshotResult.hidden=true;
+  snapshotStatus.textContent='保存済みの合成結果を読み込んでいます…';
+  try {
+    const res=await fetch('/synthetic-frozen-report-v1.json',{mode:'same-origin',cache:'no-store',redirect:'error',
+      signal:AbortSignal.timeout(5000)});
+    if(!res.ok)throw Error('Sample unavailable');
+    renderSyntheticSnapshot(await res.json());
+    snapshotStatus.textContent='合成テスト結果を表示しました。実データの採点は行っていません。';
+  } catch {
+    snapshotStatus.textContent='保存済みの合成テスト結果を確認できませんでした。';
+  } finally {snapshotButton.disabled=false;}
+});
 void load();
